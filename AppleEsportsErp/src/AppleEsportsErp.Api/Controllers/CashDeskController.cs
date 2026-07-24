@@ -48,6 +48,14 @@ public class CashDeskController : ControllerBase
         await _cashDeskService.CloseRegisterAsync(GetBranchId(), (await this.GetOperatorIdAsync()), (await this.GetShiftIdAsync()), registerId);
         return Ok(new { success = true, message = "Register closed successfully" });
     }
+
+    [HttpPost("cancel-verification/{registerId:guid}")]
+    [Idempotent]
+    public async Task<IActionResult> CancelVerification(Guid registerId)
+    {
+        await _cashDeskService.CancelVerificationAsync(GetBranchId(), (await this.GetOperatorIdAsync()), (await this.GetShiftIdAsync()), registerId);
+        return Ok(new { success = true, message = "Verification cancelled, register unlocked" });
+    }
 }
 
 

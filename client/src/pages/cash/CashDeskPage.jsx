@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Lock, AlertTriangle, Calculator, LogOut } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Lock, AlertTriangle, Calculator, LogOut, ArrowLeft } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useBranch } from '../../contexts/BranchContext';
 import api from '../../config/api';
@@ -8,15 +9,17 @@ import DenominationCounter from '../../components/cash/DenominationCounter';
 import { generateIdempotencyKey } from '../../utils/idempotency';
 
 export default function CashDeskPage() {
+  const navigate = useNavigate();
   const { isSuperAdmin, user, logout } = useAuth();
-  const { activeBranch } = useBranch();
+  const { activeBranch, switchBranch } = useBranch();
 
   const [register, setRegister] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
-  
+
   const [isLocking, setIsLocking] = useState(false);
   const [isClosing, setIsClosing] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
 
   const targetBranchId = isSuperAdmin ? activeBranch?.id : user?.branchId;
 
@@ -67,12 +70,38 @@ export default function CashDeskPage() {
       await api.post(`/cash-desk/close/${register.id}`, {}, {
         headers: { 'X-Idempotency-Key': generateIdempotencyKey() }
       });
-      // Shift is closed. In a real system, you might end the operator's session here.
-      // For now, we will log them out to simulate shift end.
-      logout();
+
+      if (isSuperAdmin) {
+        // Super Admin/Admin have no personal shift to end — just return to the
+        // All Branches view instead of logging out.
+        switchBranch(null);
+        navigate('/app/dashboard');
+      } else {
+        // Operator's shift is over — log them out.
+        logout();
+      }
     } catch (err) {
       setError(err.response?.data?.error || err.response?.data?.message || 'Failed to close shift.');
       setIsClosing(false);
+    }
+  };
+
+  const handleBackButton = async () => {
+    if (register?.status !== 'Verifying') {
+      navigate(-1);
+      return;
+    }
+
+    setIsCancelling(true);
+    try {
+      // Undo the lock — register goes back to Open, shift is untouched.
+      await api.post(`/cash-desk/cancel-verification/${register.id}`, {}, {
+        headers: { 'X-Idempotency-Key': generateIdempotencyKey() }
+      });
+      navigate(-1);
+    } catch (err) {
+      setError(err.response?.data?.error || err.response?.data?.message || 'Failed to cancel verification.');
+      setIsCancelling(false);
     }
   };
 
@@ -107,13 +136,25 @@ export default function CashDeskPage() {
 
   return (
     <div className="h-full flex flex-col max-w-4xl mx-auto">
-      <div className="mb-6">
-        <PageHeader
-          title="Cash Register"
-          subtitle="End of Shift Reconciliation"
-          icon="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
-          badge="SECURE"
-        />
+      <div className="mb-6 flex items-center gap-4">
+        {register.status !== 'Verified' && (
+          <button
+            onClick={handleBackButton}
+            disabled={isCancelling}
+            className="p-2 hover:bg-bg-3 rounded-lg transition-colors text-text-3 hover:text-text shrink-0"
+            title={register.status === 'Verifying' ? 'Cancel verification and go back' : 'Go back'}
+          >
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+        )}
+        <div className="flex-1">
+          <PageHeader
+            title="Cash Register"
+            subtitle="End of Shift Reconciliation"
+            icon="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+            badge="SECURE"
+          />
+        </div>
       </div>
 
       {error && (

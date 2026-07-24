@@ -163,6 +163,38 @@ public class CashDeskService : ICashDeskService
         await _hubNotification.BroadcastCashRegisterUpdateAsync(branchId, register.Id);
     }
 
+    public async Task CancelVerificationAsync(Guid branchId, Guid operatorId, Guid shiftId, Guid cashRegisterId)
+    {
+        var register = await _unitOfWork.Repository<CashRegister>().Query()
+            .FirstOrDefaultAsync(r => r.Id == cashRegisterId && r.BranchId == branchId && r.ShiftId == shiftId)
+            ?? throw new NotFoundException("Cash register not found.");
+
+        // Already unlocked — nothing to cancel, treat as a no-op success.
+        if (register.Status == CashRegisterStatus.Open)
+            return;
+
+        if (register.Status != CashRegisterStatus.Verifying)
+            throw new AppException("Only a register that is currently locked for verification can be cancelled.");
+
+        register.Status = CashRegisterStatus.Open;
+        _unitOfWork.Repository<CashRegister>().Update(register);
+
+        await _auditService.LogAsync(new AuditEntry
+        {
+            OperatorId = operatorId,
+            UserRole = "Operator",
+            UserName = "System",
+            Action = "cash_register_verification_cancelled",
+            BranchId = branchId,
+            TargetType = "cash_register",
+            TargetId = register.Id,
+            Details = null
+        });
+
+        await _unitOfWork.CommitTransactionAsync();
+        await _hubNotification.BroadcastCashRegisterUpdateAsync(branchId, register.Id);
+    }
+
     private static DenominationCountDto MapToDto(DenominationCount d)
     {
         return new DenominationCountDto
