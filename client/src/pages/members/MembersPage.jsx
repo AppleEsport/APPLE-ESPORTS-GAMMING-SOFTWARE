@@ -720,6 +720,7 @@ function ExtraBonusModal({ member, onClose, onSuccess }) {
         targetWallet: walletType === 'Gaming' ? 0 : 1,
         paymentType: 'Cash',
         bonusPercentOverride: 0,
+        isBonusOnly: true,
         reason: reason.trim() || `Extra ${bonusMode === 'percentage' ? percentValue + '%' : '₹' + bonusAmount.toFixed(0)} bonus`,
       };
 

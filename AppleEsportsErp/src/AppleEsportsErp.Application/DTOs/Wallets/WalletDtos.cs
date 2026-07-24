@@ -38,6 +38,9 @@ public class TopUpWalletDto
     public decimal? BonusPercentOverride { get; set; }
 
     public string? Reason { get; set; }
+
+    // Flag to indicate this is a pure bonus transfer (skip minimum top-up validation)
+    public bool IsBonusOnly { get; set; } = false;
 }
 
 /// <summary>Super Admin (or an Admin explicitly granted the "wallet_settings" permission) editable top-up rules.</summary>

@@ -58,7 +58,8 @@ public class WalletService : IWalletService
 
         var isGaming = dto.TargetWallet == WalletType.Gaming;
 
-        if (isGaming && dto.Amount < minGamingTopUp)
+        // Skip minimum validation for bonus-only transfers (Extra Bonus feature)
+        if (isGaming && dto.Amount < minGamingTopUp && !dto.IsBonusOnly)
             throw new AppException($"Minimum Gaming wallet top-up is ₹{minGamingTopUp:0}.");
 
         var isSplit = dto.PaymentType.Equals("Split", StringComparison.OrdinalIgnoreCase);
