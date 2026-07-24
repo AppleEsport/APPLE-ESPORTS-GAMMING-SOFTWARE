@@ -276,7 +276,7 @@ public class SessionService : ISessionService
                 bill.FoodAmount = foodAmount;
                 bill.Subtotal = session.GamingAmount + foodAmount;
                 // Preserve any discount already applied to the bill instead of wiping it out.
-                bill.TotalAmount = Math.Max(0, bill.Subtotal - bill.DiscountAmount);
+                bill.TotalAmount = SessionPricingCalculator.RoundBillTotal(Math.Max(0, bill.Subtotal - bill.DiscountAmount));
 
                 var gamingItem = bill.Items.FirstOrDefault(i => i.ItemType == "gaming");
                 if (gamingItem != null)
@@ -431,7 +431,7 @@ public class SessionService : ISessionService
             {
                 bill.GamingAmount += dto.AdditionalAmount;
                 bill.Subtotal += dto.AdditionalAmount;
-                bill.TotalAmount += dto.AdditionalAmount;
+                bill.TotalAmount = SessionPricingCalculator.RoundBillTotal(Math.Max(0, bill.Subtotal - bill.DiscountAmount));
                 bill.UpdatedAt = now;
                 _uow.Repository<Bill>().Update(bill);
 

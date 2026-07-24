@@ -4,6 +4,7 @@ using AppleEsportsErp.Application.DTOs.Common;
 using AppleEsportsErp.Application.DTOs.FoodOrders;
 using AppleEsportsErp.Application.Exceptions;
 using AppleEsportsErp.Application.Interfaces;
+using AppleEsportsErp.Application.Services;
 using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
 
@@ -233,7 +234,7 @@ public class FoodOrderService : IFoodOrderService
 
                     activeBill.FoodAmount += order.TotalAmount;
                     activeBill.Subtotal += order.TotalAmount;
-                    activeBill.TotalAmount += order.TotalAmount;
+                    activeBill.TotalAmount = SessionPricingCalculator.RoundBillTotal(Math.Max(0, activeBill.Subtotal - activeBill.DiscountAmount));
                     activeBill.UpdatedAt = now;
                     _unitOfWork.Repository<Bill>().Update(activeBill);
 

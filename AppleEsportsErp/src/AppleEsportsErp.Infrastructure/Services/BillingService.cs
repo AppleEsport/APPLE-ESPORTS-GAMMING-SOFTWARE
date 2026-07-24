@@ -103,7 +103,7 @@ public class BillingService : IBillingService
 
             dto.GamingAmount = liveGamingAmount;
             dto.Subtotal = liveGamingAmount + dto.FoodAmount;
-            dto.TotalAmount = Math.Max(0, dto.Subtotal - dto.DiscountAmount);
+            dto.TotalAmount = Application.Services.SessionPricingCalculator.RoundBillTotal(Math.Max(0, dto.Subtotal - dto.DiscountAmount));
 
             var gamingItem = dto.Items.FirstOrDefault(i => i.ItemType == "gaming");
             if (gamingItem != null)
@@ -146,7 +146,7 @@ public class BillingService : IBillingService
         bill.DiscountAmount = discountAmount;
         bill.DiscountBy = superAdminId;
         bill.DiscountReason = dto.Reason;
-        bill.TotalAmount = bill.Subtotal - discountAmount;
+        bill.TotalAmount = Application.Services.SessionPricingCalculator.RoundBillTotal(Math.Max(0, bill.Subtotal - discountAmount));
         bill.UpdatedAt = DateTimeOffset.UtcNow;
 
         _unitOfWork.Repository<Bill>().Update(bill);
@@ -473,9 +473,8 @@ public class BillingService : IBillingService
                     bill.DiscountAmount = bill.Subtotal;
             }
 
-            bill.TotalAmount = bill.Subtotal - bill.DiscountAmount;
-            if (bill.TotalAmount < 0) bill.TotalAmount = 0;
-            
+            bill.TotalAmount = Application.Services.SessionPricingCalculator.RoundBillTotal(Math.Max(0, bill.Subtotal - bill.DiscountAmount));
+
             bill.UpdatedAt = DateTimeOffset.UtcNow;
 
             bill.Items.Remove(itemToRemove);

@@ -27,4 +27,20 @@ public static class SessionPricingCalculator
         decimal hours = elapsedMinutes / 60m;
         return Math.Round(hours * ratePerHour, 2);
     }
+
+    /// <summary>
+    /// Rounds a final bill total to the nearest ₹10 — down for a remainder of 0-5,
+    /// up for 6-9 — so the amount actually charged never lands on an awkward figure.
+    /// Applied only at the point a bill's TotalAmount is finalized; never on line
+    /// items, Subtotal, DiscountAmount, or wallet top-ups.
+    /// </summary>
+    public static decimal RoundBillTotal(decimal amount)
+    {
+        if (amount <= 0m) return 0m;
+
+        decimal remainder = amount % 10m;
+        return remainder <= 5m
+            ? amount - remainder
+            : amount + (10m - remainder);
+    }
 }
