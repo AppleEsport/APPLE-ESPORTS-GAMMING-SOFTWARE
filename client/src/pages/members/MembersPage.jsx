@@ -716,21 +716,12 @@ function ExtraBonusModal({ member, onClose, onSuccess }) {
     setLoading(true);
     try {
       const dto = {
-        amount: 0,
+        amount: bonusAmount,
         targetWallet: walletType === 'Gaming' ? 0 : 1,
         paymentType: 'Cash',
-        bonusPercentOverride: bonusMode === 'percentage' ? parseFloat(percentValue) : undefined,
+        bonusPercentOverride: 0,
         reason: reason.trim() || `Extra ${bonusMode === 'percentage' ? percentValue + '%' : '₹' + bonusAmount.toFixed(0)} bonus`,
       };
-
-      // If amount mode, set amount; if percentage mode, set amount to 0 and let bonus calc happen via percentage
-      if (bonusMode === 'amount') {
-        dto.amount = bonusAmount;
-        dto.bonusPercentOverride = 0;
-      } else {
-        dto.amount = 0;
-        dto.bonusPercentOverride = parseFloat(percentValue);
-      }
 
       await topUpWallet(member.id, dto);
       toast.success(`₹${bonusAmount.toFixed(0)} bonus given to ${member.fullName}'s ${walletType} wallet`);
