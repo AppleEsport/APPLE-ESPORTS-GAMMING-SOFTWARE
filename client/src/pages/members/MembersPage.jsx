@@ -768,7 +768,7 @@ function ExtraBonusModal({ member, onClose, onSuccess }) {
             <div className="grid grid-cols-2 gap-2">
               {[
                 { val: 'Gaming', Icon: Gamepad2, active: 'bg-neon-blue/15 border-neon-blue text-neon-blue' },
-                { val: 'Food', Icon: Coffee, active: 'bg-neon-orange/15 border-neon-orange text-neon-orange' },
+                { val: 'Food', Icon: Coffee, active: 'bg-neon-green/15 border-neon-green text-neon-green' },
               ].map(({ val, Icon, active }) => (
                 <button
                   key={val}
@@ -1044,15 +1044,15 @@ function MemberDetailPanel({ member, onEdit, onTopUp, onDiscount, onEditValues, 
               ₹{parseFloat(member.gamingBalance || 0).toFixed(0)}
             </p>
             {parseFloat(member.totalGamingBonusEarned || 0) > 0 && (
-              <p className="text-[9px] text-text-3 font-mono mt-1">
-                ₹{parseFloat(member.totalGamingTopUps || 0).toFixed(0)} topped up
+              <p className="text-[9px] font-mono mt-1">
+                <span className="text-neon-blue font-bold">₹{parseFloat(member.totalGamingTopUps || 0).toFixed(0)} topped up</span>
                 <span className="text-neon-green"> + ₹{parseFloat(member.totalGamingBonusEarned || 0).toFixed(0)} bonus</span>
               </p>
             )}
           </div>
           <div className="bg-bg-3 border border-border rounded-xl p-3 text-center">
             <p className="text-[9px] text-text-3 uppercase tracking-widest font-bold">Food Wallet</p>
-            <p className="font-mono font-bold text-2xl text-neon-orange mt-1 drop-shadow-[0_0_10px_rgba(255,140,66,0.4)]">
+            <p className="font-mono font-bold text-2xl text-neon-green mt-1 drop-shadow-[0_0_10px_rgba(34,211,166,0.4)]">
               ₹{parseFloat(member.foodBalance || 0).toFixed(0)}
             </p>
           </div>
@@ -1196,13 +1196,13 @@ function MemberRow({ member, selected, onClick }) {
             <span className="inline-flex items-center gap-0.5 font-mono text-[11px] font-bold text-neon-blue">
               <Gamepad2 className="w-3 h-3" /> ₹{parseFloat(member.gamingBalance || 0).toFixed(0)}
             </span>
-            <span className="inline-flex items-center gap-0.5 font-mono text-[11px] font-bold text-neon-orange">
+            <span className="inline-flex items-center gap-0.5 font-mono text-[11px] font-bold text-neon-green">
               <Coffee className="w-3 h-3" /> ₹{parseFloat(member.foodBalance || 0).toFixed(0)}
             </span>
           </div>
           {parseFloat(member.totalGamingBonusEarned || 0) > 0 && (
-            <p className="text-[9px] text-text-3 font-mono mt-0.5">
-              ₹{parseFloat(member.totalGamingTopUps || 0).toFixed(0)} topped up
+            <p className="text-[9px] font-mono mt-0.5">
+              <span className="text-neon-blue font-bold">₹{parseFloat(member.totalGamingTopUps || 0).toFixed(0)} topped up</span>
               <span className="text-neon-green"> + ₹{parseFloat(member.totalGamingBonusEarned || 0).toFixed(0)} bonus</span>
             </p>
           )}
