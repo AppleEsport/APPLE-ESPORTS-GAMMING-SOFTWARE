@@ -8,6 +8,7 @@ import { useToast } from '../../components/ui/Toast';
 import ExtendSessionModal from './ExtendSessionModal';
 import SessionDiscountModal from './SessionDiscountModal';
 import { formatMoney } from '../../utils/money';
+import { computeRoundedBreakdown } from '../../utils/billRounding';
 
 // ── Elapsed time from a start ISO string (counting UP) ──
 function useElapsedTime(startTimeIso) {
@@ -66,10 +67,12 @@ const PcCard = memo(({ pc, walkinReq, onStartSession, onRefresh, onStartReserved
   // branch's buffer window, then billed for exact elapsed time at the PC's real rate.
   // Always time-based, whether the session is a fixed package or open/Pay-As-You-Go.
   const bufferMinutes = pc.bufferMinutes ?? 10;
-  const gamingCharge = elapsed.totalMin <= bufferMinutes
+  const rawGamingCharge = elapsed.totalMin <= bufferMinutes
     ? 0
     : Number((Math.max(elapsed.totalMin / 60, 1 / 60) * (pc.ratePerHour || 0)).toFixed(2));
-  const liveCharge = gamingCharge + (pc.foodAmount || 0);
+  const { displayGaming: gamingCharge, roundedTotal: liveCharge } = computeRoundedBreakdown(
+    rawGamingCharge, pc.foodAmount || 0
+  );
 
   // Remaining time until the planned end (fixed-duration sessions only) — ticks live off the
   // same per-second re-render the elapsed-time hook above already drives.

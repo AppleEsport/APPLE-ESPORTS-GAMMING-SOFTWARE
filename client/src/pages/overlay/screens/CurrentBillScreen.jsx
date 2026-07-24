@@ -1,6 +1,7 @@
 import React from 'react';
 import { useOverlaySocket } from '../../../contexts/OverlaySocketContext';
 import { Receipt, Coffee, MonitorPlay } from 'lucide-react';
+import { computeRoundedBreakdown } from '../../../utils/billRounding';
 
 export default function CurrentBillScreen() {
   const { sessionData } = useOverlaySocket();
@@ -14,7 +15,9 @@ export default function CurrentBillScreen() {
     );
   }
 
-  const { gamingCharges, foodCharges, foodItems = [], totalBill, sessionStatus } = sessionData;
+  const { foodItems = [], sessionStatus } = sessionData;
+  const { displayGaming: gamingCharges, displayFood: foodCharges, roundedTotal: totalBill } =
+    computeRoundedBreakdown(sessionData.gamingCharges, sessionData.foodCharges);
 
   return (
     <div className="flex flex-col h-full bg-bg">

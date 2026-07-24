@@ -3,6 +3,7 @@ import { useOverlaySocket } from '../../../contexts/OverlaySocketContext';
 import { MonitorPlay, Clock, IndianRupee, User, AlertTriangle, LogOut, CheckCircle2, X } from 'lucide-react';
 import { format } from 'date-fns';
 import { formatMoney } from '../../../utils/money';
+import { computeRoundedBreakdown } from '../../../utils/billRounding';
 
 export default function SessionInfoScreen() {
   const { sessionData, pcId, connectionStatus, memberCheckout } = useOverlaySocket();
@@ -26,7 +27,8 @@ export default function SessionInfoScreen() {
     const bufferMinutes = sessionData.bufferMinutes ?? 10;
     const hours = Math.max(elapsedMin / 60, 1 / 60);
     const gaming = elapsedMin <= bufferMinutes ? 0 : Number((hours * ratePerHour).toFixed(2));
-    return { liveGamingCharge: gaming, liveTotalBill: (sessionData.foodCharges || 0) + gaming };
+    const { displayGaming, roundedTotal } = computeRoundedBreakdown(gaming, sessionData.foodCharges || 0);
+    return { liveGamingCharge: displayGaming, liveTotalBill: roundedTotal };
   }, [sessionData, now]);
 
   // Wallet-exhausted auto-checkout itself now runs at the OverlaySocketContext provider
