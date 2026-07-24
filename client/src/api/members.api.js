@@ -35,6 +35,11 @@ export const topUpWallet = (memberId, dto) =>
     headers: { 'X-Idempotency-Key': generateIdempotencyKey() },
   }).then(r => r.data?.data);
 
+export const deductWallet = (memberId, dto) =>
+  api.post(`/wallets/${memberId}/deduct`, dto, {
+    headers: { 'X-Idempotency-Key': generateIdempotencyKey() },
+  }).then(r => r.data?.data);
+
 export const deleteMember = (id) =>
   api.delete(`/members/${id}`).then(r => r.data);
 

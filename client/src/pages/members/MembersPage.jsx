@@ -4,14 +4,14 @@ import {
   X, Banknote, CreditCard, AlertTriangle,
   UserPlus, Edit2, Check, ArrowUpRight, ArrowDownRight,
   Gamepad2, Coffee, RefreshCw, Trash2, Receipt, Eye, EyeOff,
-  KeyRound, User as UserIcon, ShieldCheck, ShieldAlert, Gift, SlidersHorizontal, Download,
+  KeyRound, User as UserIcon, ShieldCheck, ShieldAlert, Gift, SlidersHorizontal, Download, Tag,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useBranch } from '../../contexts/BranchContext';
 import { useToast } from '../../components/ui/Toast';
 import {
   getMembers, getMemberById, registerMember, updateMember,
-  getWalletHistory, topUpWallet, adminEditMemberValues, deleteMember,
+  getWalletHistory, topUpWallet, deductWallet, adminEditMemberValues, deleteMember,
 } from '../../api/members.api';
 import { getWalletTopUpRules } from '../../api/settings.api';
 
@@ -693,6 +693,164 @@ function AdminEditValuesModal({ member, onClose, onSuccess }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// DiscountModal — apply discount/deduction to member wallet
+// ═══════════════════════════════════════════════════════════════════════════════
+const DISCOUNT_PRESETS = [50, 100, 200, 500];
+
+function DiscountModal({ member, onClose, onSuccess }) {
+  const toast = useToast();
+  const [walletType, setWalletType] = useState('Gaming');
+  const [amount, setAmount] = useState('');
+  const [reason, setReason] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const numAmount = parseFloat(amount) || 0;
+  const currentBalance = walletType === 'Gaming' ? parseFloat(member.gamingBalance || 0) : parseFloat(member.foodBalance || 0);
+  const isValid = numAmount > 0 && numAmount <= currentBalance;
+
+  const handleDiscount = async () => {
+    if (!isValid || loading) return;
+    setLoading(true);
+    try {
+      const dto = {
+        amount: numAmount,
+        targetWallet: walletType === 'Gaming' ? 0 : 1,
+        reason: reason.trim() || `${walletType} wallet discount`,
+      };
+      await deductWallet(member.id, dto);
+      toast.success(`₹${numAmount.toFixed(0)} deducted from ${member.fullName}'s ${walletType} wallet`);
+      onSuccess();
+      onClose();
+    } catch (err) {
+      toast.error(err.response?.data?.error || err.response?.data?.message || 'Failed to apply discount');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex">
+      <div className="flex-1 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="w-full max-w-sm bg-bg-2 border-l border-border flex flex-col shadow-2xl">
+        <div className="p-4 border-b border-border bg-bg-3 flex items-center justify-between shrink-0">
+          <div className="flex items-center gap-2">
+            <Tag className="w-5 h-5 text-neon-red" />
+            <h2 className="font-heading font-bold text-text uppercase tracking-wider">Apply Discount</h2>
+          </div>
+          <button onClick={onClose} className="p-1 text-text-3 hover:text-text rounded transition-colors">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          <div className="bg-bg-3 border border-border rounded-lg p-3">
+            <p className="text-sm font-bold text-text">{member.fullName}</p>
+            <p className="text-[10px] text-text-3 font-mono mt-0.5">{member.memberNumber}</p>
+          </div>
+
+          <div>
+            <label className="block text-[10px] text-text-3 uppercase tracking-widest font-bold mb-2">Wallet</label>
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                { val: 'Gaming', Icon: Gamepad2, active: 'bg-neon-blue/15 border-neon-blue text-neon-blue' },
+                { val: 'Food', Icon: Coffee, active: 'bg-neon-orange/15 border-neon-orange text-neon-orange' },
+              ].map(({ val, Icon, active }) => (
+                <button
+                  key={val}
+                  onClick={() => setWalletType(val)}
+                  className={`py-2.5 rounded-lg border text-sm font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors ${
+                    walletType === val ? active : 'bg-bg-3 border-border text-text-2 hover:border-border'
+                  }`}
+                >
+                  <Icon className="w-4 h-4" />{val}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-[10px] text-text-3 uppercase tracking-widest font-bold mb-2">Amount (₹)</label>
+            <input
+              type="number" min="0" step="1"
+              value={amount}
+              onChange={e => setAmount(e.target.value)}
+              placeholder="0"
+              className="w-full bg-bg-3 border border-border text-text rounded-lg px-3 py-2.5 text-sm focus:border-neon-red focus:ring-1 focus:ring-neon-red transition-all placeholder:text-text-3 font-mono"
+            />
+          </div>
+
+          <div>
+            <span className="text-[10px] text-text-3 uppercase tracking-widest font-bold">Quick Presets</span>
+            <div className="flex flex-wrap gap-1.5 mt-1.5">
+              {DISCOUNT_PRESETS.map(preset => (
+                <button
+                  key={preset}
+                  onClick={() => setAmount(String(preset))}
+                  className={`px-3 py-1 rounded border text-[11px] font-bold uppercase tracking-wider transition-all ${
+                    numAmount === preset
+                      ? 'bg-neon-red/20 border-neon-red text-neon-red'
+                      : 'bg-bg-3 border-border text-text-3 hover:border-neon-red/50 hover:text-neon-red/80'
+                  }`}
+                >
+                  ₹{preset}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-[10px] text-text-3 uppercase tracking-widest font-bold mb-2">Reason <span className="normal-case font-normal">(optional)</span></label>
+            <input
+              type="text"
+              value={reason}
+              onChange={e => setReason(e.target.value)}
+              placeholder="e.g. Damage refund, partial refund"
+              className="w-full bg-bg-3 border border-border text-text rounded-lg px-3 py-2.5 text-sm focus:border-neon-red focus:ring-1 focus:ring-neon-red transition-all placeholder:text-text-3"
+            />
+          </div>
+
+          {numAmount > 0 && (
+            <div className="bg-neon-red/5 border border-neon-red/20 rounded-lg p-3 space-y-1.5">
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-text-2">Current Balance</span>
+                <span className="font-mono font-bold text-text-2">₹{currentBalance.toFixed(0)}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-text-2">After Discount</span>
+                <span className="font-mono font-bold text-neon-red text-lg">₹{(currentBalance - numAmount).toFixed(0)}</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="p-4 border-t border-border bg-bg-3 flex gap-3">
+          <button
+            onClick={onClose}
+            className="flex-1 py-2.5 rounded-lg border border-border text-text-2 text-sm font-bold uppercase tracking-wider hover:bg-bg-2 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleDiscount}
+            disabled={!isValid || loading}
+            className={`flex-[2] py-2.5 rounded-lg border text-sm font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
+              isValid && !loading
+                ? 'bg-neon-red/10 border-neon-red/50 text-neon-red hover:bg-neon-red/20'
+                : 'bg-bg-2 border-border text-text-3 cursor-not-allowed'
+            }`}
+          >
+            {loading
+              ? <div className="w-4 h-4 rounded-full border-2 border-current border-t-transparent animate-spin" />
+              : <><Tag className="w-4 h-4" /> Apply ₹{numAmount || '–'}</>
+            }
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // DeleteConfirmModal
 // ═══════════════════════════════════════════════════════════════════════════════
 function DeleteConfirmModal({ member, onClose, onConfirm }) {
@@ -751,7 +909,7 @@ function DeleteConfirmModal({ member, onClose, onConfirm }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // MemberDetailPanel — right side
 // ═══════════════════════════════════════════════════════════════════════════════
-function MemberDetailPanel({ member, onEdit, onTopUp, onEditValues, onRefresh, onDelete }) {
+function MemberDetailPanel({ member, onEdit, onTopUp, onDiscount, onEditValues, onRefresh, onDelete }) {
   const { hasDashboardAccess } = useAuth();
   const [txHistory, setTxHistory] = useState(null);
   const [txLoading, setTxLoading] = useState(false);
@@ -815,7 +973,7 @@ function MemberDetailPanel({ member, onEdit, onTopUp, onEditValues, onRefresh, o
             {parseFloat(member.totalGamingBonusEarned || 0) > 0 && (
               <p className="text-[9px] text-text-3 font-mono mt-1">
                 ₹{parseFloat(member.totalGamingTopUps || 0).toFixed(0)} topped up
-                <span className="text-neon-orange"> + ₹{parseFloat(member.totalGamingBonusEarned || 0).toFixed(0)} bonus</span>
+                <span className="text-neon-green"> + ₹{parseFloat(member.totalGamingBonusEarned || 0).toFixed(0)} bonus</span>
               </p>
             )}
           </div>
@@ -843,13 +1001,19 @@ function MemberDetailPanel({ member, onEdit, onTopUp, onEditValues, onRefresh, o
           </p>
         </div>
 
-        {/* Primary CTA */}
-        <div className="px-4 mb-3">
+        {/* Primary CTAs */}
+        <div className="px-4 mb-3 space-y-2">
           <button
             onClick={() => { member.tempTarget = 'Gaming'; onTopUp(member); }}
             className="w-full py-3.5 rounded-xl bg-neon-green text-bg font-bold text-sm uppercase tracking-widest flex items-center justify-center gap-2 hover:brightness-110 transition-all shadow-[0_0_20px_rgba(34,211,166,0.2)]"
           >
             <Receipt className="w-4 h-4" /> Process Wallet Top-Up
+          </button>
+          <button
+            onClick={() => onDiscount(member)}
+            className="w-full py-3.5 rounded-xl bg-neon-red/20 border border-neon-red/50 text-neon-red font-bold text-sm uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-neon-red/30 transition-all"
+          >
+            <Tag className="w-4 h-4" /> Do Discount
           </button>
         </div>
 
@@ -909,7 +1073,7 @@ function MemberDetailPanel({ member, onEdit, onTopUp, onEditValues, onRefresh, o
                       {tx.action === 'Deduction' ? '−' : '+'}₹{tx.amount + (tx.bonusAmount || 0)}
                     </p>
                     {tx.bonusAmount > 0 && (
-                      <p className="text-[10px] text-neon-orange font-mono">
+                      <p className="text-[10px] text-neon-green font-mono">
                         {tx.amount > 0 ? `₹${tx.amount} + ` : ''}₹{tx.bonusAmount} bonus
                       </p>
                     )}
@@ -966,7 +1130,7 @@ function MemberRow({ member, selected, onClick }) {
           {parseFloat(member.totalGamingBonusEarned || 0) > 0 && (
             <p className="text-[9px] text-text-3 font-mono mt-0.5">
               ₹{parseFloat(member.totalGamingTopUps || 0).toFixed(0)} topped up
-              <span className="text-neon-orange"> + ₹{parseFloat(member.totalGamingBonusEarned || 0).toFixed(0)} bonus</span>
+              <span className="text-neon-green"> + ₹{parseFloat(member.totalGamingBonusEarned || 0).toFixed(0)} bonus</span>
             </p>
           )}
         </div>
@@ -994,6 +1158,7 @@ export default function MembersPage() {
   const [showRegister, setShowRegister] = useState(false);
   const [editMember, setEditMember] = useState(null);
   const [topUpMember, setTopUpMember] = useState(null);
+  const [discountMember, setDiscountMember] = useState(null);
   const [editValuesMember, setEditValuesMember] = useState(null);
   const [deletingMember, setDeletingMember] = useState(null);
 
@@ -1180,6 +1345,7 @@ export default function MembersPage() {
             member={selectedMember}
             onEdit={m => { setEditMember(m); setShowRegister(true); }}
             onTopUp={setTopUpMember}
+            onDiscount={setDiscountMember}
             onEditValues={setEditValuesMember}
             onRefresh={refreshSelected}
             onDelete={setDeletingMember}
@@ -1214,6 +1380,18 @@ export default function MembersPage() {
           member={topUpMember}
           isSuperAdmin={isSuperAdmin}
           onClose={() => setTopUpMember(null)}
+          onSuccess={() => {
+            fetchMembers(pagination.page, search);
+            refreshSelected();
+          }}
+        />
+      )}
+
+      {/* Discount modal */}
+      {discountMember && (
+        <DiscountModal
+          member={discountMember}
+          onClose={() => setDiscountMember(null)}
           onSuccess={() => {
             fetchMembers(pagination.page, search);
             refreshSelected();
