@@ -232,10 +232,24 @@ public class FoodOrderService : IFoodOrderService
                         });
                     }
 
-                    activeBill.FoodAmount += order.TotalAmount;
-                    activeBill.Subtotal += order.TotalAmount;
-                    activeBill.TotalAmount = SessionPricingCalculator.RoundBillTotal(Math.Max(0, activeBill.Subtotal - activeBill.DiscountAmount));
+                    // Food items are real menu-priced products — keep their total exact, and
+                    // let the Gaming line (a derived, not a fixed, price) absorb any rounding.
+                    decimal newFoodAmount = activeBill.FoodAmount + order.TotalAmount;
+                    var (displayGaming, displayFood, roundedTotal) = SessionPricingCalculator.ComputeRoundedBreakdown(
+                        activeBill.GamingAmount, newFoodAmount, activeBill.DiscountAmount);
+
+                    activeBill.FoodAmount = displayFood;
+                    activeBill.GamingAmount = displayGaming;
+                    activeBill.Subtotal = displayGaming + displayFood;
+                    activeBill.TotalAmount = roundedTotal;
                     activeBill.UpdatedAt = now;
+
+                    var gamingItem = activeBill.Items.FirstOrDefault(i => i.ItemType == "gaming");
+                    if (gamingItem != null)
+                    {
+                        gamingItem.TotalPrice = displayGaming;
+                        gamingItem.UnitPrice = displayGaming;
+                    }
                     _unitOfWork.Repository<Bill>().Update(activeBill);
 
                     await _hubNotification.BroadcastBillingUpdateAsync(branchId, activeBill.Id);

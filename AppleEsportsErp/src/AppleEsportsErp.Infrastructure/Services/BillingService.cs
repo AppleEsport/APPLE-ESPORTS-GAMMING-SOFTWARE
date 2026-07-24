@@ -101,15 +101,18 @@ public class BillingService : IBillingService
             decimal elapsedMinutes = (decimal)(DateTimeOffset.UtcNow - bill.Session.StartTime).TotalMinutes;
             decimal liveGamingAmount = Application.Services.SessionPricingCalculator.CalculateGamingAmount(ratePerHour, bufferMinutes, elapsedMinutes);
 
-            dto.GamingAmount = liveGamingAmount;
-            dto.Subtotal = liveGamingAmount + dto.FoodAmount;
-            dto.TotalAmount = Application.Services.SessionPricingCalculator.RoundBillTotal(Math.Max(0, dto.Subtotal - dto.DiscountAmount));
+            var (displayGaming, displayFood, roundedTotal) = Application.Services.SessionPricingCalculator.ComputeRoundedBreakdown(
+                liveGamingAmount, dto.FoodAmount, dto.DiscountAmount);
+
+            dto.GamingAmount = displayGaming;
+            dto.Subtotal = displayGaming + displayFood;
+            dto.TotalAmount = roundedTotal;
 
             var gamingItem = dto.Items.FirstOrDefault(i => i.ItemType == "gaming");
             if (gamingItem != null)
             {
-                gamingItem.UnitPrice = liveGamingAmount;
-                gamingItem.TotalPrice = liveGamingAmount;
+                gamingItem.UnitPrice = displayGaming;
+                gamingItem.TotalPrice = displayGaming;
             }
         }
 
@@ -141,13 +144,28 @@ public class BillingService : IBillingService
         if (discountAmount > bill.Subtotal)
             throw new AppException("Discount amount cannot exceed bill subtotal.");
 
+        // Discount is an explicit, deliberate figure the admin chose — keep it exact.
+        // The Gaming line (derived, not a fixed price) absorbs any rounding instead.
+        var (displayGaming, displayFood, roundedTotal) = Application.Services.SessionPricingCalculator.ComputeRoundedBreakdown(
+            bill.GamingAmount, bill.FoodAmount, discountAmount);
+
         bill.DiscountType = dto.DiscountType;
         bill.DiscountValue = dto.DiscountValue;
         bill.DiscountAmount = discountAmount;
         bill.DiscountBy = superAdminId;
         bill.DiscountReason = dto.Reason;
-        bill.TotalAmount = Application.Services.SessionPricingCalculator.RoundBillTotal(Math.Max(0, bill.Subtotal - discountAmount));
+        bill.GamingAmount = displayGaming;
+        bill.FoodAmount = displayFood;
+        bill.Subtotal = displayGaming + displayFood;
+        bill.TotalAmount = roundedTotal;
         bill.UpdatedAt = DateTimeOffset.UtcNow;
+
+        var discountGamingItem = bill.Items.FirstOrDefault(i => i.ItemType == "gaming");
+        if (discountGamingItem != null)
+        {
+            discountGamingItem.TotalPrice = displayGaming;
+            discountGamingItem.UnitPrice = displayGaming;
+        }
 
         _unitOfWork.Repository<Bill>().Update(bill);
 
@@ -473,7 +491,19 @@ public class BillingService : IBillingService
                     bill.DiscountAmount = bill.Subtotal;
             }
 
-            bill.TotalAmount = Application.Services.SessionPricingCalculator.RoundBillTotal(Math.Max(0, bill.Subtotal - bill.DiscountAmount));
+            var (displayGaming, displayFood, roundedTotal) = Application.Services.SessionPricingCalculator.ComputeRoundedBreakdown(
+                bill.GamingAmount, bill.FoodAmount, bill.DiscountAmount);
+            bill.GamingAmount = displayGaming;
+            bill.FoodAmount = displayFood;
+            bill.Subtotal = displayGaming + displayFood;
+            bill.TotalAmount = roundedTotal;
+
+            var removalGamingItem = bill.Items.FirstOrDefault(i => i.ItemType == "gaming");
+            if (removalGamingItem != null)
+            {
+                removalGamingItem.TotalPrice = displayGaming;
+                removalGamingItem.UnitPrice = displayGaming;
+            }
 
             bill.UpdatedAt = DateTimeOffset.UtcNow;
 

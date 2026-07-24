@@ -272,18 +272,21 @@ public class SessionService : ISessionService
 
             if (bill != null)
             {
-                bill.GamingAmount = session.GamingAmount;
-                bill.FoodAmount = foodAmount;
-                bill.Subtotal = session.GamingAmount + foodAmount;
                 // Preserve any discount already applied to the bill instead of wiping it out.
-                bill.TotalAmount = SessionPricingCalculator.RoundBillTotal(Math.Max(0, bill.Subtotal - bill.DiscountAmount));
+                var (displayGaming, displayFood, roundedTotal) = SessionPricingCalculator.ComputeRoundedBreakdown(
+                    session.GamingAmount, foodAmount, bill.DiscountAmount);
+
+                bill.GamingAmount = displayGaming;
+                bill.FoodAmount = displayFood;
+                bill.Subtotal = displayGaming + displayFood;
+                bill.TotalAmount = roundedTotal;
 
                 var gamingItem = bill.Items.FirstOrDefault(i => i.ItemType == "gaming");
                 if (gamingItem != null)
                 {
                     gamingItem.ItemName = session.PlannedDurationMin == null ? $"Open Session ({session.ActualDurationMin}m)" : $"{session.GamingType}";
-                    gamingItem.TotalPrice = session.GamingAmount;
-                    gamingItem.UnitPrice = session.GamingAmount;
+                    gamingItem.TotalPrice = displayGaming;
+                    gamingItem.UnitPrice = displayGaming;
                 }
             }
 
@@ -429,9 +432,15 @@ public class SessionService : ISessionService
             var bill = session.Bills.FirstOrDefault();
             if (bill != null)
             {
-                bill.GamingAmount += dto.AdditionalAmount;
-                bill.Subtotal += dto.AdditionalAmount;
-                bill.TotalAmount = SessionPricingCalculator.RoundBillTotal(Math.Max(0, bill.Subtotal - bill.DiscountAmount));
+                decimal previousGamingAmount = bill.GamingAmount;
+                decimal newRawGamingAmount = previousGamingAmount + dto.AdditionalAmount;
+
+                var (displayGaming, displayFood, roundedTotal) = SessionPricingCalculator.ComputeRoundedBreakdown(
+                    newRawGamingAmount, bill.FoodAmount, bill.DiscountAmount);
+
+                bill.GamingAmount = displayGaming;
+                bill.Subtotal = displayGaming + displayFood;
+                bill.TotalAmount = roundedTotal;
                 bill.UpdatedAt = now;
                 _uow.Repository<Bill>().Update(bill);
 
@@ -442,11 +451,13 @@ public class SessionService : ISessionService
                     ItemType = "gaming",
                     ItemName = dto.PackageName, // "Extension - 60m"
                     Quantity = 1,
-                    UnitPrice = dto.AdditionalAmount,
-                    TotalPrice = dto.AdditionalAmount,
+                    // Absorbs the rounding diff so (original gaming item + this extension) still
+                    // sums to the new displayGaming aggregate exactly.
+                    UnitPrice = displayGaming - previousGamingAmount,
+                    TotalPrice = displayGaming - previousGamingAmount,
                     CreatedAt = now
                 };
-                
+
                 await _uow.Repository<BillItem>().AddAsync(extendItem);
             }
 

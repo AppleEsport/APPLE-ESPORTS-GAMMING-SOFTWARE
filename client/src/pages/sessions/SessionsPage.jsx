@@ -271,9 +271,11 @@ export default function SessionsPage() {
     // Live accrued revenue across all active sessions — use the backend's own live
     // totalAmount (buffer-aware, same formula as the final bill) instead of re-deriving
     // it here, so this stat can never drift from what the PC cards / billing show.
-    const liveRevenue = pcs
-      .filter(p => p.state === 'Active')
-      .reduce((sum, p) => sum + (p.totalAmount || 0), 0);
+    const liveRevenue = Math.round(
+      pcs
+        .filter(p => p.state === 'Active')
+        .reduce((sum, p) => sum + (p.totalAmount || 0), 0) * 100
+    ) / 100;
 
     return { activeSessions, idleStations, awaitingBilling, liveRevenue };
   }, [pcs, ticker]);

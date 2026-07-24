@@ -43,4 +43,30 @@ public static class SessionPricingCalculator
             ? amount - remainder
             : amount + (10m - remainder);
     }
+
+    /// <summary>
+    /// Rounds a bill's total to the nearest ₹10 AND folds the adjustment into the
+    /// Gaming line so every number on the bill (line items, subtotal, total) agrees
+    /// with the same figure — never a line item that doesn't add up to the total.
+    /// The Gaming charge (time-based, not a fixed menu price) absorbs the rounding;
+    /// if the session is still free/under-buffer (Gaming = 0), the Food line absorbs
+    /// it instead so a free session never appears to have a Gaming charge.
+    /// </summary>
+    public static (decimal displayGamingAmount, decimal displayFoodAmount, decimal roundedTotal) ComputeRoundedBreakdown(
+        decimal gamingAmount, decimal foodAmount, decimal discountAmount)
+    {
+        decimal rawTotal = Math.Max(0m, gamingAmount + foodAmount - discountAmount);
+        decimal roundedTotal = RoundBillTotal(rawTotal);
+        decimal diff = roundedTotal - rawTotal;
+
+        decimal displayGaming = gamingAmount;
+        decimal displayFood = foodAmount;
+
+        if (gamingAmount > 0m)
+            displayGaming = Math.Max(0m, gamingAmount + diff);
+        else if (foodAmount > 0m)
+            displayFood = Math.Max(0m, foodAmount + diff);
+
+        return (displayGaming, displayFood, roundedTotal);
+    }
 }
