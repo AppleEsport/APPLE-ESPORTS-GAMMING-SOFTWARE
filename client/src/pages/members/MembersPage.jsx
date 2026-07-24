@@ -1171,13 +1171,13 @@ function MemberRow({ member, selected, onClick }) {
       onClick={onClick}
       className={`w-full text-left px-3 py-2.5 rounded-lg border transition-all ${
         selected
-          ? 'bg-accent/10 border-accent/40 shadow-[0_0_0_1px_rgba(220,38,38,0.12)]'
+          ? 'bg-neon-green/10 border-neon-green/40 shadow-[0_0_0_1px_rgba(34,211,166,0.12)]'
           : 'bg-bg-3 border-border hover:bg-bg-2'
       }`}
     >
       <div className="flex items-center gap-2.5">
         <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 font-bold text-sm ${
-          selected ? 'bg-accent/20 text-accent' : 'bg-bg-2 text-text-2 border border-border'
+          selected ? 'bg-neon-green/20 text-neon-green' : 'bg-bg-2 text-text-2 border border-border'
         }`}>
           {member.fullName.charAt(0).toUpperCase()}
         </div>
