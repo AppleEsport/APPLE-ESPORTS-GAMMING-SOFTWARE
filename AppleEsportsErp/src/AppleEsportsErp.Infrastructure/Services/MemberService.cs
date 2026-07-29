@@ -254,6 +254,8 @@ public class MemberService : IMemberService
         // on Username, not just the app-level check) — a deleted member also shouldn't retain login access.
         member.Username = null;
         member.PasswordHash = null;
+        member.ResetToken = null;
+        member.ResetTokenExpiry = null;
 
         _unitOfWork.Repository<Member>().Update(member);
 

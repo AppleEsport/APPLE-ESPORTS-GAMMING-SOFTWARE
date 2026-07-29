@@ -362,7 +362,18 @@ public class PublicController : ControllerBase
             var sysOp2 = await _db.Operators.FirstOrDefaultAsync(o => o.BranchId == branchId && o.Username == sysUsername2);
             if (sysOp2 == null)
             {
-                sysOp2 = new Operator { Id = Guid.NewGuid(), BranchId = branchId, FullName = "System Administrator", Username = sysUsername2, PasswordHash = "LOCKED", Status = OperatorStatus.Active, CreatedAt = now, UpdatedAt = now };
+                sysOp2 = new Operator
+                {
+                    Id = Guid.NewGuid(),
+                    BranchId = branchId,
+                    FullName = "System Administrator",
+                    Username = sysUsername2,
+                    Email = $"{sysUsername2}@appleesports.local",
+                    PasswordHash = "LOCKED",
+                    Status = OperatorStatus.Active,
+                    CreatedAt = now,
+                    UpdatedAt = now
+                };
                 _db.Operators.Add(sysOp2);
                 await _db.SaveChangesAsync();
             }
@@ -438,6 +449,7 @@ public class PublicController : ControllerBase
                 BranchId = branchId,
                 FullName = "System Administrator",
                 Username = sysUsername,
+                Email = $"{sysUsername}@appleesports.local",
                 PasswordHash = "LOCKED",
                 Status = OperatorStatus.Active,
                 CreatedAt = DateTimeOffset.UtcNow,
