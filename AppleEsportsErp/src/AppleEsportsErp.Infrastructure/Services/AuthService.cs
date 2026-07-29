@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Auth;
@@ -28,9 +29,10 @@ public class AuthService : IAuthService
     private readonly ILogger<AuthService> _logger;
     private readonly ITokenRevocationService _tokenRevocation;
     private readonly IEmailService _emailService;
+    private readonly IConfiguration _configuration;
     private const int SALT_ROUNDS = 12;
 
-    public AuthService(AppDbContext db, JwtTokenService jwt, IAuditService audit, ILogger<AuthService> logger, ITokenRevocationService tokenRevocation, IEmailService emailService)
+    public AuthService(AppDbContext db, JwtTokenService jwt, IAuditService audit, ILogger<AuthService> logger, ITokenRevocationService tokenRevocation, IEmailService emailService, IConfiguration configuration)
     {
         _db = db;
         _jwt = jwt;
@@ -38,6 +40,7 @@ public class AuthService : IAuthService
         _logger = logger;
         _tokenRevocation = tokenRevocation;
         _emailService = emailService;
+        _configuration = configuration;
     }
 
     /// <summary>
@@ -802,7 +805,11 @@ public class AuthService : IAuthService
 
         await _db.SaveChangesAsync();
 
-        string resetLink = $"http://localhost:5173/reset-password?email={email}&token={token}";
+        var configuredBaseUrl = _configuration["App:BaseUrl"];
+        var appBaseUrl = string.IsNullOrWhiteSpace(configuredBaseUrl)
+            ? "http://localhost:5173"
+            : configuredBaseUrl.Trim().TrimEnd('/');
+        string resetLink = $"{appBaseUrl}/reset-password?email={Uri.EscapeDataString(email)}&token={Uri.EscapeDataString(token)}";
         string subject = "Apple Esports - Password Reset";
         string htmlBody = $@"
         <div style='background-color:#050505; color:#ffffff; font-family:""Segoe UI"", Tahoma, Geneva, Verdana, sans-serif; padding:40px 20px; text-align:center;'>
@@ -983,20 +990,62 @@ public class AuthService : IAuthService
             user.PasswordHash = newHash;
             user.ResetToken = null;
             user.ResetTokenExpiry = null;
+            user.UpdatedAt = DateTimeOffset.UtcNow;
         }
         else if (op != null)
         {
             op.PasswordHash = newHash;
             op.ResetToken = null;
             op.ResetTokenExpiry = null;
+            op.UpdatedAt = DateTimeOffset.UtcNow;
         }
         else if (member != null)
         {
             member.PasswordHash = newHash;
             member.ResetToken = null;
             member.ResetTokenExpiry = null;
+            member.UpdatedAt = DateTimeOffset.UtcNow;
         }
         await _db.SaveChangesAsync();
+
+        if (user != null)
+        {
+            await _audit.LogAsync(new AuditEntry
+            {
+                UserId = user.Id,
+                UserRole = user.Role,
+                UserName = user.FullName,
+                Action = AuditActions.PasswordReset,
+                TargetType = "user",
+                TargetId = user.Id,
+                Details = new { status = "success", resetAt = DateTimeOffset.UtcNow },
+            });
+        }
+        else if (op != null)
+        {
+            await _audit.LogAsync(new AuditEntry
+            {
+                OperatorId = op.Id,
+                UserRole = op.IsGlobalAdmin ? Roles.Admin : Roles.Operator,
+                UserName = op.FullName,
+                Action = AuditActions.PasswordReset,
+                TargetType = "operator",
+                TargetId = op.Id,
+                Details = new { status = "success", resetAt = DateTimeOffset.UtcNow },
+            });
+        }
+        else if (member != null)
+        {
+            await _audit.LogAsync(new AuditEntry
+            {
+                UserRole = "Member",
+                UserName = member.FullName,
+                Action = AuditActions.PasswordReset,
+                TargetType = "member",
+                TargetId = member.Id,
+                Details = new { status = "success", resetAt = DateTimeOffset.UtcNow },
+            });
+        }
     }
 
     public async Task ChangeCredentialsAsync(Guid targetUserId, ChangeCredentialsDto dto)

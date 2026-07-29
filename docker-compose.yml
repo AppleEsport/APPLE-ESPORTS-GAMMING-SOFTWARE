@@ -79,6 +79,12 @@ services:
       - Jwt__Audience=AppleEsportsErpClient
       - Jwt__AccessExpiry=24h
       - Jwt__RefreshExpiry=7d
+      - App__BaseUrl=${APP_BASE_URL}
+      - EmailSettings__Host=${SMTP_HOST}
+      - EmailSettings__Port=${SMTP_PORT}
+      - EmailSettings__Username=${SMTP_USERNAME}
+      - EmailSettings__Password=${SMTP_PASSWORD}
+      - EmailSettings__FromEmail=${SMTP_FROM_EMAIL}
       - Cors__AllowedOrigins__0=http://localhost:8081
       - Cors__AllowedOrigins__1=http://127.0.0.1:8081
       - Cors__AllowedOrigins__2=http://localhost:5173

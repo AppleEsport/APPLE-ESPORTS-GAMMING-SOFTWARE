@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using System.Text.Json;
 using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Common;
@@ -20,12 +21,14 @@ public class WalletService : IWalletService
     private readonly IUnitOfWork _unitOfWork;
     private readonly IAuditService _auditService;
     private readonly IEmailService _emailService;
+    private readonly IConfiguration _configuration;
 
-    public WalletService(IUnitOfWork unitOfWork, IAuditService auditService, IEmailService emailService)
+    public WalletService(IUnitOfWork unitOfWork, IAuditService auditService, IEmailService emailService, IConfiguration configuration)
     {
         _unitOfWork = unitOfWork;
         _auditService = auditService;
         _emailService = emailService;
+        _configuration = configuration;
     }
 
     private async Task<(decimal minGamingTopUp, decimal defaultBonusPercent)> GetTopUpRulesAsync()
@@ -176,7 +179,11 @@ public class WalletService : IWalletService
                 _unitOfWork.Repository<Member>().Update(member);
                 await _unitOfWork.SaveChangesAsync(); // save token
 
-                string resetLink = $"http://localhost:5173/reset-password?email={member.Email}&token={setupToken}";
+                var configuredBaseUrl = _configuration["App:BaseUrl"];
+                var appBaseUrl = string.IsNullOrWhiteSpace(configuredBaseUrl)
+                    ? "http://localhost:5173"
+                    : configuredBaseUrl.Trim().TrimEnd('/');
+                string resetLink = $"{appBaseUrl}/reset-password?email={Uri.EscapeDataString(member.Email)}&token={Uri.EscapeDataString(setupToken)}";
                 string subject = "Welcome to Apple Esports - Setup Your Password";
                 string welcomeBody = $@"
                 <div style='background-color:#050505; color:#ffffff; font-family:""Segoe UI"", Tahoma, Geneva, Verdana, sans-serif; padding:40px 20px; text-align:center;'>
