@@ -47,6 +47,9 @@ public class CashTransactionConfiguration : IEntityTypeConfiguration<CashTransac
         builder.Property(e => e.Id).HasDefaultValueSql("uuid_generate_v4()");
         builder.Property(e => e.PcNumber).HasMaxLength(20);
         builder.Property(e => e.CashAmount).HasPrecision(10, 2).IsRequired();
+        builder.Property(e => e.CashReceived).HasPrecision(10, 2).HasDefaultValue(0m);
+        builder.Property(e => e.ChangeReturned).HasPrecision(10, 2).HasDefaultValue(0m);
+        builder.Property(e => e.ActualCashCollected).HasPrecision(10, 2).HasDefaultValue(0m);
         builder.Property(e => e.GamingAmount).HasPrecision(10, 2).HasDefaultValue(0m);
         builder.Property(e => e.FoodAmount).HasPrecision(10, 2).HasDefaultValue(0m);
         builder.Property(e => e.TransactionType).HasMaxLength(30).HasDefaultValue("billing");

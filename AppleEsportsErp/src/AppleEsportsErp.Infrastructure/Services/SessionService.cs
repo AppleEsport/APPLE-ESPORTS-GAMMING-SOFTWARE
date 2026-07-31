@@ -42,16 +42,29 @@ public class SessionService : ISessionService
 
     public async Task<PaginatedResult<SessionDto>> GetActiveSessionsAsync(Guid branchId, int page, int pageSize)
     {
-        var query = _db.Sessions
+        var items = await _db.Sessions
             .Include(s => s.Pc)
             .Include(s => s.Bills)
             .Where(s => s.BranchId == branchId && s.State == SessionState.Active)
-            .OrderByDescending(s => s.StartTime);
+            .OrderByDescending(s => s.StartTime)
+            .ToListAsync();
 
-        var total = await query.CountAsync();
-        var items = await query.Skip((page - 1) * pageSize).Take(pageSize).ToListAsync();
+        var uniqueItems = items
+            .GroupBy(s => s.PcId)
+            .Select(g => g
+                .OrderByDescending(s => s.UpdatedAt)
+                .ThenByDescending(s => s.StartTime)
+                .First())
+            .OrderByDescending(s => s.StartTime)
+            .ToList();
 
-        var dtos = items.Select(s => new SessionDto
+        var total = uniqueItems.Count;
+        var pageItems = uniqueItems
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToList();
+
+        var dtos = pageItems.Select(s => new SessionDto
         {
             Id = s.Id,
             PcId = s.PcId,
@@ -85,6 +98,23 @@ public class SessionService : ISessionService
 
             if (pc.PricingProfileId == null)
                 throw new AppException($"{pc.PcNumber} has no Pricing Profile assigned. Ask a Super Admin to assign one in Settings → Pricing Profiles before starting a session on this PC.", System.Net.HttpStatusCode.BadRequest, "NO_PRICING_PROFILE");
+
+            var existingOpenSession = await _db.Sessions
+                .AsNoTracking()
+                .Where(s => s.BranchId == branchId
+                    && s.PcId == pc.Id
+                    && (s.State == SessionState.Active || s.State == SessionState.AwaitingBilling))
+                .OrderByDescending(s => s.UpdatedAt)
+                .ThenByDescending(s => s.StartTime)
+                .FirstOrDefaultAsync();
+
+            if (existingOpenSession != null)
+            {
+                throw new AppException(
+                    $"Cannot start session. PC already has an open session ({existingOpenSession.State}).",
+                    System.Net.HttpStatusCode.BadRequest,
+                    "PC_ALREADY_HAS_SESSION");
+            }
 
             if (pc.State != PcState.Idle)
             {

@@ -94,6 +94,9 @@ public class CashRegisterService : ICashRegisterService
                 BranchId = branchId,
                 OperatorId = operatorId,
                 CashAmount = dto.Amount,
+                CashReceived = dto.Amount,
+                ChangeReturned = 0,
+                ActualCashCollected = dto.Amount,
                 GamingAmount = 0,
                 FoodAmount = 0,
                 CustomerName = dto.Reason ?? "Operator Adjustment",
@@ -221,17 +224,20 @@ public class CashRegisterService : ICashRegisterService
             VerifiedAt = r.VerifiedAt,
             ClosedAt = r.ClosedAt,
             Transactions = r.CashTransactions?.Select(tx => new CashTransactionDto
-            {
-                Id = tx.Id,
-                BillId = tx.BillId,
-                PcNumber = tx.PcNumber,
-                CustomerName = tx.CustomerName,
-                CashAmount = tx.CashAmount,
-                GamingAmount = tx.GamingAmount,
-                FoodAmount = tx.FoodAmount,
-                TransactionType = tx.TransactionType,
-                CreatedAt = tx.CreatedAt
-            }).ToList() ?? new List<CashTransactionDto>()
+                {
+                    Id = tx.Id,
+                    BillId = tx.BillId,
+                    PcNumber = tx.PcNumber,
+                    CustomerName = tx.CustomerName,
+                    CashAmount = tx.CashAmount,
+                    CashReceived = tx.CashReceived,
+                    ChangeReturned = tx.ChangeReturned,
+                    ActualCashCollected = tx.ActualCashCollected,
+                    GamingAmount = tx.GamingAmount,
+                    FoodAmount = tx.FoodAmount,
+                    TransactionType = tx.TransactionType,
+                    CreatedAt = tx.CreatedAt
+                }).ToList() ?? new List<CashTransactionDto>()
         };
     }
 }

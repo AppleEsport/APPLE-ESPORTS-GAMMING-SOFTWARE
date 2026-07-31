@@ -5,6 +5,9 @@ import PageHeader from '../../components/layout/PageHeader';
 import { useToast } from '../../components/ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { useBranch } from '../../contexts/BranchContext';
+import { formatMoney } from '../../utils/money';
+
+const DENOMINATIONS = [20, 50, 100, 200, 500, 1000, 2000];
 
 export default function CreditsPage() {
   const { isSuperAdmin, user } = useAuth();
@@ -20,6 +23,7 @@ export default function CreditsPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [payMethod, setPayMethod] = useState('cash'); // 'cash' | 'upi' | 'split'
   const [cashAmount, setCashAmount] = useState('');
+  const [cashReceived, setCashReceived] = useState('');
   const [upiAmount, setUpiAmount] = useState('');
   const [notes, setNotes] = useState('');
   const [isClearing, setIsClearing] = useState(false);
@@ -48,7 +52,8 @@ export default function CreditsPage() {
   const openClearModal = (credit) => {
     setSelectedCredit(credit);
     setPayMethod('cash');
-    setCashAmount(credit.creditAmount.toString());
+    setCashAmount('0');
+    setCashReceived('0');
     setUpiAmount('0');
     setNotes('');
     setIsModalOpen(true);
@@ -57,13 +62,18 @@ export default function CreditsPage() {
   const handleClearCredit = async () => {
     try {
       setIsClearing(true);
+      const due = Number(selectedCredit?.creditAmount) || 0;
       
       let payload = { notes };
       if (payMethod === 'cash') {
         payload.paymentType = 'Cash';
-        payload.cashAmount = parseFloat(cashAmount) || 0;
-        payload.cashReceived = parseFloat(cashAmount) || 0;
+        payload.cashAmount = due;
+        payload.cashReceived = parseFloat(cashReceived) || 0;
         payload.onlineAmount = 0;
+        if (payload.cashReceived < due) {
+          toast.error(`Cash received cannot be less than ₹${due}.`);
+          return;
+        }
       } else if (payMethod === 'upi') {
         payload.paymentType = 'Online';
         payload.cashAmount = 0;
@@ -100,6 +110,10 @@ export default function CreditsPage() {
   const filteredCredits = credits.filter(c => 
     !searchQuery || (c.customerName || 'Walk-in').toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  const creditDue = Number(selectedCredit?.creditAmount) || 0;
+  const cashTendered = Number(cashReceived) || 0;
+  const cashChange = payMethod === 'cash' && cashTendered > creditDue ? cashTendered - creditDue : 0;
 
   return (
     <div className="h-full flex flex-col relative">
@@ -284,14 +298,37 @@ export default function CreditsPage() {
               {payMethod !== 'split' ? (
                 <div>
                   <label className="text-[10px] text-text-3 font-bold uppercase tracking-widest mb-2 block">
-                    Amount Paid (₹)
+                    {payMethod === 'cash' ? 'Cash Received from Customer (₹)' : 'Amount Paid (₹)'}
                   </label>
                   <input
                     type="number"
-                    value={cashAmount}
-                    onChange={e => setCashAmount(e.target.value)}
+                    value={payMethod === 'cash' ? cashReceived : cashAmount}
+                    onChange={e => {
+                      if (payMethod === 'cash') {
+                        setCashReceived(e.target.value);
+                      } else {
+                        setCashAmount(e.target.value);
+                      }
+                    }}
                     className="w-full bg-bg border border-border text-text font-mono text-lg rounded-lg p-2.5 focus:border-accent focus:ring-1 focus:ring-accent transition-all"
                   />
+                  {payMethod === 'cash' && (
+                    <div className="flex flex-wrap gap-1.5 mt-3">
+                      {DENOMINATIONS.map(d => (
+                        <button
+                          key={d}
+                          onClick={() => setCashReceived(String(d))}
+                          className={`px-2.5 py-1 rounded border text-[11px] font-mono font-bold transition-colors ${
+                            parseFloat(cashReceived) === d
+                              ? 'bg-accent/15 border-accent text-accent'
+                              : 'bg-bg-3 border-border text-text-2 hover:border-accent/40'
+                          }`}
+                        >
+                          ₹{d}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="grid grid-cols-2 gap-3">
@@ -316,6 +353,13 @@ export default function CreditsPage() {
                 <div className="text-center text-xs font-mono">
                   Total: ₹{(parseFloat(cashAmount || 0) + parseFloat(upiAmount || 0))} 
                   <span className="text-text-3 ml-1">/ ₹{selectedCredit.creditAmount}</span>
+                </div>
+              )}
+
+              {payMethod === 'cash' && cashChange > 0 && (
+                <div className="flex justify-between items-center bg-neon-orange/10 border border-neon-orange/30 rounded-lg px-3 py-2.5">
+                  <span className="text-xs font-bold uppercase tracking-wider text-neon-orange">Change Returned</span>
+                  <span className="font-mono text-xl font-bold text-neon-orange">₹{formatMoney(cashChange)}</span>
                 </div>
               )}
 

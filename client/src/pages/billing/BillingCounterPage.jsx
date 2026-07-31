@@ -12,6 +12,22 @@ import BillDetailsPanel from '../../components/billing/BillDetailsPanel';
 import BillingAddItemsPanel from '../../components/billing/BillingAddItemsPanel';
 import { getActiveReservations } from '../../api/reservations.api';
 
+const dedupeSessionsByPc = (items) => {
+  const map = new Map();
+  [...items]
+    .sort((a, b) => {
+      const aTime = new Date(a.updatedAt || a.startTime || 0).getTime();
+      const bTime = new Date(b.updatedAt || b.startTime || 0).getTime();
+      return bTime - aTime;
+    })
+    .forEach((item) => {
+      if (!map.has(item.pcId)) {
+        map.set(item.pcId, item);
+      }
+    });
+  return Array.from(map.values());
+};
+
 export default function BillingCounterPage() {
   const { isSuperAdmin, user } = useAuth();
   const { activeBranch } = useBranch();
@@ -53,9 +69,10 @@ export default function BillingCounterPage() {
 
       const unpaidBills = billsRes.data?.data?.items || [];
       const sessions = sessionsRes.data?.data?.items || [];
+      const uniqueSessions = dedupeSessionsByPc(sessions);
 
       setBills(unpaidBills);
-      setActiveSessions(sessions.filter(s => s.status === 1 || s.status === 'Active')); 
+      setActiveSessions(uniqueSessions.filter(s => s.status === 1 || s.status === 'Active'));
       setReservations(reservationsList);
       if (summaryRes?.data?.data) {
         setSummary(summaryRes.data.data);
@@ -68,7 +85,7 @@ export default function BillingCounterPage() {
           setSelectedItem({ type: 'bill', id: bill.id });
         } else {
           // Try to find in active sessions
-          const session = sessions.find(s => s.pcId === autoSelectPcId && (s.status === 1 || s.status === 'Active'));
+          const session = uniqueSessions.find(s => s.pcId === autoSelectPcId && (s.status === 1 || s.status === 'Active'));
           if (session) {
              setSelectedItem({ type: 'session', id: session.billId });
           }

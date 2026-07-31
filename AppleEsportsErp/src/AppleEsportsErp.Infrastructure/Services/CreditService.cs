@@ -68,16 +68,27 @@ public class CreditService : ICreditService
             if (credit.Status == "cleared")
                 throw new AppException("Credit is already cleared.");
 
-            decimal totalPayment = dto.CashAmount + dto.OnlineAmount;
+            decimal cashAmountToApply = dto.CashAmount;
+            decimal cashReceived = dto.CashReceived;
+
+            if (dto.PaymentType == PaymentType.Cash)
+            {
+                cashAmountToApply = credit.CreditAmount;
+                if (cashReceived <= 0)
+                    cashReceived = dto.CashAmount > 0 ? dto.CashAmount : cashAmountToApply;
+            }
+
+            decimal totalPayment = cashAmountToApply + dto.OnlineAmount;
             if (totalPayment != credit.CreditAmount)
                 throw new AppException($"Payment mismatch. Expected: {credit.CreditAmount}, Provided: {totalPayment}");
 
             decimal changeReturned = 0;
-            if (dto.CashAmount > 0)
+            decimal actualCashCollected = cashAmountToApply;
+            if (cashAmountToApply > 0)
             {
-                if (dto.CashReceived < dto.CashAmount)
+                if (cashReceived < cashAmountToApply)
                     throw new AppException("Cash received is less than cash amount.");
-                changeReturned = dto.CashReceived - dto.CashAmount;
+                changeReturned = cashReceived - cashAmountToApply;
             }
 
             // Create Payment record for the cleared amount
@@ -88,12 +99,12 @@ public class CreditService : ICreditService
                 OperatorId = operatorId,
                 PaymentType = dto.PaymentType,
                 TotalAmount = totalPayment,
-                CashAmount = dto.CashAmount,
+                CashAmount = cashAmountToApply,
                 OnlineAmount = dto.OnlineAmount,
                 WalletAmount = 0,
-                CashReceived = dto.CashReceived,
+                CashReceived = cashReceived,
                 ChangeReturned = changeReturned,
-                ActualCashCollected = dto.CashAmount,
+                ActualCashCollected = actualCashCollected,
                 // Assign portions as 0 or calculate if needed, for simplicity we leave them as 0 since the original bill holds the breakdown
                 GamingPortion = 0,
                 FoodPortion = 0,
@@ -109,8 +120,8 @@ public class CreditService : ICreditService
                     .FirstOrDefaultAsync(cr => cr.BranchId == branchId && cr.ShiftId == shiftId && cr.Status == CashRegisterStatus.Open)
                     ?? throw new AppException("No active cash register found for this shift.");
 
-                activeRegister.ExpectedDrawerCash += dto.CashAmount;
-                activeRegister.TotalCashSales += dto.CashAmount; // Count as sale on the day it's collected
+                activeRegister.ExpectedDrawerCash += actualCashCollected;
+                activeRegister.TotalCashSales += actualCashCollected; // Count as sale on the day it's collected
                 _unitOfWork.Repository<CashRegister>().Update(activeRegister);
 
                 var cashTx = new CashTransaction
@@ -121,8 +132,11 @@ public class CreditService : ICreditService
                     OperatorId = operatorId,
                     PcNumber = credit.PcNumber,
                     TransactionType = "credit_clear",
-                    CashAmount = dto.CashAmount,
-                    GamingAmount = dto.CashAmount, // Assign entirely to gaming for simplicity or prorate if necessary
+                    CashAmount = cashAmountToApply,
+                    CashReceived = cashReceived,
+                    ChangeReturned = changeReturned,
+                    ActualCashCollected = actualCashCollected,
+                    GamingAmount = cashAmountToApply, // Assign entirely to gaming for simplicity or prorate if necessary
                     FoodAmount = 0,
                     CreatedAt = DateTimeOffset.UtcNow
                 };

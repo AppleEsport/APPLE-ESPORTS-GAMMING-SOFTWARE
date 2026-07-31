@@ -28,6 +28,11 @@ const TransactionFeed = memo(({ transactions }) => {
           const isNegative = tx.cashAmount < 0;
           const isBilling = !!tx.billId;
           const Icon = TX_ICONS[tx.transactionType] || Receipt;
+          const displayedAmount =
+            tx.actualCashCollected === 0 && tx.cashAmount !== 0
+              ? tx.cashAmount
+              : (tx.actualCashCollected ?? tx.cashAmount);
+          const hasChange = (tx.cashReceived ?? 0) > (tx.actualCashCollected ?? tx.cashAmount ?? 0) && (tx.changeReturned ?? 0) > 0;
           
           return (
             <div 
@@ -56,6 +61,11 @@ const TransactionFeed = memo(({ transactions }) => {
                       {tx.customerName}
                     </div>
                   )}
+                  {hasChange && (
+                    <div className="text-[10px] text-text-3 font-mono mt-0.5">
+                      Received ₹{tx.cashReceived} · Change ₹{tx.changeReturned}
+                    </div>
+                  )}
                   <div className="text-[10px] text-text-3 font-mono mt-0.5">
                     {formatTime(tx.createdAt)}
                   </div>
@@ -65,7 +75,7 @@ const TransactionFeed = memo(({ transactions }) => {
               <div className={`font-mono font-bold text-lg ${
                 isNegative ? 'text-neon-orange drop-shadow-[0_0_5px_rgba(255,153,0,0.3)]' : 'text-neon-blue drop-shadow-[0_0_5px_rgba(0,255,255,0.3)]'
               }`}>
-                {isNegative ? '-' : '+'}₹{Math.abs(tx.cashAmount)}
+                {isNegative ? '-' : '+'}₹{Math.abs(displayedAmount)}
               </div>
             </div>
           );

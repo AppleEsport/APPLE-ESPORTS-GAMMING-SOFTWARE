@@ -36,19 +36,25 @@ public class PcStatusService : IPcStatusService
         var now = DateTimeOffset.UtcNow;
 
         // Fetch active sessions for these PCs
-        var activeSessions = await _db.Sessions
+        var activeSessions = (await _db.Sessions
             .AsNoTracking()
             .Include(s => s.Bills)
             .Where(s => s.BranchId == branchId && (s.State == SessionState.Active || s.State == SessionState.AwaitingBilling))
-            .ToDictionaryAsync(s => s.PcId, s => s);
+            .OrderByDescending(s => s.UpdatedAt)
+            .ThenByDescending(s => s.StartTime)
+            .ToListAsync())
+            .GroupBy(s => s.PcId)
+            .ToDictionary(g => g.Key, g => g.First());
 
         // Fetch the most recent completed session for each PC (for quick restart)
-        var recentCompletedSessions = await _db.Sessions
+        var recentCompletedSessions = (await _db.Sessions
             .AsNoTracking()
             .Where(s => s.BranchId == branchId && s.State == SessionState.Completed)
+            .OrderByDescending(s => s.EndTime)
+            .ThenByDescending(s => s.UpdatedAt)
+            .ToListAsync())
             .GroupBy(s => s.PcId)
-            .Select(g => g.OrderByDescending(s => s.EndTime).FirstOrDefault())
-            .ToDictionaryAsync(s => s!.PcId, s => s);
+            .ToDictionary(g => g.Key, g => g.First());
 
         // Fetch pending reservations for these PCs (current + upcoming)
         var upcomingReservations = await _db.Reservations
@@ -91,6 +97,9 @@ public class PcStatusService : IPcStatusService
             Session? session = null;
             if (activeSessions.TryGetValue(pc.Id, out session))
             {
+                dto.State = session.State == SessionState.Active
+                    ? PcState.Active
+                    : PcState.AwaitingBilling;
                 dto.ActiveSessionId = session.Id;
                 dto.CustomerName = session.CustomerName;
                 dto.SessionStartTime = session.StartTime;

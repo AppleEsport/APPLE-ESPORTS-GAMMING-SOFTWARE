@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using System.Text.Json;
 using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Common;
@@ -22,13 +23,15 @@ public class WalletService : IWalletService
     private readonly IAuditService _auditService;
     private readonly IEmailService _emailService;
     private readonly IConfiguration _configuration;
+    private readonly ILogger<WalletService> _logger;
 
-    public WalletService(IUnitOfWork unitOfWork, IAuditService auditService, IEmailService emailService, IConfiguration configuration)
+    public WalletService(IUnitOfWork unitOfWork, IAuditService auditService, IEmailService emailService, IConfiguration configuration, ILogger<WalletService> logger)
     {
         _unitOfWork = unitOfWork;
         _auditService = auditService;
         _emailService = emailService;
         _configuration = configuration;
+        _logger = logger;
     }
 
     private async Task<(decimal minGamingTopUp, decimal defaultBonusPercent)> GetTopUpRulesAsync()
@@ -140,6 +143,9 @@ public class WalletService : IWalletService
                 OperatorId = operatorId,
                 TransactionType = "wallet_recharge",
                 CashAmount = walletTx.CashAmount,
+                CashReceived = walletTx.CashAmount,
+                ChangeReturned = 0,
+                ActualCashCollected = walletTx.CashAmount,
                 GamingAmount = 0,
                 FoodAmount = 0,
                 CustomerName = member.Username,
@@ -162,55 +168,7 @@ public class WalletService : IWalletService
 
         await _unitOfWork.CommitTransactionAsync();
 
-        // SOP: Initial Top-Up Welcome Email Automation
-        // If they have Login Access (Username) and an Email, but haven't set a Password yet,
-        // we automatically send them the Password Setup link during their initial top-ups.
-        if (!string.IsNullOrWhiteSpace(member.Username) && 
-            !string.IsNullOrWhiteSpace(member.Email) && 
-            string.IsNullOrWhiteSpace(member.PasswordHash))
-        {
-            // Only send if they don't already have a valid, active reset token
-            if (string.IsNullOrWhiteSpace(member.ResetToken) || member.ResetTokenExpiry < DateTimeOffset.UtcNow)
-            {
-                var setupToken = Guid.NewGuid().ToString("N");
-                member.ResetToken = setupToken;
-                member.ResetTokenExpiry = DateTimeOffset.UtcNow.AddHours(24);
-                
-                _unitOfWork.Repository<Member>().Update(member);
-                await _unitOfWork.SaveChangesAsync(); // save token
-
-                var configuredBaseUrl = _configuration["App:BaseUrl"];
-                var appBaseUrl = string.IsNullOrWhiteSpace(configuredBaseUrl)
-                    ? "http://localhost:5173"
-                    : configuredBaseUrl.Trim().TrimEnd('/');
-                string resetLink = $"{appBaseUrl}/reset-password?email={Uri.EscapeDataString(member.Email)}&token={Uri.EscapeDataString(setupToken)}";
-                string subject = "Welcome to Apple Esports - Setup Your Password";
-                string welcomeBody = $@"
-                <div style='background-color:#050505; color:#ffffff; font-family:""Segoe UI"", Tahoma, Geneva, Verdana, sans-serif; padding:40px 20px; text-align:center;'>
-                    <div style='max-width: 600px; margin: 0 auto; background-color: #111111; border: 1px solid #333333; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.5);'>
-                        <div style='background: linear-gradient(135deg, #1a1a24 0%, #0d0d14 100%); padding: 30px 20px; border-bottom: 2px solid #3b82f6;'>
-                            <h1 style='margin: 0; font-size: 28px; letter-spacing: 2px; color: #ffffff; text-transform: uppercase;'>
-                                <img src='https://appleesports.in/apple-touch-icon.png' alt='Logo' style='height: 40px; vertical-align: middle; margin-right: 15px;' /> APPLE ESPORTS
-                            </h1>
-                        </div>
-                        <div style='padding: 40px 30px; text-align: left;'>
-                            <h2 style='margin-top: 0; color: #3b82f6; font-size: 24px; border-bottom: 2px solid #333333; padding-bottom: 15px;'>Welcome to Apple Esports!</h2>
-                            <p style='font-size: 16px; color: #d1d5db; line-height: 1.6;'>Hi <strong>{member.FullName}</strong>,</p>
-                            <p style='font-size: 16px; color: #d1d5db; line-height: 1.6;'>Your Apple Esports membership login has been activated following your initial top-up! To log in and use your wallet for food or gaming, you need to set up a secure password.</p>
-                            <div style='text-align:center; margin: 40px 0;'>
-                                <a href='{resetLink}' style='background: linear-gradient(to right, #2563eb, #3b82f6); color: #ffffff; padding: 16px 32px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px; letter-spacing: 1px; display: inline-block; box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);'>SET MY PASSWORD</a>
-                            </div>
-                            <p style='color: #6b7280; font-size: 13px; margin-top: 30px;'>This link will expire in 24 hours. If you did not request this, please contact the branch operator.</p>
-                        </div>
-                        <div style='background-color: #080808; padding: 20px; border-top: 1px solid #222222; text-align: center;'>
-                            <p style='margin: 0; color: #6b7280; font-size: 12px;'>This is an automated notification from Apple Esports ERP.</p>
-                        </div>
-                    </div>
-                </div>";
-
-                await _emailService.SendEmailAsync(member.Email, subject, welcomeBody);
-            }
-        }
+        await SendTopUpEmailsAsync(member, dto.Amount, bonusAmount, totalCredit);
 
         return MapToDto(walletTx);
     }
@@ -304,5 +262,100 @@ public class WalletService : IWalletService
             Reason = t.Reason,
             CreatedAt = t.CreatedAt
         };
+    }
+
+    private string GetFrontendBaseUrl()
+    {
+        var configuredBaseUrl = _configuration["App:BaseUrl"];
+        if (!string.IsNullOrWhiteSpace(configuredBaseUrl))
+            return configuredBaseUrl.Trim().TrimEnd('/');
+
+        var frontendUrl = _configuration["FRONTEND_URL"];
+        if (!string.IsNullOrWhiteSpace(frontendUrl))
+            return frontendUrl.Trim().TrimEnd('/');
+
+        return "http://localhost:5173";
+    }
+
+    private async Task SendTopUpEmailsAsync(Member member, decimal amount, decimal bonusAmount, decimal totalCredit)
+    {
+        if (string.IsNullOrWhiteSpace(member.Email))
+            return;
+
+        try
+        {
+            var appBaseUrl = GetFrontendBaseUrl();
+            var receiptBody = $@"
+                <div style='background-color:#050505; color:#ffffff; font-family:""Segoe UI"", Tahoma, Geneva, Verdana, sans-serif; padding:40px 20px; text-align:center;'>
+                    <div style='max-width: 600px; margin: 0 auto; background-color: #111111; border: 1px solid #333333; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.5);'>
+                        <div style='background: linear-gradient(135deg, #1a1a24 0%, #0d0d14 100%); padding: 30px 20px; border-bottom: 2px solid #3b82f6;'>
+                            <h1 style='margin: 0; font-size: 28px; letter-spacing: 2px; color: #ffffff; text-transform: uppercase;'>
+                                <img src='https://appleesports.in/apple-touch-icon.png' alt='Logo' style='height: 40px; vertical-align: middle; margin-right: 15px;' /> APPLE ESPORTS
+                            </h1>
+                        </div>
+                        <div style='padding: 40px 30px; text-align: left;'>
+                            <h2 style='margin-top: 0; color: #3b82f6; font-size: 24px; border-bottom: 2px solid #333333; padding-bottom: 15px;'>Wallet Top-Up Receipt</h2>
+                            <p style='font-size: 16px; color: #d1d5db; line-height: 1.6;'>Hi <strong>{member.FullName}</strong>,</p>
+                            <p style='font-size: 16px; color: #d1d5db; line-height: 1.6;'>Your wallet top-up has been processed successfully.</p>
+                            <div style='background-color: #0a0a0a; border: 1px solid #222222; border-radius: 8px; padding: 20px; margin-top: 25px;'>
+                                <p style='margin: 10px 0; color: #d1d5db;'>Top-up amount: <strong style='color: #ffffff;'>₹{amount:0.00}</strong></p>
+                                <p style='margin: 10px 0; color: #d1d5db;'>Bonus amount: <strong style='color: #ffffff;'>₹{bonusAmount:0.00}</strong></p>
+                                <p style='margin: 10px 0; color: #d1d5db;'>Total credited: <strong style='color: #ffffff;'>₹{totalCredit:0.00}</strong></p>
+                            </div>
+                            <div style='text-align:center; margin: 40px 0;'>
+                                <a href='{appBaseUrl}' style='background: linear-gradient(to right, #2563eb, #3b82f6); color: #ffffff; padding: 16px 32px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px; letter-spacing: 1px; display: inline-block; box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);'>OPEN PORTAL</a>
+                            </div>
+                        </div>
+                        <div style='background-color: #080808; padding: 20px; border-top: 1px solid #222222; text-align: center;'>
+                            <p style='margin: 0; color: #6b7280; font-size: 12px;'>This is an automated notification from Apple Esports ERP.</p>
+                        </div>
+                    </div>
+                </div>";
+
+            await _emailService.SendEmailAsync(member.Email, "Apple Esports - Wallet Top-Up Receipt", receiptBody);
+
+            if (string.IsNullOrWhiteSpace(member.Username) || !string.IsNullOrWhiteSpace(member.PasswordHash))
+                return;
+
+            if (!string.IsNullOrWhiteSpace(member.ResetToken) && member.ResetTokenExpiry > DateTimeOffset.UtcNow)
+                return;
+
+            var setupToken = Guid.NewGuid().ToString("N");
+            member.ResetToken = setupToken;
+            member.ResetTokenExpiry = DateTimeOffset.UtcNow.AddHours(24);
+
+            _unitOfWork.Repository<Member>().Update(member);
+            await _unitOfWork.SaveChangesAsync();
+
+            string resetLink = $"{appBaseUrl}/reset-password?email={Uri.EscapeDataString(member.Email)}&token={Uri.EscapeDataString(setupToken)}";
+            string welcomeBody = $@"
+                <div style='background-color:#050505; color:#ffffff; font-family:""Segoe UI"", Tahoma, Geneva, Verdana, sans-serif; padding:40px 20px; text-align:center;'>
+                    <div style='max-width: 600px; margin: 0 auto; background-color: #111111; border: 1px solid #333333; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.5);'>
+                        <div style='background: linear-gradient(135deg, #1a1a24 0%, #0d0d14 100%); padding: 30px 20px; border-bottom: 2px solid #3b82f6;'>
+                            <h1 style='margin: 0; font-size: 28px; letter-spacing: 2px; color: #ffffff; text-transform: uppercase;'>
+                                <img src='https://appleesports.in/apple-touch-icon.png' alt='Logo' style='height: 40px; vertical-align: middle; margin-right: 15px;' /> APPLE ESPORTS
+                            </h1>
+                        </div>
+                        <div style='padding: 40px 30px; text-align: left;'>
+                            <h2 style='margin-top: 0; color: #3b82f6; font-size: 24px; border-bottom: 2px solid #333333; padding-bottom: 15px;'>Welcome to Apple Esports!</h2>
+                            <p style='font-size: 16px; color: #d1d5db; line-height: 1.6;'>Hi <strong>{member.FullName}</strong>,</p>
+                            <p style='font-size: 16px; color: #d1d5db; line-height: 1.6;'>Your Apple Esports membership login has been activated following your initial top-up! To log in and use your wallet for food or gaming, you need to set up a secure password.</p>
+                            <div style='text-align:center; margin: 40px 0;'>
+                                <a href='{resetLink}' style='background: linear-gradient(to right, #2563eb, #3b82f6); color: #ffffff; padding: 16px 32px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px; letter-spacing: 1px; display: inline-block; box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);'>SET MY PASSWORD</a>
+                            </div>
+                            <p style='color: #6b7280; font-size: 13px; margin-top: 30px;'>This link will expire in 24 hours. If you did not request this, please contact the branch operator.</p>
+                        </div>
+                        <div style='background-color: #080808; padding: 20px; border-top: 1px solid #222222; text-align: center;'>
+                            <p style='margin: 0; color: #6b7280; font-size: 12px;'>This is an automated notification from Apple Esports ERP.</p>
+                        </div>
+                    </div>
+                </div>";
+
+            await _emailService.SendEmailAsync(member.Email, "Welcome to Apple Esports - Setup Your Password", welcomeBody);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send wallet top-up email for member {MemberId}", member.Id);
+        }
     }
 }

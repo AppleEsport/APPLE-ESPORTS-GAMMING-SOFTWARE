@@ -225,11 +225,13 @@ public class BillingService : IBillingService
                 throw new AppException($"Payment amount mismatch. Expected: {bill.TotalAmount}, Provided: {totalPayment} + Credit: {dto.CreditAmount}");
 
             decimal changeReturned = 0;
+            decimal actualCashCollected = dto.CashAmount;
             if (dto.CashAmount > 0)
             {
                 if (dto.CashReceived < dto.CashAmount)
                     throw new AppException("Cash received is less than cash amount to be paid.");
                 changeReturned = dto.CashReceived - dto.CashAmount;
+                actualCashCollected = dto.CashAmount;
             }
 
             // Perform Wallet Deduction first if Wallet payment is involved
@@ -278,7 +280,7 @@ public class BillingService : IBillingService
                 WalletAmount = dto.WalletAmount,
                 CashReceived = dto.CashReceived,
                 ChangeReturned = changeReturned,
-                ActualCashCollected = dto.CashAmount, // Only the portion that counts against the bill
+                ActualCashCollected = actualCashCollected,
                 GamingPortion = bill.GamingAmount - (bill.DiscountAmount * (bill.GamingAmount / (bill.Subtotal > 0 ? bill.Subtotal : 1))), // Prorate discount
                 FoodPortion = bill.FoodAmount - (bill.DiscountAmount * (bill.FoodAmount / (bill.Subtotal > 0 ? bill.Subtotal : 1))),
                 Status = "completed",
@@ -313,7 +315,7 @@ public class BillingService : IBillingService
             bill.WalletAmount = dto.WalletAmount;
             bill.CashReceived = dto.CashReceived;
             bill.ChangeReturned = changeReturned;
-            bill.ActualCashCollected = dto.CashAmount;
+            bill.ActualCashCollected = actualCashCollected;
             bill.Status = BillStatus.Completed;
             bill.CompletedAt = DateTimeOffset.UtcNow;
             bill.IsDeferred = false;
@@ -328,8 +330,8 @@ public class BillingService : IBillingService
                     .FirstOrDefaultAsync(cr => cr.BranchId == branchId && cr.ShiftId == shiftId && cr.Status == CashRegisterStatus.Open)
                     ?? throw new AppException("No active cash register found for this shift.");
 
-                activeRegister.ExpectedDrawerCash += dto.CashAmount;
-                activeRegister.TotalCashSales += dto.CashAmount;
+                activeRegister.ExpectedDrawerCash += actualCashCollected;
+                activeRegister.TotalCashSales += actualCashCollected;
                 _unitOfWork.Repository<CashRegister>().Update(activeRegister);
 
                 var cashTx = new CashTransaction
@@ -342,6 +344,9 @@ public class BillingService : IBillingService
                     CustomerName = !string.IsNullOrWhiteSpace(dto.CustomerName) ? dto.CustomerName : (bill.CustomerName ?? bill.Member?.Username ?? "Walk-in"),
                     TransactionType = "billing",
                     CashAmount = dto.CashAmount,
+                    CashReceived = dto.CashReceived,
+                    ChangeReturned = changeReturned,
+                    ActualCashCollected = actualCashCollected,
                     GamingAmount = payment.GamingPortion * (dto.CashAmount / totalPayment), // Prorate cash to gaming
                     FoodAmount = payment.FoodPortion * (dto.CashAmount / totalPayment),     // Prorate cash to food
                     CreatedAt = DateTimeOffset.UtcNow

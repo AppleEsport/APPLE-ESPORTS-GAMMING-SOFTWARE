@@ -71,6 +71,11 @@ ADD COLUMN IF NOT EXISTS ""IsGlobalAdmin"" boolean NOT NULL DEFAULT false;
 
 ALTER TABLE bills
 ADD COLUMN IF NOT EXISTS ""IsDeferred"" boolean NOT NULL DEFAULT false;
+
+ALTER TABLE cash_transactions
+ADD COLUMN IF NOT EXISTS ""CashReceived"" numeric(10,2) NOT NULL DEFAULT 0.0,
+ADD COLUMN IF NOT EXISTS ""ChangeReturned"" numeric(10,2) NOT NULL DEFAULT 0.0,
+ADD COLUMN IF NOT EXISTS ""ActualCashCollected"" numeric(10,2) NOT NULL DEFAULT 0.0;
 ");
 
         // Execute data seeding for branches, PCs, operators, etc.

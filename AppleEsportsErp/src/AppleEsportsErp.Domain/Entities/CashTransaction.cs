@@ -10,6 +10,9 @@ public class CashTransaction
     public Guid OperatorId { get; set; }
     public string? PcNumber { get; set; }
     public decimal CashAmount { get; set; }
+    public decimal CashReceived { get; set; }
+    public decimal ChangeReturned { get; set; }
+    public decimal ActualCashCollected { get; set; }
     public decimal GamingAmount { get; set; }
     public decimal FoodAmount { get; set; }
     public string? CustomerName { get; set; }
