@@ -41,11 +41,12 @@ export default function BillDetailsPanel({ bill, onBillUpdate, onPaymentSuccess,
         ? (bill?.discountValue ?? 0)
         : 0
     );
-    setCashReceived(bill?.totalAmount ? String(bill.totalAmount) : '');
+    const resolvedPayMethod = defaultPaymentMethod || (bill?.memberId ? 'wallet' : 'cash');
+    setCashReceived(resolvedPayMethod === 'credit' ? '0' : (bill?.totalAmount ? String(bill.totalAmount) : ''));
     setSplitCash('');
     setSplitUpi('');
     setPayError(null);
-    setPayMethod(defaultPaymentMethod || (bill?.memberId ? 'wallet' : 'cash'));
+    setPayMethod(resolvedPayMethod);
     setWalletWaiting(false);
     setCustomerName(bill?.customerName || '');
     setCustomerPhone(bill?.customerPhone || '');
@@ -376,6 +377,11 @@ export default function BillDetailsPanel({ bill, onBillUpdate, onPaymentSuccess,
                   if (id !== 'wallet') {
                     setWalletWaiting(false);
                   }
+                  if (id === 'credit') {
+                    setCashReceived('0');
+                  } else if (payMethod === 'credit') {
+                    setCashReceived(bill?.totalAmount ? String(bill.totalAmount) : '');
+                  }
                 }}
                 className={`py-2 rounded-lg border text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all ${
                   payMethod === id
@@ -455,11 +461,10 @@ export default function BillDetailsPanel({ bill, onBillUpdate, onPaymentSuccess,
               </label>
               <input
                   type="number"
-                  min="0"
                   max={total}
                   value={cashReceived}
                   onChange={e => setCashReceived(e.target.value)}
-                  placeholder={`Minimum payment ₹0 required`}
+                  placeholder="0"
                 className="w-full bg-bg-3 border border-border text-text font-mono text-xl rounded-lg p-2.5 focus:border-accent focus:ring-1 focus:ring-accent transition-all"
               />
               {/* Show Credit Remaining */}
