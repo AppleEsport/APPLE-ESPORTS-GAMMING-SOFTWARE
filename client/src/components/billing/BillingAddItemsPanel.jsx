@@ -75,7 +75,7 @@ export default function BillingAddItemsPanel({ bill, onOrderPlaced }) {
 
       toast.success('Food order sent to kitchen successfully');
       setCart([]);
-      onOrderPlaced?.();
+      onOrderPlaced?.(res.data?.data?.billId);
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to add items to bill');
     } finally {

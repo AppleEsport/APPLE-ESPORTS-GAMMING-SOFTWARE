@@ -316,14 +316,16 @@ export default function BillingCounterPage() {
 
         {/* Middle Column: Add Items */}
         <div className="w-full lg:w-[38%] h-full">
-          <BillingAddItemsPanel 
-            bill={selectedBillData} 
-            onOrderPlaced={() => {
+          <BillingAddItemsPanel
+            bill={selectedBillData}
+            onOrderPlaced={(newBillId) => {
               fetchDashboardData();
               if (selectedBillData?.id) {
                 fetchBillDetails(selectedBillData.id);
+              } else if (newBillId) {
+                setSelectedItem({ type: 'bill', id: newBillId });
               }
-            }} 
+            }}
           />
         </div>
 

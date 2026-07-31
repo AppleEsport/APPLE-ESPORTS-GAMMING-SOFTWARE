@@ -116,6 +116,49 @@ public class FoodOrderService : IFoodOrderService
 
                 order.PaymentType = "session_bill";
                 order.MemberId = activeBill.MemberId;
+                order.BillId = activeBill.Id;
+            }
+            else
+            {
+                // Walk-in customer (no PC session): bill for this order immediately so it
+                // can be found and paid at the Billing Counter — nothing else creates it.
+                activeBill = new Bill
+                {
+                    Id = Guid.NewGuid(),
+                    BillNumber = $"BILL-{now:yyyyMMdd}-{Guid.NewGuid().ToString().Substring(0, 4).ToUpper()}",
+                    SessionId = null,
+                    PcId = dto.PcId,
+                    BranchId = branchId,
+                    OperatorId = operatorId,
+                    ShiftId = shiftId == Guid.Empty ? null : shiftId,
+                    CustomerName = dto.CustomerName,
+                    GamingAmount = 0,
+                    FoodAmount = totalAmount,
+                    Subtotal = totalAmount,
+                    TotalAmount = totalAmount,
+                    Status = BillStatus.Pending,
+                    CreatedAt = now,
+                    UpdatedAt = now
+                };
+
+                foreach (var item in order.Items)
+                {
+                    activeBill.Items.Add(new BillItem
+                    {
+                        ItemType = "food",
+                        ItemName = item.ItemName,
+                        Quantity = item.Quantity,
+                        UnitPrice = item.UnitPrice,
+                        TotalPrice = item.TotalPrice,
+                        InventoryId = item.InventoryId,
+                        CreatedAt = now
+                    });
+                }
+
+                await _unitOfWork.Repository<Bill>().AddAsync(activeBill);
+
+                order.PaymentType = "walkin_bill";
+                order.BillId = activeBill.Id;
             }
 
             await _unitOfWork.Repository<FoodOrder>().AddAsync(order);
@@ -297,6 +340,7 @@ public class FoodOrderService : IFoodOrderService
             SessionId = o.SessionId,
             PcId = o.PcId,
             PcNumber = o.Pc?.PcNumber,
+            BillId = o.BillId,
             BranchId = o.BranchId,
             OperatorId = o.OperatorId,
             CustomerName = o.CustomerName,

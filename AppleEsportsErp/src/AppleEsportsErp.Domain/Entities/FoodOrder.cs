@@ -9,6 +9,7 @@ public class FoodOrder
     public string OrderNumber { get; set; } = null!;
     public Guid? SessionId { get; set; }
     public Guid? PcId { get; set; }
+    public Guid? BillId { get; set; }
     public Guid BranchId { get; set; }
     public Guid? OperatorId { get; set; }
     public string? CustomerName { get; set; }
@@ -28,6 +29,7 @@ public class FoodOrder
     // Navigation
     public Session? Session { get; set; }
     public Pc? Pc { get; set; }
+    public Bill? Bill { get; set; }
     public Branch Branch { get; set; } = null!;
     public Operator? Operator { get; set; }
     public Member? Member { get; set; }

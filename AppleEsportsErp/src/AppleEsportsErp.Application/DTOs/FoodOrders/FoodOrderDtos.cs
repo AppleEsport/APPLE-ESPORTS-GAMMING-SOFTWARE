@@ -10,6 +10,7 @@ public class FoodOrderDto
     public Guid? SessionId { get; set; }
     public Guid? PcId { get; set; }
     public string? PcNumber { get; set; }
+    public Guid? BillId { get; set; }
     public Guid BranchId { get; set; }
     public Guid? OperatorId { get; set; }
     public string? CustomerName { get; set; }

@@ -91,6 +91,8 @@ public class FoodOrderConfiguration : IEntityTypeConfiguration<FoodOrder>
             .HasForeignKey(e => e.SessionId).OnDelete(DeleteBehavior.SetNull);
         builder.HasOne(e => e.Pc).WithMany()
             .HasForeignKey(e => e.PcId).OnDelete(DeleteBehavior.SetNull);
+        builder.HasOne(e => e.Bill).WithMany()
+            .HasForeignKey(e => e.BillId).OnDelete(DeleteBehavior.SetNull);
         builder.HasOne(e => e.Branch).WithMany(b => b.FoodOrders)
             .HasForeignKey(e => e.BranchId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(e => e.Operator).WithMany()
