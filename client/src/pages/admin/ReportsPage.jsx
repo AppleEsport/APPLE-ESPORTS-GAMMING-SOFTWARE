@@ -10,6 +10,7 @@ import {
   Clock,
   Search,
   RefreshCw,
+  Download,
   Printer,
   Monitor
 } from 'lucide-react';
@@ -20,6 +21,7 @@ import { getRangeReport, getDiscrepancies } from '../../api/food.api';
 import { getCashReconciliationReport } from '../../api/reports.api';
 import { useBranch } from '../../contexts/BranchContext';
 import { useAuth } from '../../contexts/AuthContext';
+import { createReport, addStatGrid, addTable, save, ROW_TINT_RED, ROW_TINT_GREEN } from '../../utils/pdfReport';
 
 export default function ReportsPage() {
   const { activeBranch } = useBranch();
@@ -113,16 +115,95 @@ export default function ReportsPage() {
     );
   }
 
-  const handlePrint = () => {
-    const originalTitle = document.title;
-    const dateStr = new Date().toLocaleString('en-IN', {
-      year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit',
-      hour12: false
-    }).replace(/[\/,\s:]+/g, '-');
-    document.title = `Apple_Esports_Report_${dateStr}`;
-    window.print();
-    document.title = originalTitle;
+  const handleDownloadPdf = () => {
+    const title = 'Revenue & Inventory Report';
+    const subtitle = `${activeBranch?.name || 'All Branches'}  •  ${startDate} to ${endDate}`;
+    const { doc } = createReport({ title, subtitle });
+    let y = 90;
+
+    y = addStatGrid(doc, y, [
+      { label: 'Gaming Revenue', value: `Rs ${totalGaming.toFixed(2)}` },
+      { label: 'Food & Drink Revenue', value: `Rs ${totalFood.toFixed(2)}` },
+      { label: 'Total Combined Revenue', value: `Rs ${totalRevenue.toFixed(2)}` },
+      { label: 'Total Discounts', value: `Rs ${totalDiscount.toFixed(2)}` },
+    ]);
+    y += 10;
+
+    y = addTable(doc, y, {
+      title, subtitle,
+      heading: 'Daily Revenue Breakdown',
+      head: ['Date', 'Net Gaming', 'Net Food & Drink', 'Total'],
+      body: (reportData.daily || []).map(d => [
+        d.date, `Rs ${d.gamingRevenue.toFixed(2)}`, `Rs ${d.foodRevenue.toFixed(2)}`, `Rs ${d.totalRevenue.toFixed(2)}`
+      ]),
+    });
+
+    y = addTable(doc, y, {
+      title, subtitle,
+      heading: 'Monthly EOM Summary',
+      head: ['Month', 'Net Gaming', 'Net Food & Drink', 'Total'],
+      body: (reportData.monthly || []).map(m => [
+        m.month, `Rs ${m.gamingRevenue.toFixed(2)}`, `Rs ${m.foodRevenue.toFixed(2)}`, `Rs ${m.totalRevenue.toFixed(2)}`
+      ]),
+    });
+
+    y = addTable(doc, y, {
+      title, subtitle,
+      heading: 'Inventory Discrepancy Logs',
+      head: ['Timestamp', 'Item Name', 'Expected', 'Physical Count', 'Delta', 'Reason'],
+      body: discrepancies.map(log => [
+        new Date(log.createdAt).toLocaleString(), log.itemName, log.oldValue, log.newValue,
+        `${log.quantity > 0 ? '+' : ''}${log.quantity || 0}`, log.reason || 'None'
+      ]),
+    });
+
+    y = addTable(doc, y, {
+      title, subtitle,
+      heading: 'Discount Audit Logs',
+      head: ['Date/Time', 'Bill Number', 'Subtotal', 'Discount', 'Type', 'Given By', 'Reason'],
+      body: (reportData.discounts || []).map(d => [
+        new Date(d.date).toLocaleString(), d.billId, `Rs ${d.subtotal.toFixed(2)}`, `Rs ${d.discountAmount.toFixed(2)}`,
+        d.discountType === 'Percentage' ? `${d.discountValue}% OFF` : `FLAT Rs ${d.discountValue}`,
+        d.givenBy, d.discountReason || 'No reason provided'
+      ]),
+    });
+
+    y = addTable(doc, y, {
+      title, subtitle,
+      heading: 'Complete Billing Audit Logs',
+      head: ['Date/Time', 'Bill Number', 'Operator', 'Customer', 'Payment', 'Gaming', 'Food', 'Discount', 'Total'],
+      body: (reportData.allBills || []).map(b => [
+        new Date(b.date).toLocaleString(), b.billId, b.operator, b.customer, b.paymentType,
+        `Rs ${b.gamingRevenue.toFixed(2)}`, `Rs ${b.foodRevenue.toFixed(2)}`,
+        b.discount > 0 ? `-Rs ${b.discount.toFixed(2)}` : '-', `Rs ${b.totalRevenue.toFixed(2)}`
+      ]),
+    });
+
+    const creditRows = reportData.allCredits || [];
+    y = addTable(doc, y, {
+      title, subtitle,
+      heading: 'Credit Audit Logs',
+      head: ['Date Created', 'Customer', 'PC', 'Original Bill', 'Initial Paid', 'Amount Due', 'Status', 'Date Cleared'],
+      body: creditRows.map(c => [
+        new Date(c.createdAt).toLocaleString(), c.customerName, c.pcNumber,
+        `Rs ${c.originalBillAmount.toFixed(2)}`, `Rs ${c.amountPaidInitially.toFixed(2)}`, `Rs ${c.creditAmount.toFixed(2)}`,
+        c.status, c.clearedAt ? new Date(c.clearedAt).toLocaleString() : '-'
+      ]),
+      rowColor: (rowIndex) => creditRows[rowIndex]?.status?.toLowerCase() === 'cleared' ? ROW_TINT_GREEN : ROW_TINT_RED,
+    });
+
+    y = addTable(doc, y, {
+      title, subtitle,
+      heading: 'Shift Cash Reconciliation & Denominations',
+      head: ['Shift Date/Time', 'Operator', 'Expected', 'Physical', 'Status'],
+      body: reconciliationData.map(r => [
+        new Date(r.openedAt).toLocaleString(), r.operatorName, `Rs ${r.expectedDrawerCash.toFixed(2)}`,
+        `Rs ${r.physicalCashCounted.toFixed(2)}`, r.isVerified ? 'Match' : `Mismatch: ${r.difference}`
+      ]),
+    });
+
+    const dateStr = new Date().toISOString().split('T')[0];
+    save(doc, `Apple_Esports_Report_${dateStr}.pdf`);
   };
 
   return (
@@ -163,10 +244,10 @@ export default function ReportsPage() {
           </button>
         </div>
         <button
-            onClick={handlePrint}
+            onClick={handleDownloadPdf}
             className="btn-secondary py-1.5 px-3 flex items-center gap-1.5 text-xs font-bold"
           >
-            <Printer className="w-3.5 h-3.5" /> Download / Print PDF
+            <Download className="w-3.5 h-3.5" /> Download PDF
           </button>
         </div>
       </div>

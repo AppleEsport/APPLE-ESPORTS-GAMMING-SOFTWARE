@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
-import { ShieldCheck, AlertTriangle, FileText, CheckCircle, Lock, Monitor, Utensils, Clock, Printer } from 'lucide-react';
+import { ShieldCheck, AlertTriangle, FileText, CheckCircle, Lock, Monitor, Utensils, Clock, Printer, Download } from 'lucide-react';
 import { printBill } from '../../utils/printBill';
 import { useAuth } from '../../contexts/AuthContext';
 import { useBranch } from '../../contexts/BranchContext';
 import api from '../../config/api';
 import PageHeader from '../../components/layout/PageHeader';
 import { useSocket } from '../../contexts/SocketContext';
+import { createReport, addStatGrid, addTable, save, ROW_TINT_RED, ROW_TINT_GREEN } from '../../utils/pdfReport';
 
 export default function EodDashboardPage() {
   const { isSuperAdmin, user } = useAuth();
@@ -121,6 +122,95 @@ export default function EodDashboardPage() {
     }
   };
 
+  const handleDownloadPdf = () => {
+    if (!report) return;
+    const title = 'End of Day Report';
+    const subtitle = `${activeBranch?.name || 'All Branches'}  •  ${targetDate}  •  ${isHistorical ? 'Finalized (Immutable)' : 'Live Preview'}`;
+    const { doc } = createReport({ title, subtitle });
+    let y = 90;
+
+    y = addStatGrid(doc, y, [
+      { label: 'Total Net Revenue', value: `Rs ${report.revenue.netRevenue}` },
+      { label: 'Gaming Revenue', value: `Rs ${report.revenue.totalGamingRevenue}` },
+      { label: 'Food Revenue', value: `Rs ${report.revenue.totalFoodRevenue}` },
+      { label: 'Discounts Applied', value: `Rs ${report.revenue.totalDiscounts}` },
+    ]);
+    y += 10;
+
+    y = addTable(doc, y, {
+      title, subtitle,
+      heading: 'Cash Lifecycle Summary',
+      head: ['Metric', 'Amount'],
+      body: [
+        ['Opening Balance Total', `Rs ${report.cash.totalOpeningBalance}`],
+        ['Cash Sales + Wallet TopUps', `Rs ${report.cash.totalCashSales}`],
+        ['Petty Expenses', `-Rs ${report.cash.totalPettyExpenses}`],
+        ['Expected Drawer Total', `Rs ${report.cash.expectedCashInDrawer}`],
+        ['Physically Counted', `Rs ${report.cash.actualPhysicalCashCounted}`],
+        ['Total Difference', `Rs ${report.cash.totalDiscrepancy}`],
+      ],
+    });
+
+    const creditsPending = (report.creditLogs?.filter(c => c.status?.toLowerCase() === 'pending')
+      .reduce((acc, c) => acc + c.creditAmount, 0) || 0).toFixed(2);
+    const overallEndTotal = (report.paymentMethods.totalCash + report.paymentMethods.totalOnline + report.paymentMethods.totalWalletDeductions).toFixed(2);
+
+    y = addTable(doc, y, {
+      title, subtitle,
+      heading: 'Overall Collection & Operations',
+      head: ['Metric', 'Value'],
+      body: [
+        ['Cash', `Rs ${report.paymentMethods.totalCash}`],
+        ['Online', `Rs ${report.paymentMethods.totalOnline}`],
+        ['Wallet', `Rs ${report.paymentMethods.totalWalletDeductions}`],
+        ['Credits Pending', `-Rs ${creditsPending}`],
+        ['Overall End Total', `Rs ${overallEndTotal}`],
+        ['Total Sessions', String(report.operations.totalSessions)],
+        ['Total Food Orders', String(report.operations.totalFoodOrders)],
+      ],
+    });
+
+    const pcRows = (pcs || []).map(pc => {
+      const pcBills = allBills?.filter(b => b.pcId === pc.id) || [];
+      const total = pcBills.reduce((sum, b) => sum + (b.totalRevenue || 0), 0);
+      return [pc.name || pc.pcName || pc.pcNumber, String(pcBills.length), `Rs ${total.toFixed(2)}`];
+    }).filter(row => row[1] !== '0');
+    if (pcRows.length) {
+      y = addTable(doc, y, {
+        title, subtitle,
+        heading: 'PC-Wise Breakdown',
+        head: ['PC', 'Bills', 'Total Revenue'],
+        body: pcRows,
+      });
+    }
+
+    y = addTable(doc, y, {
+      title, subtitle,
+      heading: `Complete Billing Audit Logs (${targetDate})`,
+      head: ['Date/Time', 'Bill Number', 'Operator', 'Customer', 'Payment', 'Gaming', 'Food', 'Discount', 'Total'],
+      body: (allBills || []).map(b => [
+        new Date(b.date).toLocaleString(), b.billId, b.operator, b.customer, b.paymentType,
+        `Rs ${b.gamingRevenue.toFixed(2)}`, `Rs ${b.foodRevenue.toFixed(2)}`,
+        b.discount > 0 ? `-Rs ${b.discount.toFixed(2)}` : '-', `Rs ${b.totalRevenue.toFixed(2)}`
+      ]),
+    });
+
+    const eodCreditRows = report.creditLogs || [];
+    y = addTable(doc, y, {
+      title, subtitle,
+      heading: `Credit Audit Logs (${targetDate})`,
+      head: ['Date Created', 'Customer', 'PC', 'Original Bill', 'Initial Paid', 'Amount Due', 'Status', 'Date Cleared'],
+      body: eodCreditRows.map(c => [
+        new Date(c.createdAt).toLocaleString(), c.customerName, c.pcNumber,
+        `Rs ${c.originalBillAmount.toFixed(2)}`, `Rs ${c.amountPaidInitially.toFixed(2)}`, `Rs ${c.creditAmount.toFixed(2)}`,
+        c.status, c.clearedAt ? new Date(c.clearedAt).toLocaleString() : '-'
+      ]),
+      rowColor: (rowIndex) => eodCreditRows[rowIndex]?.status?.toLowerCase() === 'cleared' ? ROW_TINT_GREEN : ROW_TINT_RED,
+    });
+
+    save(doc, `Apple_Esports_EOD_${targetDate}.pdf`);
+  };
+
   if (isSuperAdmin && !activeBranch) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
@@ -140,12 +230,21 @@ export default function EodDashboardPage() {
           icon="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
         />
         <div className="flex flex-col items-end gap-2">
-          <input
-            type="date"
-            value={targetDate}
-            onChange={(e) => setTargetDate(e.target.value)}
-            className="bg-bg-3 border border-border rounded-lg px-4 py-2 text-text outline-none focus:border-accent"
-          />
+          <div className="flex items-center gap-2">
+            <input
+              type="date"
+              value={targetDate}
+              onChange={(e) => setTargetDate(e.target.value)}
+              className="bg-bg-3 border border-border rounded-lg px-4 py-2 text-text outline-none focus:border-accent"
+            />
+            <button
+              onClick={handleDownloadPdf}
+              disabled={isLoading || !report}
+              className="btn-secondary py-2 px-3 flex items-center gap-1.5 text-xs font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Download className="w-3.5 h-3.5" /> Download PDF
+            </button>
+          </div>
           {isHistorical && (
             <span className="bg-neon-green/10 text-neon-green px-3 py-1 rounded border border-neon-green/30 text-xs font-bold uppercase tracking-widest flex items-center gap-2">
               <ShieldCheck className="w-4 h-4" /> Finalized
