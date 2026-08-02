@@ -42,7 +42,7 @@ export default function ResetPasswordPage() {
     try {
       await authAPI.resetPassword(email, token, password);
       setSuccess(true);
-      setTimeout(() => navigate('/'), 3000);
+      setTimeout(() => window.location.href = 'https://appleesports.in/', 3000);
     } catch (err) {
       setError(err.response?.data?.error || "Failed to reset password. Link may be expired.");
     } finally {

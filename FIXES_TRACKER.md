@@ -56,9 +56,11 @@ How to use this file:
 
 ---
 
----
-
 ## Fixed (history log)
+
+### Issue #13 — Password reset redirect and wallet receipt email (2026-08-02)
+- Password reset now redirects to https://appleesports.in/ (the public website) after a member successfully sets their password, instead of back into the app portal.
+- The wallet top-up receipt email now has a "Print Receipt" button (triggers a clean print of the receipt) instead of an "Open Portal" button.
 
 ### Issue #12 — Member wallet top-up not showing in Finance Center (2026-08-03)
 - Root cause: when an Admin/Super Admin (not a front-desk Operator) tops up a member's wallet, the system stamps the transaction with a synthetic "System Operator" ID, but records it against whatever real Operator's shift happens to be open on that branch at the time. The Wallet Desk and Online Desk panels only show transactions that exactly match `OperatorId == the shift's operator` — so the System-Operator-stamped top-up never matched, and silently disappeared from both panels. This affected every branch identically, not just Citylight.

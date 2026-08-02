@@ -305,7 +305,7 @@ public class WalletService : IWalletService
                                 <p style='margin: 10px 0; color: #d1d5db;'>Total credited: <strong style='color: #ffffff;'>₹{totalCredit:0.00}</strong></p>
                             </div>
                             <div style='text-align:center; margin: 40px 0;'>
-                                <a href='{appBaseUrl}' style='background: linear-gradient(to right, #2563eb, #3b82f6); color: #ffffff; padding: 16px 32px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px; letter-spacing: 1px; display: inline-block; box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);'>OPEN PORTAL</a>
+                                <button onclick='window.print()' style='background: linear-gradient(to right, #2563eb, #3b82f6); color: #ffffff; padding: 16px 32px; border: none; border-radius: 8px; font-weight: bold; font-size: 16px; letter-spacing: 1px; cursor: pointer; box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);'>PRINT RECEIPT</button>
                             </div>
                         </div>
                         <div style='background-color: #080808; padding: 20px; border-top: 1px solid #222222; text-align: center;'>
