@@ -193,17 +193,55 @@ public class EodController : ControllerBase
 
     [HttpGet("report")]
     [HttpGet("preview")]
-    public async Task<IActionResult> GetPreview([FromQuery] DateTimeOffset? date)
+    public async Task<IActionResult> GetPreview([FromQuery] string? date)
     {
-        var targetDate = (date ?? DateTimeOffset.UtcNow).ToUniversalTime();
+        DateTimeOffset targetDate;
+
+        if (string.IsNullOrWhiteSpace(date))
+        {
+            targetDate = DateTimeOffset.UtcNow.ToUniversalTime();
+        }
+        else if (DateTimeOffset.TryParse(date, null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsed))
+        {
+            targetDate = parsed.ToUniversalTime();
+        }
+        else if (DateTime.TryParse(date, out var dateOnly))
+        {
+            // Handle "YYYY-MM-DD" format from React component
+            targetDate = new DateTimeOffset(dateOnly.Date, TimeSpan.Zero);
+        }
+        else
+        {
+            return BadRequest(ApiResponse<object>.Fail("Invalid date format. Use ISO 8601 format or YYYY-MM-DD."));
+        }
+
         var result = await _eodService.GenerateEodReportAsync(GetBranchId(), targetDate);
         return Ok(ApiResponse<EodReportDto>.Ok(result));
     }
 
     [HttpGet("validation")]
-    public async Task<IActionResult> GetValidationStatus([FromQuery] DateTimeOffset? date)
+    public async Task<IActionResult> GetValidationStatus([FromQuery] string? date)
     {
-        var targetDate = (date ?? DateTimeOffset.UtcNow).ToUniversalTime();
+        DateTimeOffset targetDate;
+
+        if (string.IsNullOrWhiteSpace(date))
+        {
+            targetDate = DateTimeOffset.UtcNow.ToUniversalTime();
+        }
+        else if (DateTimeOffset.TryParse(date, null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsed))
+        {
+            targetDate = parsed.ToUniversalTime();
+        }
+        else if (DateTime.TryParse(date, out var dateOnly))
+        {
+            // Handle "YYYY-MM-DD" format from React component
+            targetDate = new DateTimeOffset(dateOnly.Date, TimeSpan.Zero);
+        }
+        else
+        {
+            return BadRequest(ApiResponse<object>.Fail("Invalid date format. Use ISO 8601 format or YYYY-MM-DD."));
+        }
+
         var result = await _eodService.GetValidationStatusAsync(GetBranchId(), targetDate);
         return Ok(ApiResponse<ValidationStatusDto>.Ok(result));
     }
@@ -212,15 +250,54 @@ public class EodController : ControllerBase
     [Authorize(Roles = Roles.SuperAdmin)] // Strictly SuperAdmin as per SOP
     public async Task<IActionResult> FinalizeEod([FromBody] FinalizeEodRequest request)
     {
-        var targetDate = (request.Date ?? DateTimeOffset.UtcNow).ToUniversalTime();
+        DateTimeOffset targetDate;
+
+        if (string.IsNullOrWhiteSpace(request.Date))
+        {
+            targetDate = DateTimeOffset.UtcNow.ToUniversalTime();
+        }
+        else if (DateTimeOffset.TryParse(request.Date, null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsed))
+        {
+            targetDate = parsed.ToUniversalTime();
+        }
+        else if (DateTime.TryParse(request.Date, out var dateOnly))
+        {
+            // Handle "YYYY-MM-DD" format from React component
+            targetDate = new DateTimeOffset(dateOnly.Date, TimeSpan.Zero);
+        }
+        else
+        {
+            return BadRequest(ApiResponse<object>.Fail("Invalid date format. Use ISO 8601 format or YYYY-MM-DD."));
+        }
+
         var result = await _eodService.FinalizeEodAsync(GetBranchId(), (await this.GetOperatorIdAsync()), targetDate);
         return Ok(ApiResponse<EodSnapshotDto>.Ok(result));
     }
 
     [HttpGet("history")]
-    public async Task<IActionResult> GetHistoricalEod([FromQuery] DateTimeOffset date)
+    public async Task<IActionResult> GetHistoricalEod([FromQuery] string? date)
     {
-        var result = await _eodService.GetHistoricalEodAsync(GetBranchId(), date.ToUniversalTime());
+        if (string.IsNullOrWhiteSpace(date))
+        {
+            return BadRequest(ApiResponse<object>.Fail("Date parameter is required."));
+        }
+
+        DateTimeOffset targetDate;
+        if (DateTimeOffset.TryParse(date, null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsed))
+        {
+            targetDate = parsed.ToUniversalTime();
+        }
+        else if (DateTime.TryParse(date, out var dateOnly))
+        {
+            // Handle "YYYY-MM-DD" format from React component
+            targetDate = new DateTimeOffset(dateOnly.Date, TimeSpan.Zero);
+        }
+        else
+        {
+            return BadRequest(ApiResponse<object>.Fail("Invalid date format. Use ISO 8601 format or YYYY-MM-DD."));
+        }
+
+        var result = await _eodService.GetHistoricalEodAsync(GetBranchId(), targetDate);
         if (result == null) return NotFound(ApiResponse<EodSnapshotDto>.Fail("No finalized EOD snapshot found for the specified date."));
         return Ok(ApiResponse<EodSnapshotDto>.Ok(result));
     }
@@ -228,6 +305,6 @@ public class EodController : ControllerBase
 
 public class FinalizeEodRequest
 {
-    public DateTimeOffset? Date { get; set; }
+    public string? Date { get; set; }
 }
 
