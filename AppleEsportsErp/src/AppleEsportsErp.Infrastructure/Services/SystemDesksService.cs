@@ -36,7 +36,7 @@ public class SystemDesksService : ISystemDesksService
             .ToListAsync();
 
         var walletTxs = await _unitOfWork.Repository<WalletTransaction>().Query()
-            .Where(w => w.BranchId == branchId && w.OperatorId == shift.OperatorId && w.CreatedAt >= shift.LoginTime && w.CreatedAt <= endTime)
+            .Where(w => w.BranchId == branchId && (w.ShiftId == shiftId || (w.OperatorId == shift.OperatorId && w.CreatedAt >= shift.LoginTime && w.CreatedAt <= endTime)))
             .Include(w => w.Member)
             .ToListAsync();
 
@@ -96,7 +96,7 @@ public class SystemDesksService : ISystemDesksService
         var endTime = shift.LogoutTime ?? DateTimeOffset.UtcNow;
 
         var walletTxs = await _unitOfWork.Repository<WalletTransaction>().Query()
-            .Where(w => w.BranchId == branchId && w.OperatorId == shift.OperatorId && w.CreatedAt >= shift.LoginTime && w.CreatedAt <= endTime)
+            .Where(w => w.BranchId == branchId && (w.ShiftId == shiftId || (w.OperatorId == shift.OperatorId && w.CreatedAt >= shift.LoginTime && w.CreatedAt <= endTime)))
             .Include(w => w.Member)
             .ToListAsync();
 

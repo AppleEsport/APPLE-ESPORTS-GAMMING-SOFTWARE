@@ -246,7 +246,7 @@ public class BillingService : IBillingService
 
                 if (gamingDeduction > 0)
                 {
-                    await _walletService.DeductWalletAsync(branchId, operatorId, bill.MemberId.Value, new Application.DTOs.Wallets.DeductWalletDto
+                    await _walletService.DeductWalletAsync(branchId, operatorId, bill.ShiftId, bill.MemberId.Value, new Application.DTOs.Wallets.DeductWalletDto
                     {
                         TargetWallet = WalletType.Gaming,
                         Amount = gamingDeduction,
@@ -257,7 +257,7 @@ public class BillingService : IBillingService
                 
                 if (foodDeduction > 0)
                 {
-                    await _walletService.DeductWalletAsync(branchId, operatorId, bill.MemberId.Value, new Application.DTOs.Wallets.DeductWalletDto
+                    await _walletService.DeductWalletAsync(branchId, operatorId, bill.ShiftId, bill.MemberId.Value, new Application.DTOs.Wallets.DeductWalletDto
                     {
                         TargetWallet = WalletType.Food,
                         Amount = foodDeduction,

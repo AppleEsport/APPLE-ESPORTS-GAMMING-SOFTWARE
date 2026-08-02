@@ -45,7 +45,7 @@ public class WalletController : ControllerBase
     [Idempotent]
     public async Task<IActionResult> DeductWallet(Guid memberId, [FromBody] DeductWalletDto dto)
     {
-        var result = await _walletService.DeductWalletAsync(GetBranchId(), (await this.GetOperatorIdAsync()), memberId, dto);
+        var result = await _walletService.DeductWalletAsync(GetBranchId(), (await this.GetOperatorIdAsync()), (await this.GetShiftIdAsync()), memberId, dto);
         return Ok(ApiResponse<WalletTransactionDto>.Ok(result));
     }
 }
