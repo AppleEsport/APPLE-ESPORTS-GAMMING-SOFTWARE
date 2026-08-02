@@ -74,7 +74,10 @@ public static class ControllerExtensions
         var branchId = Guid.Parse(branchIdStr);
         var db = controller.HttpContext.RequestServices.GetRequiredService<AppDbContext>();
 
-        var activeShift = await db.Shifts.FirstOrDefaultAsync(s => s.BranchId == branchId && s.Status == ShiftStatus.Active);
+        var activeShift = await db.Shifts
+            .Where(s => s.BranchId == branchId && s.Status == ShiftStatus.Active)
+            .OrderByDescending(s => s.LoginTime)
+            .FirstOrDefaultAsync();
         if (activeShift == null)
         {
             var sysOpId = await controller.GetOperatorIdAsync();
