@@ -56,6 +56,17 @@ How to use this file:
 
 ---
 
+```
+### Issue # 16
+- Where: in session screen (member/user panel and session panel)
+- What I did: watched a fixed-duration plan (1 hour, 2 hour, 3 hour) run past its purchased time
+- What happened: after the plan duration finished, the session kept going in the user panel instead of stopping, and it just showed "overdue" / "go to billing" in the session panel without actually stopping anything
+- What should happen instead: once the fixed duration (e.g. 1 hour) is up, the system should stop the session in the user panel too, and the session panel should direct to billing for settlement — not leave it running and overdue
+- Priority: based on you !!
+```
+
+---
+
 ## Fixed (history log)
 
 ### Issue #15 — Member wallet top-up not showing in Finance Center (2026-08-03)
