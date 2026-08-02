@@ -58,6 +58,13 @@ How to use this file:
 
 ## Fixed (history log)
 
+### Issue #15 — Member wallet top-up not showing in Finance Center (2026-08-03)
+- Where: Citylight branch, Finance Center (Wallet Desk / Online Desk) — affected every branch equally.
+- Root cause: when an Admin/Super Admin (not a front-desk Operator) tops up a member's wallet, the system stamps the transaction with a synthetic "System Operator" ID, but records it against whatever real Operator's shift happens to be open on that branch — while Wallet Desk/Online Desk only showed transactions matching `OperatorId == the shift's operator` exactly. Since those never matched, the top-up silently disappeared from both panels.
+- Also found while verifying the fix on production: when more than one operator is concurrently on shift at the same branch, the shift an Admin/Super Admin action attaches to was picked with no deterministic ordering — could attach to the wrong operator's shift entirely.
+- Fixed: wallet transactions now record which shift they belong to directly (same pattern bills already used), Wallet Desk/Online Desk match on that shift link first, and Admin/Super Admin actions now deterministically attach to the most recently opened active shift on the branch.
+- Verified live on the Citylight branch: created a test member, topped up via both a real Operator login and the Super Admin login, and confirmed both top-ups appeared correctly in Wallet Desk and Online Desk. Test member and test shifts cleaned up afterward.
+
 ### Issue #13 & #14 (Combined) — Shift handoff, wallet bonus in cash, cash lifecycle & revenue calculations (2026-08-03)
 - **Problem 1 (Wallet bonus bleeding into cash drawer):** Wallet top-up bonus (₹100 for a ₹1000 top-up) was being added to the "Cash Sales + Wallet TopUps" line, inflating Expected Drawer Total. The bonus is member wallet credit only, not actual cash the operator has.
 - **Fix:** Added explicit safeguard in WalletService.cs: CashTransaction.CashAmount = dto.Amount only (never includes bonus). Bonus stays internal to wallet_transactions table, never flows to cash_transactions.
