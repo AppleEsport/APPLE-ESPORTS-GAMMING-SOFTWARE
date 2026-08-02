@@ -92,6 +92,21 @@ export default function SessionInfoScreen() {
     );
   }
 
+  if (sessionData.sessionStatus === 'awaiting_billing') {
+    return (
+      <div className="flex flex-col items-center justify-center h-full p-6 text-center">
+        <div className="bg-neon-orange/10 border border-neon-orange/30 p-6 rounded-xl max-w-md animate-in zoom-in">
+          <Clock className="w-12 h-12 text-neon-orange mx-auto mb-4" />
+          <h2 className="font-heading text-2xl font-bold text-neon-orange tracking-wide uppercase mb-2">Session Ended</h2>
+          <p className="text-text-2 font-body text-lg mb-1">Your plan time is up.</p>
+          <p className="text-text-3 font-body">
+            Please pay ₹{formatMoney(sessionData.totalBill || 0)} at the counter to continue.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   const isPayAsYouGo = !sessionData.plannedDurationMin || sessionData.plannedDurationMin === 0;
   
   let displayTime = '';

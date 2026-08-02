@@ -25,7 +25,21 @@ How to use this file:
 
 (None at this time)
 
+---
+
 ## Fixed (history log)
+
+### Issue #16 — Fixed-duration plans never auto-stopping when time ran out (2026-08-03)
+- **Problem:** When a member purchased a fixed-duration plan (1 hour, 2 hour, 3 hour), the session kept running past the purchased time. The member overlay showed "overdue" and the session panel said "go to billing" but the session didn't actually auto-stop.
+- **Fix:** Implemented auto-stop logic in SessionService that triggers when a session's elapsed time reaches or exceeds the plan's fixed duration. The session now stops automatically and directs to billing for settlement without operator intervention.
+- **Files changed:** `SessionService.cs`
+
+### Issue #15 — Member wallet top-up not showing in Finance Center (2026-08-03)
+- Where: Citylight branch, Finance Center (Wallet Desk / Online Desk) — affected every branch equally.
+- Root cause: when an Admin/Super Admin (not a front-desk Operator) tops up a member's wallet, the system stamps the transaction with a synthetic "System Operator" ID, but records it against whatever real Operator's shift happens to be open on that branch — while Wallet Desk/Online Desk only showed transactions matching `OperatorId == the shift's operator` exactly. Since those never matched, the top-up silently disappeared from both panels.
+- Also found while verifying the fix on production: when more than one operator is concurrently on shift at the same branch, the shift an Admin/Super Admin action attaches to was picked with no deterministic ordering — could attach to the wrong operator's shift entirely.
+- Fixed: wallet transactions now record which shift they belong to directly (same pattern bills already used), Wallet Desk/Online Desk match on that shift link first, and Admin/Super Admin actions now deterministically attach to the most recently opened active shift on the branch.
+- Verified live on the Citylight branch: created a test member, topped up via both a real Operator login and the Super Admin login, and confirmed both top-ups appeared correctly in Wallet Desk and Online Desk. Test member and test shifts cleaned up afterward.
 
 ### Issue #9 — Member payment approval "axios is not defined" error and login context (2026-08-03)
 - **Problem 1 (axios error):** Member PC was showing "axios is not defined" when trying to approve payment requests from Billing Counter, blocking wallet payments completely.
