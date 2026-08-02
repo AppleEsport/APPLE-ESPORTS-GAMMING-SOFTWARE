@@ -136,19 +136,22 @@ public class WalletService : IWalletService
             activeRegister.ExpectedDrawerCash += walletTx.CashAmount;
             _unitOfWork.Repository<CashRegister>().Update(activeRegister);
 
+            // CRITICAL: CashAmount is the actual cash received from the member (₹1000).
+            // Bonus (₹100) is internal wallet credit only, NEVER added to the cash drawer.
             var cashTx = new CashTransaction
             {
                 CashRegisterId = activeRegister.Id,
                 BranchId = branchId,
                 OperatorId = operatorId,
                 TransactionType = "wallet_recharge",
-                CashAmount = walletTx.CashAmount,
+                CashAmount = walletTx.CashAmount,  // dto.Amount only, never includes bonus
                 CashReceived = walletTx.CashAmount,
                 ChangeReturned = 0,
                 ActualCashCollected = walletTx.CashAmount,
                 GamingAmount = 0,
                 FoodAmount = 0,
                 CustomerName = member.Username,
+                BillId = null,  // Wallet top-ups are not tied to bills
                 CreatedAt = DateTimeOffset.UtcNow
             };
             await _unitOfWork.Repository<CashTransaction>().AddAsync(cashTx);

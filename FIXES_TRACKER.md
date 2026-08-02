@@ -56,18 +56,24 @@ How to use this file:
 
 ---
 
-```
-### Issue # 12
-- Where: mail that we send to members !!
-- What I did: the reset link that is connected to server when we open it it shows me the reset password think for the member when i do the reset and submit then it should redirect to "https://appleesports.in/" webscite and another thing we are sending the wallet top up recipt to the members so we need to remove the open portal button from that mail simple there should be print button so they can print that recipt in a perfect way like in a proper structure so you perfectly look into that think please 
-- What happened: 
-- What should happen instead:
-- Priority: 
-```
-
----
-
 ## Fixed (history log)
+
+### Issue #13 & #14 (Combined) — Shift handoff, wallet bonus in cash, cash lifecycle & revenue calculations (2026-08-03)
+- **Problem 1 (Wallet bonus bleeding into cash drawer):** Wallet top-up bonus (₹100 for a ₹1000 top-up) was being added to the "Cash Sales + Wallet TopUps" line, inflating Expected Drawer Total. The bonus is member wallet credit only, not actual cash the operator has.
+- **Fix:** Added explicit safeguard in WalletService.cs: CashTransaction.CashAmount = dto.Amount only (never includes bonus). Bonus stays internal to wallet_transactions table, never flows to cash_transactions.
+- **Problem 2 (Expected Drawer Total wrong):** Was calculating as 400 (opening) + 1010 (wrong amount) instead of 400 + 1000. Fixed by the above.
+- **Problem 3 (Shift handoff - Issue #13):** Next operator logging in after shift end wasn't seeing starting cash/stock counts from previous shift.
+- **Fix for #13:** Shift closing now captures final counts and displays them to next operator on login as "Opening Balance" and "Opening Stock".
+- **Problem 4 (Revenue fields all ₹0):** "Total Net Revenue", "Gaming Revenue", "Food Revenue", "Discounts Applied" all showing ₹0 in end-of-day dashboard despite active sessions.
+- **Fix:** Dashboard now queries completed bills from current shift, sums their GamingAmount, FoodAmount, DiscountAmount to populate revenue fields correctly.
+- **Files changed:** `WalletService.cs`, shift opening/closing logic, EOD dashboard calculations
+
+### Issue #12 — Email links and wallet receipt print button (2026-08-03)
+- **Problem 1 (Password Reset Redirect):** After a member reset their password successfully, the page redirected back to the local app (`/`), not the customer-facing website.
+- **Fix:** Changed `navigate('/')` to `window.location.href = 'https://appleesports.in/'` so users are sent to the external website after password reset.
+- **Problem 2 (Wallet Receipt Email):** The wallet top-up receipt email had an "OPEN PORTAL" button that tried to open the app, but members should be able to print the receipt instead.
+- **Fix:** Replaced the OPEN PORTAL link button with a PRINT RECEIPT button that triggers `window.print()`, so members can print a clean copy of their receipt.
+- **Files changed:** `ResetPasswordPage.jsx`, `WalletService.cs`
 
 ### Issue #1 — Maintenance mode throwing errors (2026-07-18)
 - Root cause 1: role name mismatch — token stored role as lowercase (`operator`) but 3 endpoints (incl. the Maintenance endpoint) checked for capitalized `Operator`, so the server silently rejected valid operators. Fixed to use the shared role constants everywhere.
