@@ -56,6 +56,17 @@ How to use this file:
 
 ---
 
+```
+### Issue # 12
+- Where: mail that we send to members !!
+- What I did: the reset link that is connected to server when we open it it shows me the reset password think for the member when i do the reset and submit then it should redirect to "https://appleesports.in/" webscite and another thing we are sending the wallet top up recipt to the members so we need to remove the open portal button from that mail simple there should be print button so they can print that recipt in a perfect way like in a proper structure so you perfectly look into that think please 
+- What happened: 
+- What should happen instead:
+- Priority: 
+```
+
+---
+
 ## Fixed (history log)
 
 ### Issue #1 — Maintenance mode throwing errors (2026-07-18)
