@@ -109,6 +109,7 @@ public class WalletService : IWalletService
             MemberId = memberId,
             BranchId = branchId,
             OperatorId = operatorId,
+            ShiftId = shiftId,
             Action = WalletAction.Recharge,
             TargetWallet = dto.TargetWallet,
             Amount = dto.Amount,
@@ -173,7 +174,7 @@ public class WalletService : IWalletService
         return MapToDto(walletTx);
     }
 
-    public async Task<WalletTransactionDto> DeductWalletAsync(Guid branchId, Guid operatorId, Guid memberId, DeductWalletDto dto)
+    public async Task<WalletTransactionDto> DeductWalletAsync(Guid branchId, Guid operatorId, Guid? shiftId, Guid memberId, DeductWalletDto dto)
     {
         if (dto.Amount <= 0)
             throw new AppException("Deduction amount must be greater than zero.");
@@ -201,6 +202,7 @@ public class WalletService : IWalletService
             MemberId = memberId,
             BranchId = branchId,
             OperatorId = operatorId,
+            ShiftId = shiftId,
             Action = WalletAction.Correction,
             TargetWallet = dto.TargetWallet,
             Amount = dto.Amount,

@@ -56,7 +56,15 @@ How to use this file:
 
 ---
 
+---
+
 ## Fixed (history log)
+
+### Issue #12 — Member wallet top-up not showing in Finance Center (2026-08-03)
+- Root cause: when an Admin/Super Admin (not a front-desk Operator) tops up a member's wallet, the system stamps the transaction with a synthetic "System Operator" ID, but records it against whatever real Operator's shift happens to be open on that branch at the time. The Wallet Desk and Online Desk panels only show transactions that exactly match `OperatorId == the shift's operator` — so the System-Operator-stamped top-up never matched, and silently disappeared from both panels. This affected every branch identically, not just Citylight.
+- Cash Desk was actually unaffected — it reads by cash register/shift, not by operator match, so cash-paid top-ups were already showing correctly.
+- Fixed: wallet transactions now also record which shift they belong to directly (mirroring how bills already do it), and the Wallet Desk / Online Desk queries now match on that shift link first — so top-ups and wallet deductions show up correctly regardless of who performed them (Operator, Admin, or Super Admin).
+- Added a database migration for the new field; verified the whole backend still builds clean.
 
 ### Issue #1 — Maintenance mode throwing errors (2026-07-18)
 - Root cause 1: role name mismatch — token stored role as lowercase (`operator`) but 3 endpoints (incl. the Maintenance endpoint) checked for capitalized `Operator`, so the server silently rejected valid operators. Fixed to use the shared role constants everywhere.

@@ -10,6 +10,7 @@ public class WalletTransaction
     public Guid BranchId { get; set; }
     public Guid? OperatorId { get; set; }
     public Guid? AdminId { get; set; }
+    public Guid? ShiftId { get; set; }
     public WalletAction Action { get; set; }
     public WalletType TargetWallet { get; set; }
     public decimal Amount { get; set; }
@@ -28,5 +29,6 @@ public class WalletTransaction
     public Branch Branch { get; set; } = null!;
     public Operator? Operator { get; set; }
     public User? Admin { get; set; }
+    public Shift? Shift { get; set; }
     public Bill? Bill { get; set; }
 }
