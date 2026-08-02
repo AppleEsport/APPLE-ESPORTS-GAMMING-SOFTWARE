@@ -153,7 +153,7 @@ export default function EodDashboardPage() {
 
     const creditsPending = (report.creditLogs?.filter(c => c.status?.toLowerCase() === 'pending')
       .reduce((acc, c) => acc + c.creditAmount, 0) || 0).toFixed(2);
-    const overallEndTotal = (report.paymentMethods.totalCash + report.paymentMethods.totalOnline + report.paymentMethods.totalWalletDeductions).toFixed(2);
+    const overallEndTotal = (report.paymentMethods.totalCash + report.paymentMethods.totalOnline + report.paymentMethods.totalWalletDeductions + report.paymentMethods.totalWalletTopUps).toFixed(2);
 
     y = addTable(doc, y, {
       title, subtitle,
@@ -162,7 +162,8 @@ export default function EodDashboardPage() {
       body: [
         ['Cash', `Rs ${report.paymentMethods.totalCash}`],
         ['Online', `Rs ${report.paymentMethods.totalOnline}`],
-        ['Wallet', `Rs ${report.paymentMethods.totalWalletDeductions}`],
+        ['Wallet Deductions (Gaming/Food)', `Rs ${report.paymentMethods.totalWalletDeductions}`],
+        ['Wallet Top-Ups (Cash Collected)', `Rs ${report.paymentMethods.totalWalletTopUps}`],
         ['Credits Pending', `-Rs ${creditsPending}`],
         ['Overall End Total', `Rs ${overallEndTotal}`],
         ['Total Sessions', String(report.operations.totalSessions)],
@@ -508,8 +509,12 @@ export default function EodDashboardPage() {
                     <span className="font-mono text-text">₹{report.paymentMethods.totalOnline}</span>
                   </div>
                   <div className="flex justify-between items-center text-sm">
-                    <span className="text-text-2">Wallet</span>
+                    <span className="text-text-2">Wallet Deductions (Gaming/Food)</span>
                     <span className="font-mono text-neon-purple">₹{report.paymentMethods.totalWalletDeductions}</span>
+                  </div>
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="text-text-2">Wallet Top-Ups (Cash Collected)</span>
+                    <span className="font-mono text-neon-green">+ ₹{report.paymentMethods.totalWalletTopUps}</span>
                   </div>
                   <div className="flex justify-between items-center text-sm">
                     <span className="text-text-2">Credits Pending</span>
@@ -517,11 +522,11 @@ export default function EodDashboardPage() {
                       -₹{(report.creditLogs?.filter(c => c.status?.toLowerCase() === 'pending').reduce((acc, c) => acc + c.creditAmount, 0) || 0).toFixed(2)}
                     </span>
                   </div>
-                  
+
                   <div className="flex justify-between items-center text-sm bg-neon-blue/10 p-4 rounded-lg border border-neon-blue/30 mt-6">
                     <span className="font-bold text-neon-blue uppercase tracking-widest text-xs">Overall End Total</span>
                     <span className="font-mono font-bold text-xl text-neon-blue">
-                      ₹{(report.paymentMethods.totalCash + report.paymentMethods.totalOnline + report.paymentMethods.totalWalletDeductions).toFixed(2)}
+                      ₹{(report.paymentMethods.totalCash + report.paymentMethods.totalOnline + report.paymentMethods.totalWalletDeductions + report.paymentMethods.totalWalletTopUps).toFixed(2)}
                     </span>
                   </div>
                 </div>
