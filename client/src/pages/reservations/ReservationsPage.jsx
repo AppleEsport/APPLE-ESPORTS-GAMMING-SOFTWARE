@@ -192,7 +192,7 @@ export default function ReservationsPage() {
   const requestedEnd = new Date(requestedStart.getTime() + requestedDurationMs);
 
   const eligiblePcs = pcs.filter(pc => {
-    if (pc.state === 'Maintenance' || pc.state === 'Offline') return false;
+    if (pc.state === 'UnderMaintenance' || pc.state === 'Offline') return false;
 
     // 1. Check against active sessions
     const activeSession = sessions.find(s => s.pcId === pc.id && s.status === 'Active');

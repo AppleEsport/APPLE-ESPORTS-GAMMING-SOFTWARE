@@ -86,15 +86,13 @@ public class ReservationService : IReservationService
             Notes = dto.Notes
         };
 
-        // If reservation is right now (starts within 15 minutes), update PC state
-        if (dto.ReservationTime <= DateTimeOffset.UtcNow.AddMinutes(15))
+        // Reflect the booking on the PC immediately, regardless of how far out it starts —
+        // an operator/customer glancing at the floor grid should see it's spoken for right away.
+        if (pc.State == PcState.Idle)
         {
-            if (pc.State == PcState.Idle)
-            {
-                pc.State = PcState.Reserved;
-                pc.CurrentReservation = reservation;
-                _unitOfWork.Repository<Pc>().Update(pc);
-            }
+            pc.State = PcState.Reserved;
+            pc.CurrentReservation = reservation;
+            _unitOfWork.Repository<Pc>().Update(pc);
         }
 
         // Fetch operator's active shift and record advance deposit
