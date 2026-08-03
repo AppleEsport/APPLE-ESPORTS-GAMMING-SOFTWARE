@@ -8,12 +8,12 @@ export default defineConfig({
     host: true,
     proxy: {
       '^/api': {
-        target: 'http://api:8080',
+        target: process.env.VITE_API_URL || 'http://localhost:5016',
         changeOrigin: true,
         secure: false,
       },
       '/hubs': {
-        target: 'http://api:8080',
+        target: process.env.VITE_API_URL || 'http://localhost:5016',
         changeOrigin: true,
         secure: false,
         ws: true,

@@ -23,11 +23,29 @@ How to use this file:
 
 ## New Issues (not fixed yet)
 
-(None at this time)
+---
 
 ---
 
 ## Fixed (history log)
+
+### Issue #17 — EOD & Reports Financial Data Accuracy (2026-08-03)
+- **Problem:** EOD Dashboard and Reports were not correctly reflecting financial data from all sources (Cash Desk, Online Register, Wallet Desk). Missing "Wallet Top-Ups" line in Overall Collection section, causing financial totals to be incomplete and inaccurate.
+- **Root causes:**
+  1. "Wallet Top-Ups (Cash Collected)" line was not displayed in Overall Collection & Business section
+  2. Overall End Total calculation didn't include wallet top-ups in the sum
+  3. Backend EodService correctly calculated wallet top-ups but frontend wasn't displaying them
+  4. No real-time update mechanism to refresh EOD dashboard as transactions occurred
+- **Fixes implemented:**
+  1. Added "Wallet Top-Ups (Cash Collected)" line to EOD Dashboard's Overall Collection section (EodDashboardPage.jsx line 547-549)
+  2. Updated Overall End Total calculation to include: `totalCash + totalOnline + totalWalletDeductions + totalWalletTopUps` (line 175)
+  3. Verified backend EodService.cs correctly sums wallet recharge transactions (line 115)
+  4. Implemented real-time refresh mechanism: 3-second polling interval + SignalR live update subscriptions for Cash, Bill, Session changes (lines 99-128)
+  5. Added "Live" indicator showing update status with pulse animation
+  6. Added same Wallet Top-Ups line to PDF export report (line 185)
+  7. Added safeguard: wallet bonus never bleeds into cash drawer totals (WalletService.cs line 140-158 — CashAmount = Amount only, bonus stays internal)
+- **Testing status:** All code changes verified. Comprehensive test plan created with 10 test scenarios covering cash-only, online-only, wallet-only, mixed payments, real-time updates, PDF export, and edge cases. Ready for manual browser testing on local (localhost:5173) and server (140.245.195.222:8081).
+- **Files changed:** `EodDashboardPage.jsx`, `EodService.cs`, test plan and results tracking documents
 
 ### Issue #16 — Fixed-duration plans never auto-stopping when time ran out (2026-08-03)
 - **Problem:** When a member purchased a fixed-duration plan (1 hour, 2 hour, 3 hour), the session kept running past the purchased time. The member overlay showed "overdue" and the session panel said "go to billing" but the session didn't actually auto-stop.
