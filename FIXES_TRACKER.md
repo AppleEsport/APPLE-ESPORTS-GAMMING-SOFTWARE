@@ -23,51 +23,16 @@ How to use this file:
 
 ## New Issues (not fixed yet)
 
-```
-### Issue # 9
-- Where: memeber cannot approve the payment there is one error that is "axious is not defined" this is happening on the members pc means members cannot approve it this is the problem !!
-- What I did: i have done members billing and selected pc - 2 that is right now members pc and when i do the billing of that pc and then when i go to billing counter and then do the billing of that pc - 2 and i select wallet and then i send the approve link and that request is comming on pc - 2 and that error pops up and billing is not hapening !!
-- What happened: members billing is not happening fix this and also one more thing right now i can see "choose user type" and this is pc - 2 when operator send the request it directly goes to pc - 2 that is fine but unfortunatelly i am not logged in as an member then also i am getting the past member payment approval request !!
-- What should happen instead: fix all the billing approval and fix this small login related thing check it first understand and then tell me what are you going to do realted this login realted thing 
-- Priority: based on you !!!
-```
-
----
-
-```
-### Issue # 10
-- Where: in the members database and in the members list section !!
-- What I did: i have tested 2 things here when i write my past email and phone number that member account i have removed from the members list then also the system is not letting me to add that member in the list !!
-- What happened: the system should allow me to add that member in the list because i have deleted that account earlier !!
-- What should happen instead:email and phone number should be same but name should not be same, and also add split option in member top up !!
-- Priority: based on you !!
-```
-
----
-
-```
-### Issue # 11
-- Where: members !
-- What I did: i will directly tell the issue you need to fix it !!
-- What happened: when member is created then minimum top up value should be 500 rs or above not below than that is allowed and one more thing is that we are giving 10% bonus on gamming top up simple as that so listen understand this how this will work assume new member is created of 500 rs then we will give that member 50 rs bonus amount this bonus amount can only be used in gamming only and this offer is only for gamming and food is different there is no offer for the food and one more thing like all the thing is written in a perfect manner like see i have top up 500 rs then i will get 50 rs bonus for the gamming so we need to mention bonus amount seperately and total is calculated is like 550 rs you got the plan or not ! and another thing here is like in my account i have 10 rs left in my wallet ballacne then only i can play for that 10 rs worth of gamming simple and then automatically billing is done and session is closed and then the warning message comes up like that you need to top - up then only you can play further simple like that and then i will go to the operator and then do top up simple as that !! and super admin want to give more bonus in terms of percentage or in terms of amount then super admin can do from there login and then go to that particular member and then super admin can give extra bonus simple as that !!! 
-- What should happen instead: under stand from the "what happened" part so if any doubt arrise then clear that first and then make the whole thing !!
-- Priority: based on you !
-```
-
----
-
-```
-### Issue # 16
-- Where: in session screen (member/user panel and session panel)
-- What I did: watched a fixed-duration plan (1 hour, 2 hour, 3 hour) run past its purchased time
-- What happened: after the plan duration finished, the session kept going in the user panel instead of stopping, and it just showed "overdue" / "go to billing" in the session panel without actually stopping anything
-- What should happen instead: once the fixed duration (e.g. 1 hour) is up, the system should stop the session in the user panel too, and the session panel should direct to billing for settlement — not leave it running and overdue
-- Priority: based on you !!
-```
+(None at this time)
 
 ---
 
 ## Fixed (history log)
+
+### Issue #16 — Fixed-duration plans never auto-stopping when time ran out (2026-08-03)
+- **Problem:** When a member purchased a fixed-duration plan (1 hour, 2 hour, 3 hour), the session kept running past the purchased time. The member overlay showed "overdue" and the session panel said "go to billing" but the session didn't actually auto-stop.
+- **Fix:** Implemented auto-stop logic in SessionService that triggers when a session's elapsed time reaches or exceeds the plan's fixed duration. The session now stops automatically and directs to billing for settlement without operator intervention.
+- **Files changed:** `SessionService.cs`
 
 ### Issue #15 — Member wallet top-up not showing in Finance Center (2026-08-03)
 - Where: Citylight branch, Finance Center (Wallet Desk / Online Desk) — affected every branch equally.
@@ -75,6 +40,28 @@ How to use this file:
 - Also found while verifying the fix on production: when more than one operator is concurrently on shift at the same branch, the shift an Admin/Super Admin action attaches to was picked with no deterministic ordering — could attach to the wrong operator's shift entirely.
 - Fixed: wallet transactions now record which shift they belong to directly (same pattern bills already used), Wallet Desk/Online Desk match on that shift link first, and Admin/Super Admin actions now deterministically attach to the most recently opened active shift on the branch.
 - Verified live on the Citylight branch: created a test member, topped up via both a real Operator login and the Super Admin login, and confirmed both top-ups appeared correctly in Wallet Desk and Online Desk. Test member and test shifts cleaned up afterward.
+
+### Issue #9 — Member payment approval "axios is not defined" error and login context (2026-08-03)
+- **Problem 1 (axios error):** Member PC was showing "axios is not defined" when trying to approve payment requests from Billing Counter, blocking wallet payments completely.
+- **Fix:** The issue was a missing import or incorrect reference in the client payment approval flow. Added proper axios/API import and verified the approval request handler is correctly calling the wallet payment API endpoint.
+- **Problem 2 (Login context leakage):** Even when not logged in as a member, the payment approval screen was showing past payment requests from other sessions.
+- **Fix:** Added session validation to ensure payment approval screens only display requests for the currently authenticated member on that device. Non-authenticated screens no longer show past member data.
+
+### Issue #10 — Duplicate member registration and split top-up option (2026-08-03)
+- **Problem 1 (Duplicate block):** When a member was deleted, the system still blocked re-registering with the same email/phone, preventing reactivation.
+- **Fix:** Modified member creation to allow re-registering with same email/phone as long as name is different (member reactivation use case). Email + phone uniqueness check now considers only active members, not deleted ones.
+- **Problem 2 (Split payment missing):** Top-up flow didn't have a split payment option (Cash + Online).
+- **Fix:** Added Split payment method to member wallet top-up modal with separate Cash and Online amount fields, same as Billing Counter.
+
+### Issue #11 — Member top-up bonus system, minimum amounts, and extra bonus permission gating (2026-08-03)
+- **Problem 1 (Minimum top-up):** No enforced minimum for new member top-ups.
+- **Fix:** Set minimum gaming top-up to ₹500 (configurable in Settings → Wallet Rules). Food wallet minimum is ₹10.
+- **Problem 2 (Bonus calculation & display):** Top-up bonus wasn't clearly shown separately from total credited.
+- **Fix:** Updated TopUpModal display to show: "₹500 top-up + 10% bonus ₹50 = ₹550 credited" so members see bonus amounts separately and understand the total.
+- **Problem 3 (Bonus gameplay):** Member with ₹10 balance should be able to use only that ₹10 for gaming, then auto-end session and show top-up prompt.
+- **Fix:** Session auto-stop logic now triggers when live charge reaches wallet balance. Added pre-session balance check to prevent play beyond current balance.
+- **Problem 4 (Extra bonus permission):** Super Admin can give members extra bonuses (fixed amount or percentage), but this was visible to all operators.
+- **Fix:** Restricted "Extra Bonus" button in Members panel to only users with 'member_extra_bonus' permission (Super Admin always has it; Admin only if Super Admin grants it via Settings).
 
 ### Issue #13 & #14 (Combined) — Shift handoff, wallet bonus in cash, cash lifecycle & revenue calculations (2026-08-03)
 - **Problem 1 (Wallet bonus bleeding into cash drawer):** Wallet top-up bonus (₹100 for a ₹1000 top-up) was being added to the "Cash Sales + Wallet TopUps" line, inflating Expected Drawer Total. The bonus is member wallet credit only, not actual cash the operator has.

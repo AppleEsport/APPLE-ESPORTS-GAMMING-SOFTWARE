@@ -1074,12 +1074,14 @@ function MemberDetailPanel({ member, onEdit, onTopUp, onDiscount, onEditValues, 
           >
             <Receipt className="w-4 h-4" /> Process Wallet Top-Up
           </button>
-          <button
-            onClick={() => onDiscount(member)}
-            className="w-full py-3.5 rounded-xl bg-neon-green/20 border border-neon-green/50 text-neon-green font-bold text-sm uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-neon-green/30 transition-all"
-          >
-            <Gift className="w-4 h-4" /> Extra Bonus
-          </button>
+          {hasDashboardAccess('member_extra_bonus') && (
+            <button
+              onClick={() => onDiscount(member)}
+              className="w-full py-3.5 rounded-xl bg-neon-green/20 border border-neon-green/50 text-neon-green font-bold text-sm uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-neon-green/30 transition-all"
+            >
+              <Gift className="w-4 h-4" /> Extra Bonus
+            </button>
+          )}
         </div>
 
         {/* Login credentials — compact */}

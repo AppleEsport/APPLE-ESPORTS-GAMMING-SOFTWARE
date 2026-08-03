@@ -24,6 +24,8 @@ export default function EodDashboardPage() {
   const [pcs, setPcs] = useState([]);
   const [allBills, setAllBills] = useState([]);
   const [selectedPcId, setSelectedPcId] = useState(null);
+  const [lastUpdated, setLastUpdated] = useState(Date.now());
+  const [isUpdating, setIsUpdating] = useState(false);
 
   const targetBranchId = isSuperAdmin ? activeBranch?.id : user?.branchId;
 
@@ -33,9 +35,8 @@ export default function EodDashboardPage() {
       return;
     }
 
-    setIsLoading(true);
+    setIsUpdating(true);
     setError(null);
-    setValidation(null);
 
     try {
       // First try to fetch historical snapshot
@@ -43,14 +44,15 @@ export default function EodDashboardPage() {
         const { data: historyData } = await api.get('/eod/history', {
           params: { date: targetDate, branchId: targetBranchId }
         });
-        
+
         setReport(historyData.data.data); // historyData.data is EodSnapshotDto, .data is EodReportDto
         setIsHistorical(true);
       } catch (historyErr) {
         if (historyErr.response?.status === 404) {
           // No snapshot exists. It is either today or an unfinalized past date.
           setIsHistorical(false);
-          
+          setValidation(null);
+
           // Fetch Preview
           const { data: previewData } = await api.get('/eod/preview', {
             params: { date: targetDate, branchId: targetBranchId }
@@ -80,11 +82,13 @@ export default function EodDashboardPage() {
       ]);
       setPcs(pcsRes.data?.data || []);
       setAllBills(billsRes.data?.data?.allBills || []);
+      setLastUpdated(Date.now());
 
     } catch (err) {
       setError(err.response?.data?.error || err.response?.data?.message || 'Failed to fetch EOD data.');
     } finally {
       setIsLoading(false);
+      setIsUpdating(false);
     }
   }, [targetDate, targetBranchId, isSuperAdmin]);
 
@@ -92,19 +96,34 @@ export default function EodDashboardPage() {
     fetchEodData();
   }, [fetchEodData]);
 
-  // Real-time EOD updates via SignalR
+  // Real-time EOD updates via SignalR + aggressive polling
   useEffect(() => {
     if (!connected || isHistorical) return;
 
-    // Listen to changes that impact EOD (Bills, Cash, Sessions)
-    const unsubCash = subscribe(SIGNALR_HUBS.CASH, 'CashRegisterUpdated', () => fetchEodData());
-    const unsubBill = subscribe(SIGNALR_HUBS.BILLING, 'BillUpdated', () => fetchEodData());
-    const unsubSession = subscribe(SIGNALR_HUBS.SESSIONS, 'SessionUpdated', () => fetchEodData());
+    // Immediate refresh on changes
+    const unsubCash = subscribe(SIGNALR_HUBS.CASH, 'CashRegisterUpdated', () => {
+      console.log('💰 Cash updated - refetching EOD');
+      fetchEodData();
+    });
+    const unsubBill = subscribe(SIGNALR_HUBS.BILLING, 'BillUpdated', () => {
+      console.log('📄 Bill updated - refetching EOD');
+      fetchEodData();
+    });
+    const unsubSession = subscribe(SIGNALR_HUBS.SESSIONS, 'SessionUpdated', () => {
+      console.log('⏱️ Session updated - refetching EOD');
+      fetchEodData();
+    });
+
+    // Aggressive polling every 3 seconds to ensure real-time accuracy
+    const pollInterval = setInterval(() => {
+      fetchEodData();
+    }, 3000);
 
     return () => {
       unsubCash();
       unsubBill();
       unsubSession();
+      clearInterval(pollInterval);
     };
   }, [connected, subscribe, SIGNALR_HUBS.CASH, SIGNALR_HUBS.BILLING, SIGNALR_HUBS.SESSIONS, fetchEodData, isHistorical]);
 
@@ -153,7 +172,7 @@ export default function EodDashboardPage() {
 
     const creditsPending = (report.creditLogs?.filter(c => c.status?.toLowerCase() === 'pending')
       .reduce((acc, c) => acc + c.creditAmount, 0) || 0).toFixed(2);
-    const overallEndTotal = (report.paymentMethods.totalCash + report.paymentMethods.totalOnline + report.paymentMethods.totalWalletDeductions).toFixed(2);
+    const overallEndTotal = (report.paymentMethods.totalCash + report.paymentMethods.totalOnline + report.paymentMethods.totalWalletDeductions + report.paymentMethods.totalWalletTopUps).toFixed(2);
 
     y = addTable(doc, y, {
       title, subtitle,
@@ -162,7 +181,8 @@ export default function EodDashboardPage() {
       body: [
         ['Cash', `Rs ${report.paymentMethods.totalCash}`],
         ['Online', `Rs ${report.paymentMethods.totalOnline}`],
-        ['Wallet', `Rs ${report.paymentMethods.totalWalletDeductions}`],
+        ['Wallet Deductions (Gaming/Food)', `Rs ${report.paymentMethods.totalWalletDeductions}`],
+        ['Wallet Top-Ups (Cash Collected)', `Rs ${report.paymentMethods.totalWalletTopUps}`],
         ['Credits Pending', `-Rs ${creditsPending}`],
         ['Overall End Total', `Rs ${overallEndTotal}`],
         ['Total Sessions', String(report.operations.totalSessions)],
@@ -226,7 +246,7 @@ export default function EodDashboardPage() {
       <div className="flex justify-between items-center bg-bg-2 p-6 rounded-xl border border-border">
         <PageHeader
           title="End of Day Dashboard"
-          subtitle={isHistorical ? 'Immutable Financial Snapshot' : 'Live Preview & Finalization'}
+          subtitle={isHistorical ? 'Immutable Financial Snapshot' : 'Live Preview & Real-Time Updates'}
           icon="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
         />
         <div className="flex flex-col items-end gap-2">
@@ -245,11 +265,23 @@ export default function EodDashboardPage() {
               <Download className="w-3.5 h-3.5" /> Download PDF
             </button>
           </div>
-          {isHistorical && (
-            <span className="bg-neon-green/10 text-neon-green px-3 py-1 rounded border border-neon-green/30 text-xs font-bold uppercase tracking-widest flex items-center gap-2">
-              <ShieldCheck className="w-4 h-4" /> Finalized
-            </span>
-          )}
+          <div className="flex items-center gap-3">
+            {!isHistorical && (
+              <span className={`px-3 py-1 rounded border text-xs font-bold uppercase tracking-widest flex items-center gap-1.5 transition-all ${
+                isUpdating
+                  ? 'bg-neon-blue/10 text-neon-blue border-neon-blue/30'
+                  : 'bg-neon-green/10 text-neon-green border-neon-green/30'
+              }`}>
+                <div className={`w-2 h-2 rounded-full ${isUpdating ? 'bg-neon-blue animate-pulse' : 'bg-neon-green'}`} />
+                {isUpdating ? 'Updating...' : 'Live'}
+              </span>
+            )}
+            {isHistorical && (
+              <span className="bg-neon-green/10 text-neon-green px-3 py-1 rounded border border-neon-green/30 text-xs font-bold uppercase tracking-widest flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4" /> Finalized
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
@@ -508,8 +540,12 @@ export default function EodDashboardPage() {
                     <span className="font-mono text-text">₹{report.paymentMethods.totalOnline}</span>
                   </div>
                   <div className="flex justify-between items-center text-sm">
-                    <span className="text-text-2">Wallet</span>
+                    <span className="text-text-2">Wallet Deductions (Gaming/Food)</span>
                     <span className="font-mono text-neon-purple">₹{report.paymentMethods.totalWalletDeductions}</span>
+                  </div>
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="text-text-2">Wallet Top-Ups (Cash Collected)</span>
+                    <span className="font-mono text-neon-green">+ ₹{report.paymentMethods.totalWalletTopUps}</span>
                   </div>
                   <div className="flex justify-between items-center text-sm">
                     <span className="text-text-2">Credits Pending</span>
@@ -517,11 +553,11 @@ export default function EodDashboardPage() {
                       -₹{(report.creditLogs?.filter(c => c.status?.toLowerCase() === 'pending').reduce((acc, c) => acc + c.creditAmount, 0) || 0).toFixed(2)}
                     </span>
                   </div>
-                  
+
                   <div className="flex justify-between items-center text-sm bg-neon-blue/10 p-4 rounded-lg border border-neon-blue/30 mt-6">
                     <span className="font-bold text-neon-blue uppercase tracking-widest text-xs">Overall End Total</span>
                     <span className="font-mono font-bold text-xl text-neon-blue">
-                      ₹{(report.paymentMethods.totalCash + report.paymentMethods.totalOnline + report.paymentMethods.totalWalletDeductions).toFixed(2)}
+                      ₹{(report.paymentMethods.totalCash + report.paymentMethods.totalOnline + report.paymentMethods.totalWalletDeductions + report.paymentMethods.totalWalletTopUps).toFixed(2)}
                     </span>
                   </div>
                 </div>
