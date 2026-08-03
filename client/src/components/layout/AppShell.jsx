@@ -15,9 +15,48 @@ import ShiftEndModal from '../shift/ShiftEndModal';
 import GlobalFoodOrderListener from './GlobalFoodOrderListener';
 import GlobalNotificationListener from './GlobalNotificationListener';
 
+const SIDEBAR_WIDTH_KEY = 'sidebar_width';
+const SIDEBAR_COLLAPSED_KEY = 'sidebar_collapsed';
+const DEFAULT_SIDEBAR_WIDTH = 240;
+
 export default function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true'
+  );
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const saved = parseInt(localStorage.getItem(SIDEBAR_WIDTH_KEY), 10);
+    return Number.isFinite(saved) ? saved : DEFAULT_SIDEBAR_WIDTH;
+  });
   const { user, isOperator, logout } = useAuth();
+
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(sidebarCollapsed));
+  }, [sidebarCollapsed]);
+
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth));
+  }, [sidebarWidth]);
+
+  // Expose the sidebar's current desktop offset as a CSS var so other
+  // viewport-fixed elements (e.g. SessionActivityLog) can track it instead
+  // of assuming a hardcoded 240px sidebar width.
+  useEffect(() => {
+    document.documentElement.style.setProperty(
+      '--sidebar-offset',
+      sidebarCollapsed ? '0px' : `${sidebarWidth}px`
+    );
+  }, [sidebarCollapsed, sidebarWidth]);
+
+  // On large screens the hamburger collapses/expands the sidebar in place;
+  // on small screens it opens/closes the off-canvas drawer.
+  const handleToggleSidebar = useCallback(() => {
+    if (typeof window !== 'undefined' && window.innerWidth >= 1024) {
+      setSidebarCollapsed((c) => !c);
+    } else {
+      setSidebarOpen((o) => !o);
+    }
+  }, []);
 
   // ── Shift Start Modal: show for operators on first login ──
   const [showShiftStart, setShowShiftStart] = useState(false);
@@ -80,7 +119,7 @@ export default function AppShell() {
     <div className="min-h-screen bg-bg flex flex-col">
       {/* Fixed Topbar */}
       <Topbar
-        onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
+        onToggleSidebar={handleToggleSidebar}
         sidebarOpen={sidebarOpen}
         onLogoutClick={handleRequestLogout}
       />
@@ -91,6 +130,9 @@ export default function AppShell() {
         <Sidebar
           isOpen={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
+          collapsed={sidebarCollapsed}
+          width={sidebarWidth}
+          onWidthChange={setSidebarWidth}
         />
 
         {/* Main content area */}

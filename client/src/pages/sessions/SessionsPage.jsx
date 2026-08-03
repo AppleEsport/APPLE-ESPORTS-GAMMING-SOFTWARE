@@ -6,11 +6,14 @@ import { useSocket } from '../../contexts/SocketContext';
 import api from '../../config/api';
 
 import PcGrid from '../../components/sessions/PcGrid';
-import SessionActionModal from '../../components/sessions/SessionActionModal';
+import PcDetailPanel from '../../components/sessions/PcDetailPanel';
+import QuickStartModal from '../../components/sessions/QuickStartModal';
+import SessionActivityLog from '../../components/sessions/SessionActivityLog';
 import { useToast } from '../../components/ui/Toast';
 import { startReservedSession, overrideReservation } from '../../api/reservations.api';
 import { getRangeReport } from '../../api/food.api';
 import { getActiveBills, getBill, processPayment } from '../../api/billing.api';
+import { logActivity } from '../../utils/sessionLog';
 import { useNavigate } from 'react-router-dom';
 
 export default function SessionsPage() {
@@ -22,7 +25,8 @@ export default function SessionsPage() {
 
   const [pcs, setPcs] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [startModalPc, setStartModalPc] = useState(null); // PC to start session on
+  const [selectedPcId, setSelectedPcId] = useState(null); // PC shown in the detail panel
+  const [quickStartPc, setQuickStartPc] = useState(null); // PC being quick-started via double-click
 
   // Reservation Override modal states
   const [overrideData, setOverrideData] = useState(null); // { id, pcName }
@@ -31,6 +35,9 @@ export default function SessionsPage() {
 
   // Walk-in requests state
   const [walkinRequests, setWalkinRequests] = useState([]);
+
+  // Activity log height — fixed to the bottom of the viewport, adjustable via drag handle
+  const [logHeight, setLogHeight] = useState(140);
 
   const targetBranchId = isSuperAdmin ? activeBranch?.id : user?.branchId;
 
@@ -57,6 +64,7 @@ export default function SessionsPage() {
     try {
       await startReservedSession(reservationId);
       toast.success('Reserved session started successfully!');
+      logActivity('Reserved session started.', 'success');
       fetchPcs();
     } catch (err) {
       toast.error(err.response?.data?.error || err.response?.data?.message || 'Failed to start reserved session');
@@ -72,6 +80,7 @@ export default function SessionsPage() {
     try {
       await api.post(`/pc-management/${pc.id}/maintenance?enable=${enable}`);
       toast.success(enable ? `${pc.name} flagged for maintenance.` : `${pc.name} restored from maintenance.`);
+      logActivity(enable ? `${pc.name}: Flagged for maintenance.` : `${pc.name}: Restored from maintenance.`, enable ? 'warn' : 'success');
       fetchPcs();
     } catch (err) {
       toast.error(err.response?.data?.error || err.response?.data?.message || 'Failed to update maintenance status');
@@ -88,6 +97,7 @@ export default function SessionsPage() {
     try {
       await overrideReservation(overrideData.id, { reason: overrideReason.trim() });
       toast.success('Reservation overridden successfully');
+      logActivity(`${overrideData.pcName}: Reservation overridden.`, 'warn');
       setOverrideData(null);
       setOverrideReason('');
       fetchPcs();
@@ -212,6 +222,7 @@ export default function SessionsPage() {
       });
       if (res.data.success) {
         toast.success(`Walk-in session started for ${req.pcId}`);
+        logActivity(`${req.pcId}: Walk-in session approved for ${req.customerName}.`, 'success');
         setWalkinRequests(prev => prev.filter(r => r.pcId !== req.pcId));
         setPcs(current => {
           const idx = current.findIndex(p => p.id === actualPcId);
@@ -231,6 +242,7 @@ export default function SessionsPage() {
       await api.post(`/public/pcs/${req.pcId}/decline-walkin`);
       setWalkinRequests(prev => prev.filter(r => r.pcId !== req.pcId));
       toast.info(`Declined walk-in for ${req.pcId}`);
+      logActivity(`${req.pcId}: Walk-in request declined.`, 'error');
     } catch (err) {
       toast.error('Failed to decline request');
     }
@@ -280,6 +292,13 @@ export default function SessionsPage() {
     return { activeSessions, idleStations, awaitingBilling, liveRevenue };
   }, [pcs, ticker]);
 
+  // Resolve the selected PC / its pending walk-in fresh from the live lists on every render,
+  // instead of caching a snapshot — so the detail panel always reflects the latest state.
+  const selectedPc = pcs.find(p => p.id === selectedPcId) || null;
+  const selectedWalkinReq = selectedPc
+    ? walkinRequests?.find(r => r.pcId === selectedPc.name || r.pcId === selectedPc.id)
+    : null;
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -325,7 +344,7 @@ export default function SessionsPage() {
 
       {/* ── Instruction strip ── */}
       <p className="text-text-3 text-xs font-mono">
-        Click <span className="text-pc-active font-semibold">START SESSION</span> on a free station to begin. Red borders indicate active connections.
+        Click a PC to view details or start a session. <span className="text-pc-active font-semibold">Double-click</span> an idle PC to quick-start.
       </p>
 
       {/* ── Legend ── */}
@@ -337,26 +356,44 @@ export default function SessionsPage() {
         <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-pc-offline" /> Maintenance</div>
       </div>
 
-      {/* ── PC Grid ── */}
-      <PcGrid
-        pcs={pcs}
-        walkinRequests={walkinRequests}
-        onStartSession={(pc) => setStartModalPc(pc)}
-        onRefresh={fetchPcs}
-        onStartReservedSession={handleStartReservedSession}
-        onOverrideReservation={handleOverrideClick}
-        onApproveWalkin={handleApproveWalkin}
-        onDeclineWalkin={handleDeclineWalkin}
-        onFlagMaintenance={handleFlagMaintenance}
-        onCreditClick={handleCreditClick}
-      />
+      {/* ── Detail panel + PC Grid ── */}
+      <div className="flex flex-col lg:flex-row gap-4 items-start" style={{ paddingBottom: logHeight + 16 }}>
+        <div className="w-full lg:w-[320px] flex-shrink-0 lg:sticky lg:top-4">
+          <PcDetailPanel
+            pc={selectedPc}
+            walkinReq={selectedWalkinReq}
+            onClose={() => setSelectedPcId(null)}
+            onRefresh={fetchPcs}
+            onStartReservedSession={handleStartReservedSession}
+            onOverrideReservation={handleOverrideClick}
+            onApproveWalkin={handleApproveWalkin}
+            onDeclineWalkin={handleDeclineWalkin}
+            onFlagMaintenance={handleFlagMaintenance}
+            onCreditClick={handleCreditClick}
+          />
+        </div>
+        <div className="flex-1 min-w-0 w-full">
+          <PcGrid
+            pcs={pcs}
+            walkinRequests={walkinRequests}
+            selectedPcId={selectedPcId}
+            onSelectPc={(pc) => setSelectedPcId(pc.id)}
+            onQuickStart={(pc) => setQuickStartPc(pc)}
+            onRefresh={fetchPcs}
+          />
+        </div>
+      </div>
 
-      {/* ── Start Session Modal (only for new session initiation) ── */}
-      <SessionActionModal
-        pc={startModalPc}
-        onClose={() => setStartModalPc(null)}
+      {/* ── Activity Log strip (fixed to viewport bottom, resizable) ── */}
+      <SessionActivityLog height={logHeight} onHeightChange={setLogHeight} />
+
+      {/* ── Quick Start Modal (double-click on an idle PC) ── */}
+      <QuickStartModal
+        pc={quickStartPc}
+        onClose={() => setQuickStartPc(null)}
         onActionSuccess={() => {
-          setStartModalPc(null);
+          setSelectedPcId(quickStartPc?.id ?? null);
+          setQuickStartPc(null);
           fetchPcs();
         }}
       />

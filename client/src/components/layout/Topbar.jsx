@@ -93,11 +93,12 @@ export default function Topbar({ onToggleSidebar, sidebarOpen, onLogoutClick }) 
     <header id="topbar" className="bg-bg-2 border-b border-border px-4 py-2.5 flex items-center justify-between gap-3 sticky top-0 z-50">
       {/* Left: Hamburger + Logo */}
       <div className="flex items-center gap-3">
-        {/* Mobile hamburger */}
+        {/* Hamburger: toggles mobile drawer / desktop collapse */}
         <button
           onClick={onToggleSidebar}
-          className="lg:hidden text-text-2 hover:text-text p-1 -ml-1"
+          className="text-text-2 hover:text-text p-1 -ml-1"
           aria-label="Toggle sidebar"
+          title="Toggle sidebar"
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             {sidebarOpen ? (

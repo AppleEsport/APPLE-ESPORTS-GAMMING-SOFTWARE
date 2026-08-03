@@ -1,6 +1,6 @@
-import PcCard from './PcCard';
+import PcTile from './PcTile';
 
-export default function PcGrid({ pcs, walkinRequests, onStartSession, onRefresh, onStartReservedSession, onOverrideReservation, onApproveWalkin, onDeclineWalkin, onFlagMaintenance, onCreditClick }) {
+export default function PcGrid({ pcs, walkinRequests, selectedPcId, onSelectPc, onQuickStart, onRefresh }) {
   if (!pcs || pcs.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center p-12 text-center bg-bg-2 border border-border rounded-lg">
@@ -11,22 +11,18 @@ export default function PcGrid({ pcs, walkinRequests, onStartSession, onRefresh,
   }
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-4 gap-3">
+    <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 xl:grid-cols-8 gap-2.5">
       {pcs.map((pc) => {
         const walkinReq = walkinRequests?.find(r => r.pcId === pc.name || r.pcId === pc.id);
         return (
-          <PcCard
+          <PcTile
             key={pc.id}
             pc={pc}
             walkinReq={walkinReq}
-            onStartSession={onStartSession}
+            isSelected={selectedPcId === pc.id}
+            onSelect={onSelectPc}
+            onQuickStart={onQuickStart}
             onRefresh={onRefresh}
-            onStartReservedSession={onStartReservedSession}
-            onOverrideReservation={onOverrideReservation}
-            onApproveWalkin={onApproveWalkin}
-            onDeclineWalkin={onDeclineWalkin}
-            onFlagMaintenance={onFlagMaintenance}
-            onCreditClick={onCreditClick}
           />
         );
       })}

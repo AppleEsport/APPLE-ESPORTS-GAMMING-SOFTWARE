@@ -50,12 +50,12 @@ public class ReservationBackgroundService : BackgroundService
         var now = DateTimeOffset.UtcNow;
         bool changed = false;
 
-        // 1. Transition PCs to Reserved if they have an upcoming pending reservation starting in <= 15 minutes
-        var upcomingLimit = now.AddMinutes(15);
+        // 1. Transition PCs to Reserved for any pending reservation not yet past its grace period —
+        // catches PCs that were busy (Active/AwaitingBilling) when the reservation was made and have
+        // since freed up, so the floor grid reflects the booking as soon as it's possible to.
         var upcomingReservations = await db.Reservations
             .Include(r => r.Pc)
-            .Where(r => r.State == ReservationState.Pending 
-                     && r.ReservationTime <= upcomingLimit 
+            .Where(r => r.State == ReservationState.Pending
                      && r.ReservationTime > now.AddMinutes(-r.GracePeriodMin))
             .ToListAsync();
 
