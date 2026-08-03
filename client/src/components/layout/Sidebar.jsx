@@ -4,9 +4,13 @@
 // Apple Esports — collapsible sidebar with role-based visibility
 // ═══════════════════════════════════════════════════════════
 
+import { useEffect, useState, useCallback } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { ROLES, DASHBOARDS } from '../../config/constants';
+
+const MIN_SIDEBAR_WIDTH = 180;
+const MAX_SIDEBAR_WIDTH = 420;
 
 const NAV_ITEMS = [
   {
@@ -156,9 +160,36 @@ const NAV_ITEMS = [
   },
 ];
 
-export default function Sidebar({ isOpen, onClose }) {
+export default function Sidebar({ isOpen, onClose, collapsed = false, width = 240, onWidthChange }) {
   const { user, isSuperAdmin, hasDashboardAccess } = useAuth();
   const location = useLocation();
+  const [resizing, setResizing] = useState(false);
+
+  const handleResizeStart = useCallback((e) => {
+    e.preventDefault();
+    setResizing(true);
+  }, []);
+
+  useEffect(() => {
+    if (!resizing) return;
+
+    function handleMouseMove(e) {
+      const next = Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, e.clientX));
+      onWidthChange?.(next);
+    }
+    function handleMouseUp() {
+      setResizing(false);
+    }
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    document.body.classList.add('select-none', 'cursor-col-resize');
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.classList.remove('select-none', 'cursor-col-resize');
+    };
+  }, [resizing, onWidthChange]);
 
   /**
    * Check if nav item is visible to current user
@@ -184,26 +215,31 @@ export default function Sidebar({ isOpen, onClose }) {
 
       {/* Sidebar */}
       <aside
+        style={{ '--sbw': `${width}px` }}
         className={`
           fixed top-0 left-0 h-full bg-bg-2 border-r border-border z-50
-          w-[240px] flex flex-col
-          transition-transform duration-200 ease-in-out
+          flex flex-col
+          w-[var(--sbw)]
+          ${resizing ? '' : 'transition-[transform,width] duration-200 ease-in-out'}
           lg:sticky lg:top-[53px] lg:h-[calc(100vh-53px)] lg:translate-x-0
+          ${collapsed ? 'lg:w-0 lg:border-r-0 lg:overflow-hidden' : 'lg:w-[var(--sbw)]'}
           ${isOpen ? 'translate-x-0' : '-translate-x-full'}
         `}
       >
-        {/* Mobile close button */}
-        <div className="lg:hidden flex items-center justify-between p-3 border-b border-border">
-          <span className="text-xs font-heading font-semibold text-text-2 tracking-wider">NAVIGATION</span>
-          <button onClick={onClose} className="text-text-2 hover:text-text">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
+        {/* Inner content: fixed to the target width so it doesn't reflow while collapsing */}
+        <div className="flex flex-col h-full overflow-hidden" style={{ width: `${width}px`, minWidth: `${width}px` }}>
+          {/* Mobile close button */}
+          <div className="lg:hidden flex items-center justify-between p-3 border-b border-border">
+            <span className="text-xs font-heading font-semibold text-text-2 tracking-wider">NAVIGATION</span>
+            <button onClick={onClose} className="text-text-2 hover:text-text">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
 
-        {/* Navigation Links */}
-        <nav className="flex-1 overflow-y-auto py-2 px-2 scrollbar-thin">
+          {/* Navigation Links */}
+          <nav className="flex-1 overflow-y-auto py-2 px-2 scrollbar-thin">
           {NAV_ITEMS.map((section) => {
             // Permissions handle visibility instead
             // if (section.adminOnly && user?.role === ROLES.OPERATOR) return null;
@@ -275,6 +311,18 @@ export default function Sidebar({ isOpen, onClose }) {
             v2.0 · SOP Compliant
           </div>
         </div>
+        </div>
+
+        {/* Drag-to-resize handle (desktop only) */}
+        {!collapsed && (
+          <div
+            onMouseDown={handleResizeStart}
+            className="hidden lg:block absolute top-0 right-0 -mr-0.5 w-1.5 h-full cursor-col-resize hover:bg-accent/50 active:bg-accent/70 transition-colors z-10"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize sidebar"
+          />
+        )}
       </aside>
     </>
   );
