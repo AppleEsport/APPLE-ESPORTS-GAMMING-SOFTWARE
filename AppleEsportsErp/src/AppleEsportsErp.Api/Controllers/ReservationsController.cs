@@ -34,8 +34,15 @@ public class ReservationsController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> CreateReservation([FromBody] CreateReservationDto dto)
     {
-        var result = await _reservationService.CreateReservationAsync(GetBranchId(), (await this.GetOperatorIdAsync()), dto);
-        return Ok(ApiResponse<ReservationDto>.Ok(result));
+        try
+        {
+            var result = await _reservationService.CreateReservationAsync(GetBranchId(), (await this.GetOperatorIdAsync()), dto);
+            return Ok(ApiResponse<ReservationDto>.Ok(result));
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new { success = false, error = $"Reservation failed: {ex.Message}" });
+        }
     }
 
     [HttpPost("{id}/cancel")]
