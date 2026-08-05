@@ -83,6 +83,80 @@ export const printBill = async (billId, fullBillObject = null) => {
       return;
     }
 
+    if (idString.startsWith('TOPUP-')) {
+      if (!fullBillObject) {
+        alert('Cannot print wallet top-up receipt without full row data.');
+        return;
+      }
+
+      const printWindow = window.open('', '_blank', 'width=800,height=600');
+      if (!printWindow) {
+        alert('Please allow popups to print bills.');
+        return;
+      }
+
+      const html = `
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>Wallet Top-Up Receipt</title>
+            <style>
+              body {
+                font-family: 'Courier New', Courier, monospace;
+                width: 80mm;
+                margin: 0 auto;
+                padding: 10px;
+                color: black;
+                background: white;
+                font-size: 12px;
+              }
+              .text-center { text-align: center; }
+              .flex { display: flex; justify-content: space-between; }
+              .border-b { border-bottom: 1px dashed black; padding-bottom: 5px; margin-bottom: 5px; }
+              .font-bold { font-weight: bold; }
+              @media print {
+                body { margin: 0; padding: 0; }
+                @page { margin: 0; }
+              }
+            </style>
+          </head>
+          <body>
+            <div class="text-center border-b">
+              <h2 style="margin:0; font-size: 18px;">APPLE ESPORTS</h2>
+              <p style="margin:2px 0;">Gaming Cafe</p>
+              <p style="margin:2px 0; font-size: 10px;">WALLET TOP-UP RECEIPT</p>
+            </div>
+            <div class="border-b" style="margin-top: 5px;">
+              <div class="flex"><span>Ref:</span><span>${idString}</span></div>
+              <div class="flex"><span>Date:</span><span>${new Date(fullBillObject.date).toLocaleString()}</span></div>
+              <div class="flex"><span>Customer:</span><span>${fullBillObject.customer || 'Walk-in'}</span></div>
+              <div class="flex"><span>Payment:</span><span>${fullBillObject.paymentType || '-'}</span></div>
+              <div class="flex"><span>Operator:</span><span>${fullBillObject.operator || 'Admin'}</span></div>
+            </div>
+            <div class="border-b">
+              <div class="flex font-bold" style="font-size: 14px; margin-top: 5px;">
+                <span>AMOUNT ADDED:</span>
+                <span>${Number(fullBillObject.totalRevenue || 0).toFixed(2)}</span>
+              </div>
+              ${fullBillObject.sessionNotes ? `<div class="text-center" style="margin-top: 5px; font-size: 10px;">${fullBillObject.sessionNotes}</div>` : ''}
+            </div>
+            <div class="text-center" style="margin-top: 10px;">
+              <p style="margin:2px 0;">Thank you!</p>
+            </div>
+            <script>
+              setTimeout(() => {
+                window.print();
+                window.close();
+              }, 500);
+            </script>
+          </body>
+        </html>
+      `;
+      printWindow.document.write(html);
+      printWindow.document.close();
+      return;
+    }
+
     const isGuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idString);
     const endpoint = isGuid ? `/bills/${idString}` : `/bills/by-number/${idString}`;
     const res = await api.get(endpoint);
