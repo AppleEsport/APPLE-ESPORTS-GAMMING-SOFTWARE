@@ -340,9 +340,9 @@ export default function ReservationsPage() {
             <h3 className="font-heading font-bold text-text uppercase tracking-wider text-xs">New Reservation</h3>
           </div>
 
-          <form onSubmit={handleFormSubmit} className="flex-1 overflow-y-auto p-4 space-y-3.5">
+          <form onSubmit={handleFormSubmit} className="flex-1 overflow-hidden p-3 space-y-2 text-sm">
             {/* Member Booking Toggle */}
-            <div className="flex items-center justify-between bg-bg-3/50 border border-border rounded-lg px-3 py-2">
+            <div className="flex items-center justify-between bg-bg-3/50 border border-border rounded px-2 py-1.5">
               <div className="flex items-center gap-2">
                 <UserCheck className={`w-4 h-4 ${isMemberBooking ? 'text-neon-purple' : 'text-text-3'}`} />
                 <span className="text-[10px] font-mono font-semibold text-text-2 uppercase tracking-wider">
@@ -486,72 +486,32 @@ export default function ReservationsPage() {
 
             {/* STEP 2: Plan Selection — shown only when PC selected and NOT member booking */}
             {!isMemberBooking && (
-              <div className="space-y-2">
-                <label className="text-[10px] font-mono font-semibold text-text-2 uppercase tracking-wider flex items-center gap-1">
-                  <Clock className="w-3 h-3 text-text-3" /> ② Select Plan
+              <div className="space-y-1">
+                <label className="text-[10px] font-mono font-semibold text-text-2 uppercase tracking-wider block">
+                  ② Select Plan
                 </label>
-
                 {!form.pcId ? (
-                  <div className="rounded border border-border bg-bg-3/40 p-3 text-center text-[10px] text-text-3 font-mono">
-                    ← Select a PC above to see available plans
-                  </div>
+                  <div className="text-[9px] text-text-3 font-mono">← Select PC first</div>
                 ) : pcPlansLoading ? (
-                  <div className="flex items-center justify-center p-4">
-                    <div className="w-4 h-4 border border-neon-purple border-t-transparent rounded-full animate-spin" />
-                    <span className="ml-2 text-[10px] text-text-3 font-mono">Loading plans...</span>
-                  </div>
-                ) : (() => {
-                  const selectedPc = pcs.find(p => p.id === form.pcId);
-                  const isConfigured = selectedPc?.monitorHz && selectedPc.monitorHz.trim() !== '';
-
-                  if (!isConfigured) {
-                    // Not Configured PC — only show Postpaid
-                    return (
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-2 rounded border border-orange-500/40 bg-orange-500/10 px-3 py-2">
-                          <span className="text-orange-400 text-xs">⚠</span>
-                          <span className="text-[10px] text-orange-300 font-mono">This PC has no Hz configured. EXE setup not completed. Only Postpaid available.</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setForm(f => ({ ...f, durationMin: 0, advanceDeposit: 0, selectedTier: '' }))}
-                          className={`w-full p-2 rounded border transition-all flex flex-col items-center justify-center gap-1 ${
-                            form.durationMin === 0 ? 'bg-neon-purple/20 border-neon-purple text-text shadow-[0_0_10px_rgba(168,85,247,0.2)]' : 'bg-bg-3 border-border hover:border-text-3 text-text-2'
-                          }`}
-                        >
-                          <span className="font-mono font-bold text-[10px]">Postpaid</span>
-                          <span className="text-[9px] text-accent">Pay as you go</span>
-                        </button>
-                      </div>
-                    );
-                  }
-
-                  return (
-                    <div className="grid grid-cols-2 lg:grid-cols-3 gap-2 max-h-48 overflow-y-auto pr-1 custom-scrollbar">
-                      {pcPlans.map(plan => {
-                        const isSelected = form.durationMin === plan.duration && !plan.isPostpaid
-                          ? true
-                          : plan.isPostpaid && form.durationMin === null;
-                        return (
-                          <button
-                            key={plan.id}
-                            type="button"
-                            onClick={() => setForm(f => ({ ...f, durationMin: plan.isPostpaid ? null : plan.duration, advanceDeposit: plan.price, selectedTier: '' }))}
-                            className={`p-2 rounded border transition-all flex flex-col items-center justify-center gap-1 ${
-                              isSelected
-                                ? 'bg-neon-purple/20 border-neon-purple text-text shadow-[0_0_10px_rgba(168,85,247,0.2)]'
-                                : 'bg-bg-3 border-border hover:border-text-3 text-text-2'
-                            }`}
-                          >
-                            <span className="font-mono font-bold text-[10px] text-center">{plan.name}</span>
-                            {plan.price > 0 && <span className="text-[10px] text-accent">₹{plan.price}</span>}
-                            {plan.isPostpaid && <span className="text-[9px] text-accent">Pay as you go</span>}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  );
-                })()}
+                  <div className="text-[9px] text-text-3">Loading...</div>
+                ) : (
+                  <select
+                    value={form.durationMin !== null ? form.durationMin : 'postpaid'}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      const plan = pcPlans.find(p => val === 'postpaid' ? p.isPostpaid : p.duration === parseInt(val));
+                      if (plan) setForm(f => ({ ...f, durationMin: plan.isPostpaid ? null : plan.duration, advanceDeposit: plan.price }));
+                    }}
+                    className="w-full bg-bg-3 border border-neon-purple/40 rounded px-2 py-1.5 text-xs text-text focus:border-neon-purple focus:outline-none"
+                  >
+                    <option value="">-- Select a plan --</option>
+                    {pcPlans.map(plan => (
+                      <option key={plan.id} value={plan.isPostpaid ? 'postpaid' : plan.duration}>
+                        {plan.name} {plan.price > 0 ? `₹${plan.price}` : '(Pay as you go)'}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
             )}
 
