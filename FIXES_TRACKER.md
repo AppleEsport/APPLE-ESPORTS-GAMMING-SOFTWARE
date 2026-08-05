@@ -23,7 +23,13 @@ How to use this file:
 
 ## New Issues (not fixed yet)
 
-(none currently)
+### Issue #19
+- Where: Reservation form → ACTIVE RESERVATIONS LIST
+- What I did: Created a reservation at 04:36, form reset after success
+- What happened: Reservation shows incorrect time - displayed as 09:36 instead of 04:36 (5 hour shift)
+- What should happen instead: Reservation time should display exactly as entered (04:36)
+- Priority: Urgent (blocks all reservations - times are always wrong)
+- Additional note: Form time field didn't reset to current time after creation (showed 04:36 instead of current time)
 
 ## Fixed (history log)
 
