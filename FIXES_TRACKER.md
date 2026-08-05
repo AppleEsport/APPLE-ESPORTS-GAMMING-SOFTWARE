@@ -23,9 +23,12 @@ How to use this file:
 
 ## New Issues (not fixed yet)
 
----
-
----
+### Issue #18
+- Where: PC Card (CTL-PC-09, Occupied session)
+- What I did: Created a reservation at ~23:00, then opened an open-ended session on that PC
+- What happened: Warning shows "Open-ended session might overlap with upcoming reservation starting at 18:09" — but the reservation is at 23:00, not 18:09
+- What should happen instead: Warning should show the correct reservation time (23:00 or whenever it actually is)
+- Priority: Normal
 
 ## Fixed (history log)
 
