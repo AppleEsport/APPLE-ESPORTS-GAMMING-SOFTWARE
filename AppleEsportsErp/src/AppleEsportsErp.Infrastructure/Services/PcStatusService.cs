@@ -145,7 +145,7 @@ public class PcStatusService : IPcStatusService
                         if (session.EndTime.Value > res.ReservationTime)
                         {
                             dto.HasOverrunWarning = true;
-                            dto.OverrunWarningMessage = $"Active session duration extends past reservation time ({res.ReservationTime:HH:mm}).";
+                            dto.OverrunWarningMessage = $"Active session duration extends past reservation time ({res.ReservationTime.DateTime:HH:mm}).";
                         }
                     }
                     else
@@ -153,7 +153,7 @@ public class PcStatusService : IPcStatusService
                         if (res.ReservationTime <= now.AddMinutes(30))
                         {
                             dto.HasOverrunWarning = true;
-                            dto.OverrunWarningMessage = $"Open-ended session might overlap with upcoming reservation starting at {res.ReservationTime:HH:mm}.";
+                            dto.OverrunWarningMessage = $"Open-ended session might overlap with upcoming reservation starting at {res.ReservationTime.DateTime:HH:mm}.";
                         }
                     }
                 }
