@@ -40,7 +40,11 @@ export default function ReservationsPage() {
   // Form states
   const getDefaultDateTime = () => {
     const now = new Date();
-    const date = now.toISOString().split('T')[0];
+    // Use local date, not UTC (toISOString converts to UTC which gives wrong date in IST)
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const date = `${year}-${month}-${day}`;
     const hours = String(now.getHours()).padStart(2, '0');
     const minutes = String(now.getMinutes()).padStart(2, '0');
     const time = `${hours}:${minutes}`;
