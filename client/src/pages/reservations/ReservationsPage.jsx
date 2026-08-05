@@ -247,9 +247,9 @@ export default function ReservationsPage() {
 
     setSubmittingForm(true);
     try {
-      // Send reservation time as ISO string with IST timezone offset
-      // Let backend parse and handle the timezone
-      const reservationTime = `${form.date}T${form.time}:00+05:30`;
+      // Send reservation time as simple ISO datetime (no timezone conversion)
+      // Backend will interpret as-is based on server's timezone
+      const reservationTime = `${form.date}T${form.time}:00`;
 
       await createReservation({
         pcId: form.pcId,
