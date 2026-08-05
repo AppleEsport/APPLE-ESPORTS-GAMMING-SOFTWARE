@@ -256,7 +256,7 @@ export default function ReservationsPage() {
         customerName: form.customerName.trim(),
         memberId: selectedMember?.id || null,
         reservationTime: reservationTime,
-        durationMin: isMemberBooking ? null : Number(form.durationMin),
+        durationMin: isMemberBooking ? null : (form.durationMin !== null ? Number(form.durationMin) : null),
         advanceDeposit: isMemberBooking ? 0 : Number(form.advanceDeposit),
         gracePeriodMin: Number(form.gracePeriodMin),
         notes: form.notes.trim()
@@ -536,7 +536,7 @@ export default function ReservationsPage() {
                           <button
                             key={plan.id}
                             type="button"
-                            onClick={() => setForm(f => ({ ...f, durationMin: plan.isPostpaid ? 0 : plan.duration, advanceDeposit: plan.price, selectedTier: '' }))}
+                            onClick={() => setForm(f => ({ ...f, durationMin: plan.isPostpaid ? null : plan.duration, advanceDeposit: plan.price, selectedTier: '' }))}
                             className={`p-2 rounded border transition-all flex flex-col items-center justify-center gap-1 ${
                               isSelected
                                 ? 'bg-neon-purple/20 border-neon-purple text-text shadow-[0_0_10px_rgba(168,85,247,0.2)]'
