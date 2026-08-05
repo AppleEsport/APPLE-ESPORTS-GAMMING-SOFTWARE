@@ -11,10 +11,9 @@ import {
   getActiveReservations,
   createReservation,
   cancelReservation,
-  startReservedSession,
-  overrideReservation
+  startReservedSession
 } from '../../api/reservations.api';
-import { Calendar, User, Clock, IndianRupee, FileText, Ban, Play, ShieldAlert, CheckCircle, UserCheck, Search } from 'lucide-react';
+import { Calendar, User, Clock, IndianRupee, FileText, Ban, Play, CheckCircle, UserCheck, Search } from 'lucide-react';
 
 export default function ReservationsPage() {
   const { isSuperAdmin, user } = useAuth();
@@ -89,10 +88,6 @@ export default function ReservationsPage() {
   const [cancelData, setCancelData] = useState(null); // { id, customerName }
   const [cancelReason, setCancelReason] = useState('');
   const [cancelLoading, setCancelLoading] = useState(false);
-
-  const [overrideData, setOverrideData] = useState(null); // { id, pcName }
-  const [overrideReason, setOverrideReason] = useState('');
-  const [overrideLoading, setOverrideLoading] = useState(false);
 
   // ── Member search with debounce ──
   useEffect(() => {
@@ -317,32 +312,6 @@ export default function ReservationsPage() {
     }
   };
 
-  // ── Actions: Override ──
-  const handleOverrideClick = (res) => {
-    const matchedPc = pcs.find(p => p.id === res.pcId);
-    setOverrideData({ id: res.id, pcName: matchedPc?.name || 'PC' });
-    setOverrideReason('');
-  };
-
-  const handleOverrideSubmit = async (e) => {
-    e.preventDefault();
-    if (!overrideReason.trim()) {
-      toast.error('Override reason is required');
-      return;
-    }
-    setOverrideLoading(true);
-    try {
-      await overrideReservation(overrideData.id, { reason: overrideReason.trim() });
-      toast.success('Reservation overridden successfully');
-      setOverrideData(null);
-      fetchReservationsList();
-      fetchPcsAndSessions();
-    } catch (err) {
-      toast.error(err.response?.data?.error || err.response?.data?.message || 'Failed to override reservation');
-    } finally {
-      setOverrideLoading(false);
-    }
-  };
 
   return (
     <div className="flex flex-col gap-4">
@@ -716,13 +685,6 @@ export default function ReservationsPage() {
                             <Play className="w-3.5 h-3.5" /> Start
                           </button>
                           <button
-                            onClick={() => handleOverrideClick(res)}
-                            title="Admin Override"
-                            className="p-2 border border-neon-orange/40 bg-neon-orange/10 text-neon-orange rounded hover:bg-neon-orange/20 transition-colors flex items-center gap-1.5 text-xs font-semibold"
-                          >
-                            <ShieldAlert className="w-3.5 h-3.5" /> Override
-                          </button>
-                          <button
                             onClick={() => handleCancelClick(res)}
                             title="Cancel Reservation"
                             className="p-2 border border-neon-red/40 bg-neon-red/10 text-neon-red rounded hover:bg-neon-red/20 transition-colors flex items-center gap-1.5 text-xs font-semibold"
@@ -796,61 +758,6 @@ export default function ReservationsPage() {
         </div>
       )}
 
-      {/* ── Override Reservation Modal ── */}
-      {overrideData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-[fadeIn_0.15s_ease-out]">
-          <div className="w-full max-w-sm bg-bg-2 border border-border rounded-xl shadow-2xl overflow-hidden">
-            <div className="px-5 py-4 border-b border-border bg-bg-3 flex items-center justify-between">
-              <div>
-                <h2 className="font-heading font-bold text-text uppercase tracking-wider text-sm flex items-center gap-2">
-                  <ShieldAlert className="w-4 h-4 text-neon-orange animate-bounce" />
-                  Override Reservation — {overrideData.pcName}
-                </h2>
-                <p className="text-text-3 text-[10px] font-mono mt-0.5">
-                  An audit log entry will document this override action.
-                </p>
-              </div>
-              <button onClick={() => setOverrideData(null)} className="text-text-3 hover:text-text text-xl">&times;</button>
-            </div>
-            <form onSubmit={handleOverrideSubmit} className="p-5 space-y-4">
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-mono font-semibold text-text-2 uppercase tracking-wider block">
-                  Mandatory Reason for Override *
-                </label>
-                <textarea
-                  value={overrideReason}
-                  onChange={(e) => setOverrideReason(e.target.value)}
-                  placeholder="Provide detailed explanation..."
-                  rows={3}
-                  className="w-full bg-bg-3 border border-border rounded px-3 py-2 text-xs text-text placeholder-text-3 focus:border-neon-orange focus:outline-none transition-colors resize-none"
-                  required
-                  autoFocus
-                />
-              </div>
-              <div className="flex justify-end gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => setOverrideData(null)}
-                  className="px-4 py-2 border border-border bg-transparent text-text-2 rounded text-xs font-semibold hover:bg-bg-3 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={overrideLoading || !overrideReason.trim()}
-                  className="px-4 py-2 bg-neon-orange/10 border border-neon-orange/50 text-neon-orange rounded text-xs font-semibold hover:bg-neon-orange/20 transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
-                >
-                  {overrideLoading ? (
-                    <span className="w-3.5 h-3.5 border border-current border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    'Override PC'
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
