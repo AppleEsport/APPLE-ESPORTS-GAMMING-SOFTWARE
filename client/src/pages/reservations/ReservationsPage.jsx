@@ -689,7 +689,12 @@ export default function ReservationsPage() {
 
                         <div className="flex items-center gap-4 text-[10px] text-text-3 font-mono">
                           <span>Date: {new Date(res.reservationTime).toLocaleDateString()}</span>
-                          <span>Time: {new Date(res.reservationTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })}</span>
+                          <span>Time: {(() => {
+                            const date = new Date(res.reservationTime);
+                            const hours = String(date.getHours()).padStart(2, '0');
+                            const minutes = String(date.getMinutes()).padStart(2, '0');
+                            return `${hours}:${minutes}`;
+                          })()}</span>
                           <span>Duration: {res.durationMin} Min</span>
                         </div>
 
