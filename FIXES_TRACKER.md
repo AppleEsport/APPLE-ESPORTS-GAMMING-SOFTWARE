@@ -23,14 +23,16 @@ How to use this file:
 
 ## New Issues (not fixed yet)
 
-### Issue #18
-- Where: PC Card (CTL-PC-09, Occupied session)
-- What I did: Created a reservation at ~23:00, then opened an open-ended session on that PC
-- What happened: Warning shows "Open-ended session might overlap with upcoming reservation starting at 18:09" — but the reservation is at 23:00, not 18:09
-- What should happen instead: Warning should show the correct reservation time (23:00 or whenever it actually is)
-- Priority: Normal
+(none currently)
 
 ## Fixed (history log)
+
+### Issue #18 — Reservation time displaying incorrect time (2026-08-06)
+- **Problem:** Reservation time in warning messages showed wrong time — displayed 18:09 when actual reservation was at 23:00 (4.5 hour difference, matching IST UTC+5:30 offset).
+- **Root cause:** PcStatusService.cs was calling `.ToLocalTime()` on DateTimeOffset, which converted from the DateTimeOffset's timezone to the server's local timezone. Since the server was likely UTC and the time was stored as UTC, this incorrect conversion shifted the display time backward.
+- **Fix:** Removed `.ToLocalTime()` calls on lines 148 and 156 in PcStatusService.cs. DateTimeOffset stores timezone info inherently; formatting it directly (without ToLocalTime()) preserves the correct time.
+- **Files changed:** `AppleEsportsErp/src/AppleEsportsErp.Infrastructure/Services/PcStatusService.cs`
+- **Commit:** 669a736 "fix: reservation time displaying with incorrect timezone offset (Issue #18)"
 
 ### Issue #17 — EOD & Reports Financial Data Accuracy (2026-08-03)
 - **Problem:** EOD Dashboard and Reports were not correctly reflecting financial data from all sources (Cash Desk, Online Register, Wallet Desk). Missing "Wallet Top-Ups" line in Overall Collection section, causing financial totals to be incomplete and inaccurate.

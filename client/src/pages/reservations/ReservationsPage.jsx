@@ -39,16 +39,28 @@ export default function ReservationsPage() {
   const [showMemberDropdown, setShowMemberDropdown] = useState(false);
 
   // Form states
-  const [form, setForm] = useState({
-    customerName: '',
-    pcId: '',
-    date: new Date().toISOString().split('T')[0],
-    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }),
-    durationMin: null,
-    advanceDeposit: 0,
-    gracePeriodMin: 15,
-    notes: '',
-    selectedTier: ''
+  const getDefaultDateTime = () => {
+    const now = new Date();
+    const date = now.toISOString().split('T')[0];
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const time = `${hours}:${minutes}`;
+    return { date, time };
+  };
+
+  const [form, setForm] = useState(() => {
+    const { date, time } = getDefaultDateTime();
+    return {
+      customerName: '',
+      pcId: '',
+      date,
+      time,
+      durationMin: null,
+      advanceDeposit: 0,
+      gracePeriodMin: 15,
+      notes: '',
+      selectedTier: ''
+    };
   });
   const [submittingForm, setSubmittingForm] = useState(false);
 
