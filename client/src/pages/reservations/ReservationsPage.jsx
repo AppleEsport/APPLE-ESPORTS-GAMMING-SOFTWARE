@@ -127,6 +127,12 @@ export default function ReservationsPage() {
     }
   };
 
+  // ── Reset form date/time to current on mount ──
+  useEffect(() => {
+    const { date, time } = getDefaultDateTime();
+    setForm(prev => ({ ...prev, date, time }));
+  }, []);
+
   // ── Fetch Reservations & PCs ──
   const fetchReservationsList = useCallback(async () => {
     if (!targetBranchId) return;
