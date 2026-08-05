@@ -171,11 +171,16 @@ export default function ReportsPage() {
     y = addTable(doc, y, {
       title, subtitle,
       heading: 'Complete Billing Audit Logs',
-      head: ['Date/Time', 'Bill Number', 'Operator', 'Customer', 'Payment', 'Gaming', 'Food', 'Discount', 'Total'],
+      head: ['Date', 'PC Number', 'Start Time', 'End Time', 'Customer', 'Payment', 'Gaming', 'Food', 'Discount', 'Total', 'Note', 'Operator'],
       body: (reportData.allBills || []).map(b => [
-        new Date(b.date).toLocaleString(), b.billId, b.operator, b.customer, b.paymentType,
+        new Date(b.date).toLocaleDateString(),
+        b.pcName || '-',
+        b.sessionStartTime ? new Date(b.sessionStartTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true }) : '-',
+        b.sessionEndTime ? new Date(b.sessionEndTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true }) : '-',
+        b.customer, b.paymentType,
         `Rs ${b.gamingRevenue.toFixed(2)}`, `Rs ${b.foodRevenue.toFixed(2)}`,
-        b.discount > 0 ? `-Rs ${b.discount.toFixed(2)}` : '-', `Rs ${b.totalRevenue.toFixed(2)}`
+        b.discount > 0 ? `-Rs ${b.discount.toFixed(2)}` : '-', `Rs ${b.totalRevenue.toFixed(2)}`,
+        b.sessionNotes || '-', b.operator
       ]),
     });
 
@@ -526,27 +531,34 @@ export default function ReportsPage() {
             <table className="w-full text-left border-collapse text-xs whitespace-nowrap">
               <thead>
                 <tr className="border-b border-border text-text-3 uppercase tracking-wider font-bold text-[10px]">
-                  <th className="py-3 px-4">Date/Time</th>
-                  <th className="py-3 px-4">Bill Number</th>
-                  <th className="py-3 px-4">Operator</th>
+                  <th className="py-3 px-4">Date</th>
+                  <th className="py-3 px-4">PC Number</th>
+                  <th className="py-3 px-4">Start Time</th>
+                  <th className="py-3 px-4">End Time</th>
                   <th className="py-3 px-4">Customer</th>
                   <th className="py-3 px-4 text-center">Payment</th>
                   <th className="py-3 px-4 text-right">Gaming</th>
                   <th className="py-3 px-4 text-right">Food</th>
                   <th className="py-3 px-4 text-right">Discount</th>
                   <th className="py-3 px-4 text-right">Total</th>
-                  <th className="py-3 px-4">Notes</th>
+                  <th className="py-3 px-4">Note</th>
+                  <th className="py-3 px-4">Operator</th>
                   <th className="py-3 px-4 text-center">Print</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/40 font-mono">
                 {reportData.allBills.map(bill => (
                   <tr key={bill.billId} className="hover:bg-bg-3/40 transition-colors">
-                    <td className="py-3 px-4 text-text-2 flex items-center gap-1">
-                      {new Date(bill.date).toLocaleString()}
+                    <td className="py-3 px-4 text-text-2">
+                      {new Date(bill.date).toLocaleDateString()}
                     </td>
-                    <td className="py-3 px-4 text-text font-bold">{bill.billId}</td>
-                    <td className="py-3 px-4 text-neon-blue font-bold">{bill.operator}</td>
+                    <td className="py-3 px-4 text-text font-bold">{bill.pcName || '-'}</td>
+                    <td className="py-3 px-4 text-text-2">
+                      {bill.sessionStartTime ? new Date(bill.sessionStartTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true }) : '-'}
+                    </td>
+                    <td className="py-3 px-4 text-text-2">
+                      {bill.sessionEndTime ? new Date(bill.sessionEndTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true }) : '-'}
+                    </td>
                     <td className="py-3 px-4 text-text-2 font-sans">{bill.customer}</td>
                     <td className="py-3 px-4 text-center">
                       {bill.paymentType?.toUpperCase() === 'CREDIT' ? (
@@ -575,9 +587,10 @@ export default function ReportsPage() {
                     <td className="py-3 px-4 text-right text-neon-red">{bill.discount > 0 ? `-₹${bill.discount.toFixed(2)}` : '-'}</td>
                     <td className="py-3 px-4 text-right text-neon-green font-bold">₹{bill.totalRevenue.toFixed(2)}</td>
                     <td className="py-3 px-4 text-text-3 text-[10px] whitespace-pre-wrap">{bill.sessionNotes || '-'}</td>
+                    <td className="py-3 px-4 text-neon-blue font-bold">{bill.operator}</td>
                     <td className="py-3 px-4 text-center">
-                        <button 
-                          onClick={() => printBill(bill.billId || bill.id, bill)} 
+                        <button
+                          onClick={() => printBill(bill.billId || bill.id, bill)}
                           className="p-1.5 bg-bg-3 hover:bg-accent hover:text-bg transition-colors rounded-lg text-text-2 tooltip-trigger"
                           title="Print Bill"
                         >

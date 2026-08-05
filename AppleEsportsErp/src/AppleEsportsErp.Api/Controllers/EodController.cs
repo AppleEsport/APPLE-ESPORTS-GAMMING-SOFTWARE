@@ -43,7 +43,8 @@ public class EodController : ControllerBase
             .Include(b => b.DiscountByAdmin)
             .Include(b => b.Operator)
             .Include(b => b.Session)
-            .Where(b => b.BranchId == targetBranchId 
+            .Include(b => b.Pc)
+            .Where(b => b.BranchId == targetBranchId
                      && b.Status == AppleEsportsErp.Domain.Enums.BillStatus.Completed 
                      && b.CompletedAt >= startUtc 
                      && b.CompletedAt <= endUtc)
@@ -121,7 +122,7 @@ public class EodController : ControllerBase
                     ? (b.Session.EndTime.Value - b.Session.StartTime).TotalMinutes 
                     : 0,
                 PcId = b.PcId,
-                PcName = b.Pc != null ? (b.Pc.PcName ?? b.Pc.PcNumber.ToString()) : "Walk-in"
+                PcName = b.Pc != null ? b.Pc.PcNumber : "Walk-in"
             };
         })
         .OrderByDescending(b => b.Date)
@@ -160,8 +161,42 @@ public class EodController : ControllerBase
             .Cast<object>()
             .ToList();
 
+        var walletTopUps = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.WalletTransaction>()
+            .Query()
+            .Include(t => t.Member)
+            .Include(t => t.Operator)
+            .Where(t => t.BranchId == targetBranchId
+                     && t.Action == AppleEsportsErp.Domain.Enums.WalletAction.Recharge
+                     && t.CreatedAt >= startUtc
+                     && t.CreatedAt <= endUtc)
+            .ToListAsync();
+
+        var walletTopUpRows = walletTopUps
+            .Select(t => new {
+                BillId = $"TOPUP-{t.Id.ToString().Substring(0, 8).ToUpper()}",
+                Date = t.CreatedAt,
+                Operator = t.Operator != null ? t.Operator.FullName : "Unknown",
+                Customer = t.Member != null ? t.Member.FullName : "Unknown",
+                GamingRevenue = 0m,
+                FoodRevenue = 0m,
+                Discount = 0m,
+                TotalRevenue = t.Amount,
+                PaymentType = $"Wallet Top-Up ({t.PaymentType ?? "cash"})",
+                AmountPaidInitially = t.Amount,
+                CreditAmount = 0m,
+                CreditStatus = (string?)null,
+                SessionNotes = t.Reason ?? $"{t.TargetWallet} wallet top-up",
+                SessionStartTime = (DateTimeOffset?)null,
+                SessionEndTime = (DateTimeOffset?)null,
+                SessionDurationMinutes = 0d,
+                PcId = (Guid?)null,
+                PcName = "-"
+            })
+            .Cast<object>()
+            .ToList();
+
         var allBillsList = allBills.Cast<object>().ToList();
-        var combinedBills = allBillsList.Concat(clearedPastCredits)
+        var combinedBills = allBillsList.Concat(clearedPastCredits).Concat(walletTopUpRows)
             .OrderByDescending(b => ((dynamic)b).Date)
             .ToList();
 
