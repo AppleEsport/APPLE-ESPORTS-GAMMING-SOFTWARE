@@ -531,7 +531,7 @@ export default function ReservationsPage() {
                       {pcPlans.map(plan => {
                         const isSelected = form.durationMin === plan.duration && !plan.isPostpaid
                           ? true
-                          : plan.isPostpaid && form.durationMin === 0;
+                          : plan.isPostpaid && form.durationMin === null;
                         return (
                           <button
                             key={plan.id}
