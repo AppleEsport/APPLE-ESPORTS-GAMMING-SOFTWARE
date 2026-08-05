@@ -340,7 +340,8 @@ export default function ReservationsPage() {
             <h3 className="font-heading font-bold text-text uppercase tracking-wider text-xs">New Reservation</h3>
           </div>
 
-          <form onSubmit={handleFormSubmit} className="flex-1 overflow-hidden p-3 space-y-2 text-sm">
+          <form onSubmit={handleFormSubmit} className="flex-1 flex flex-col overflow-hidden p-3 text-sm">
+            <div className="flex-1 overflow-y-auto space-y-2 pr-1">
             {/* Member Booking Toggle */}
             <div className="flex items-center justify-between bg-bg-3/50 border border-border rounded px-2 py-1.5">
               <div className="flex items-center gap-2">
@@ -568,11 +569,12 @@ export default function ReservationsPage() {
                 className="w-full bg-bg-3 border border-border rounded px-3 py-2 text-xs text-text focus:border-neon-purple focus:outline-none resize-none"
               />
             </div>
+            </div>
 
             <button
               type="submit"
               disabled={submittingForm}
-              className="w-full py-2.5 rounded border border-neon-purple/50 bg-neon-purple/10 text-neon-purple font-heading font-bold uppercase tracking-widest text-xs hover:bg-neon-purple/20 transition-colors flex items-center justify-center gap-2"
+              className="w-full py-2 mt-2 rounded border border-neon-purple/50 bg-neon-purple/10 text-neon-purple font-heading font-bold uppercase tracking-widest text-xs hover:bg-neon-purple/20 transition-colors flex items-center justify-center gap-2"
             >
               {submittingForm ? (
                 <div className="w-4 h-4 border border-current border-t-transparent rounded-full animate-spin" />
