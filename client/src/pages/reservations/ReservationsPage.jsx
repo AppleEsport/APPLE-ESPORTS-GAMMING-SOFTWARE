@@ -247,9 +247,11 @@ export default function ReservationsPage() {
 
     setSubmittingForm(true);
     try {
-      // Create ISO string with India timezone offset (UTC+05:30)
-      const localDateTimeString = `${form.date}T${form.time}`;
-      const reservationTime = `${localDateTimeString}+05:30`;
+      // Convert local IST time to UTC (subtract 5:30 hours)
+      const localDate = new Date(`${form.date}T${form.time}`);
+      const istOffsetMs = 5.5 * 60 * 60 * 1000; // IST is UTC+5:30
+      const utcDate = new Date(localDate.getTime() - istOffsetMs);
+      const reservationTime = utcDate.toISOString();
 
       await createReservation({
         pcId: form.pcId,
