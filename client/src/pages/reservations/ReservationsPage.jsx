@@ -263,7 +263,7 @@ export default function ReservationsPage() {
         memberId: selectedMember?.id || null,
         reservationTime: reservationTime,
         durationMin: isMemberBooking ? null : (form.durationMin !== null ? Number(form.durationMin) : null),
-        advanceDeposit: isMemberBooking ? 0 : Number(form.advanceDeposit),
+        advanceDeposit: isMemberBooking || form.durationMin === null ? 0 : Number(form.advanceDeposit),
         gracePeriodMin: Number(form.gracePeriodMin),
         notes: form.notes.trim()
       });
@@ -530,8 +530,8 @@ export default function ReservationsPage() {
               </div>
             )}
 
-            {/* Advance Deposit — only for non-member bookings */}
-            {!isMemberBooking && (
+            {/* Advance Deposit — only for non-member, fixed-duration bookings (not postpaid) */}
+            {!isMemberBooking && form.durationMin !== null && (
               <div className="space-y-1">
                 <label className="text-[10px] font-mono font-semibold text-text-2 uppercase tracking-wider flex items-center gap-1">
                   <IndianRupee className="w-3 h-3 text-text-3" /> Deposit (₹)
