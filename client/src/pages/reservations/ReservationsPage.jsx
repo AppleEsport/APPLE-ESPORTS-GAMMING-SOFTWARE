@@ -247,8 +247,22 @@ export default function ReservationsPage() {
 
     setSubmittingForm(true);
     try {
-      // Send reservation time with IST timezone offset so backend knows it's local IST time
-      const reservationTime = `${form.date}T${form.time}:00+05:30`;
+      // Convert local IST time to UTC (PostgreSQL only accepts UTC)
+      // IST = UTC+5:30, so UTC = IST - 5:30 hours
+      const parts = form.date.split('-'); // YYYY-MM-DD
+      const year = parseInt(parts[0]);
+      const month = parseInt(parts[1]) - 1; // 0-indexed
+      const day = parseInt(parts[2]);
+
+      const timeParts = form.time.split(':');
+      const hours = parseInt(timeParts[0]);
+      const minutes = parseInt(timeParts[1]);
+
+      // Create UTC date by subtracting 5.5 hours from IST time
+      const istDate = new Date(Date.UTC(year, month, day, hours, minutes, 0));
+      const istMs = istDate.getTime() - (5.5 * 60 * 60 * 1000); // Subtract 5.5 hours
+      const utcDate = new Date(istMs);
+      const reservationTime = utcDate.toISOString();
 
       await createReservation({
         pcId: form.pcId,
