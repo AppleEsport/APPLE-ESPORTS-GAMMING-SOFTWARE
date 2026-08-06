@@ -517,7 +517,7 @@ export default function ReservationsPage() {
                     onChange={(e) => {
                       const val = e.target.value;
                       const plan = pcPlans.find(p => val === 'postpaid' ? p.isPostpaid : p.duration === parseInt(val));
-                      if (plan) setForm(f => ({ ...f, durationMin: plan.isPostpaid ? null : plan.duration, advanceDeposit: plan.price }));
+                      if (plan) setForm(f => ({ ...f, durationMin: plan.isPostpaid ? null : plan.duration, advanceDeposit: 0 }));
                     }}
                     className="w-full bg-bg-3 border border-neon-purple/40 rounded px-2 py-1.5 text-xs text-text focus:border-neon-purple focus:outline-none"
                   >
