@@ -7,6 +7,7 @@ import api from '../../config/api';
 import PageHeader from '../../components/layout/PageHeader';
 import { useSocket } from '../../contexts/SocketContext';
 import { createReport, addStatGrid, addTable, save, ROW_TINT_RED, ROW_TINT_GREEN } from '../../utils/pdfReport';
+import EodPaymentSummaryBar from '../../components/eod/EodPaymentSummaryBar';
 
 export default function EodDashboardPage() {
   const { isSuperAdmin, user } = useAuth();
@@ -14,6 +15,7 @@ export default function EodDashboardPage() {
   const { subscribe, connected, SIGNALR_HUBS } = useSocket();
 
   const [targetDate, setTargetDate] = useState(new Date().toISOString().split('T')[0]); // YYYY-MM-DD
+  const [summaryBarHeight, setSummaryBarHeight] = useState(140);
   const [report, setReport] = useState(null);
   const [validation, setValidation] = useState(null);
   const [isHistorical, setIsHistorical] = useState(false);
@@ -247,7 +249,11 @@ export default function EodDashboardPage() {
   }
 
   return (
-    <div className="h-full flex flex-col max-w-6xl mx-auto space-y-6 overflow-y-auto pb-10">
+    <>
+    <div
+      className="h-full flex flex-col max-w-6xl mx-auto space-y-6 overflow-y-auto"
+      style={{ paddingBottom: report ? summaryBarHeight + 24 : 40 }}
+    >
       <div className="flex justify-between items-center bg-bg-2 p-6 rounded-xl border border-border">
         <PageHeader
           title="End of Day Dashboard"
@@ -503,95 +509,19 @@ export default function EodDashboardPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Cash Summary */}
-            <div className="bg-bg-2 rounded-xl border border-border shadow-lg p-6">
-              <h3 className="text-sm uppercase font-bold text-text-2 tracking-widest mb-6 border-b border-border pb-3 flex items-center gap-2">
-                <FileText className="w-4 h-4" /> Cash Lifecycle Summary
-              </h3>
-              <div className="space-y-4">
-                <div className="flex justify-between items-center text-sm">
-                  <span className="text-text-2">Opening Balance Total</span>
-                  <span className="font-mono text-text">₹{report.cash.totalOpeningBalance}</span>
-                </div>
-                <div className="flex justify-between items-center text-sm">
-                  <span className="text-text-2">Cash Sales + Wallet TopUps</span>
-                  <span className="font-mono text-neon-green">+ ₹{report.cash.totalCashSales}</span>
-                </div>
-                <div className="flex justify-between items-center text-sm">
-                  <span className="text-text-2">Petty Expenses</span>
-                  <span className="font-mono text-neon-red">- ₹{report.cash.totalPettyExpenses}</span>
-                </div>
-                <div className="flex justify-between items-center text-sm border-t border-border pt-4">
-                  <span className="font-bold text-text">Expected Drawer Total</span>
-                  <span className="font-mono font-bold text-accent">₹{report.cash.expectedCashInDrawer}</span>
-                </div>
-                <div className="flex justify-between items-center text-sm">
-                  <span className="font-bold text-text">Physically Counted</span>
-                  <span className="font-mono font-bold text-text">₹{report.cash.actualPhysicalCashCounted}</span>
-                </div>
-                <div className="flex justify-between items-center text-sm bg-bg-3 p-3 rounded-lg border border-border mt-2">
-                  <span className="font-bold text-text uppercase tracking-widest text-xs">Total Difference</span>
-                  <span className={`font-mono font-bold ${report.cash.totalDiscrepancy === 0 ? 'text-neon-blue' : 'text-neon-red'}`}>
-                    ₹{report.cash.totalDiscrepancy}
-                  </span>
-                </div>
+          {/* Operations Overview */}
+          <div className="bg-bg-2 rounded-xl border border-border shadow-lg p-6">
+            <h3 className="text-sm uppercase font-bold text-text-2 tracking-widest mb-6 border-b border-border pb-3 flex items-center gap-2">
+              <FileText className="w-4 h-4" /> Operations Overview
+            </h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="bg-bg-3 p-3 rounded-lg border border-border text-center">
+                <div className="text-2xl font-bold text-text">{report.operations.totalSessions}</div>
+                <div className="text-[10px] uppercase font-bold text-text-3 tracking-widest mt-1">Sessions</div>
               </div>
-            </div>
-
-            {/* Payment Methods */}
-            <div className="bg-bg-2 rounded-xl border border-border shadow-lg p-6 flex flex-col justify-between">
-              <div>
-                <h3 className="text-sm uppercase font-bold text-text-2 tracking-widest mb-6 border-b border-border pb-3 flex items-center gap-2">
-                  <FileText className="w-4 h-4" /> Overall Collection & Business
-                </h3>
-                <div className="space-y-4">
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="text-text-2">Cash</span>
-                    <span className="font-mono text-text">₹{report.paymentMethods.totalCash}</span>
-                  </div>
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="text-text-2">Online</span>
-                    <span className="font-mono text-text">₹{report.paymentMethods.totalOnline}</span>
-                  </div>
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="text-text-2">Wallet Deductions (Gaming/Food)</span>
-                    <span className="font-mono text-neon-purple">₹{report.paymentMethods.totalWalletDeductions}</span>
-                  </div>
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="text-text-2">Wallet Top-Ups (Cash Collected)</span>
-                    <span className="font-mono text-neon-green">+ ₹{report.paymentMethods.totalWalletTopUps}</span>
-                  </div>
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="text-text-2">Credits Pending</span>
-                    <span className="font-mono text-neon-red">
-                      -₹{(report.creditLogs?.filter(c => c.status?.toLowerCase() === 'pending').reduce((acc, c) => acc + c.creditAmount, 0) || 0).toFixed(2)}
-                    </span>
-                  </div>
-
-                  <div className="flex justify-between items-center text-sm bg-neon-blue/10 p-4 rounded-lg border border-neon-blue/30 mt-6">
-                    <span className="font-bold text-neon-blue uppercase tracking-widest text-xs">Overall End Total</span>
-                    <span className="font-mono font-bold text-xl text-neon-blue">
-                      ₹{(report.paymentMethods.totalCash + report.paymentMethods.totalOnline + report.paymentMethods.totalWalletDeductions + report.paymentMethods.totalWalletTopUps).toFixed(2)}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-8">
-                <h3 className="text-sm uppercase font-bold text-text-2 tracking-widest mb-6 border-b border-border pb-3 flex items-center gap-2">
-                  <FileText className="w-4 h-4" /> Operations Overview
-                </h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-bg-3 p-3 rounded-lg border border-border text-center">
-                    <div className="text-2xl font-bold text-text">{report.operations.totalSessions}</div>
-                    <div className="text-[10px] uppercase font-bold text-text-3 tracking-widest mt-1">Sessions</div>
-                  </div>
-                  <div className="bg-bg-3 p-3 rounded-lg border border-border text-center">
-                    <div className="text-2xl font-bold text-text">{report.operations.totalFoodOrders}</div>
-                    <div className="text-[10px] uppercase font-bold text-text-3 tracking-widest mt-1">Food Orders</div>
-                  </div>
-                </div>
+              <div className="bg-bg-3 p-3 rounded-lg border border-border text-center">
+                <div className="text-2xl font-bold text-text">{report.operations.totalFoodOrders}</div>
+                <div className="text-[10px] uppercase font-bold text-text-3 tracking-widest mt-1">Food Orders</div>
               </div>
             </div>
           </div>
@@ -770,5 +700,14 @@ export default function EodDashboardPage() {
         </>
       ) : null}
     </div>
+    {report && (
+      <EodPaymentSummaryBar
+        report={report}
+        targetDate={targetDate}
+        height={summaryBarHeight}
+        onHeightChange={setSummaryBarHeight}
+      />
+    )}
+    </>
   );
 }
