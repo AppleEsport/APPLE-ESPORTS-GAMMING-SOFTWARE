@@ -58,15 +58,6 @@ public static class ControllerExtensions
     public static async Task<Guid> GetShiftIdAsync(this ControllerBase controller)
     {
         var user = controller.User;
-        
-        if (!user.IsInRole(Roles.SuperAdmin) && !user.IsInRole(Roles.Admin) && !user.IsInRole("Member"))
-        {
-            var shiftClaim = user.FindFirstValue("shiftId");
-            if (string.IsNullOrEmpty(shiftClaim))
-                throw new AppException("Active shift required for billing operations.");
-            return Guid.Parse(shiftClaim);
-        }
-
         var branchIdStr = controller.HttpContext.Items["BranchId"]?.ToString();
         if (string.IsNullOrEmpty(branchIdStr))
             throw new InvalidOperationException("BranchId is not set in HttpContext.");
@@ -74,10 +65,37 @@ public static class ControllerExtensions
         var branchId = Guid.Parse(branchIdStr);
         var db = controller.HttpContext.RequestServices.GetRequiredService<AppDbContext>();
 
+        // For regular operators, try JWT claim first, then fallback to database
+        if (!user.IsInRole(Roles.SuperAdmin) && !user.IsInRole(Roles.Admin) && !user.IsInRole("Member"))
+        {
+            var shiftClaim = user.FindFirstValue("shiftId");
+            if (!string.IsNullOrEmpty(shiftClaim) && Guid.TryParse(shiftClaim, out var shiftGuid))
+            {
+                var shiftFromClaim = await db.Shifts.FirstOrDefaultAsync(s => s.Id == shiftGuid && s.Status == ShiftStatus.Active);
+                if (shiftFromClaim != null)
+                    return shiftGuid;
+            }
+
+            // Fallback: Get the operator's active shift from database
+            var operatorId = Guid.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            var operatorShift = await db.Shifts
+                .Where(s => s.BranchId == branchId && s.OperatorId == operatorId && s.Status == ShiftStatus.Active)
+                .OrderByDescending(s => s.LoginTime)
+                .FirstOrDefaultAsync();
+
+            if (operatorShift != null)
+                return operatorShift.Id;
+
+            // If no operator shift found, throw error with clear message
+            throw new AppException("No active shift found for this operator. Please log in through the proper login flow.");
+        }
+
+        // For SuperAdmin/Admin, find or create active shift for branch
         var activeShift = await db.Shifts
             .Where(s => s.BranchId == branchId && s.Status == ShiftStatus.Active)
             .OrderByDescending(s => s.LoginTime)
             .FirstOrDefaultAsync();
+
         if (activeShift == null)
         {
             var sysOpId = await controller.GetOperatorIdAsync();

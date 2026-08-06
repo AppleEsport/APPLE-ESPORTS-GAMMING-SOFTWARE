@@ -27,6 +27,17 @@ How to use this file:
 
 ## Fixed (history log)
 
+### Issue #20 — Active Shift Not Detected for Multiple Operators (2026-08-06) [CRITICAL]
+- **Problem:** Multiple operators in live shifts were seeing "No Active Shift" error on Cash Register page, even though shift was active (SHIFT ACTIVE shown at bottom). This is a critical bug because it blocks all cash register operations.
+- **Root cause:** GetShiftIdAsync() in ControllerExtensions.cs was relying solely on JWT "shiftId" claim for regular operators. If the claim was missing or empty (due to token generation issues, claim not embedded during login, or old tokens), it threw an error instead of falling back to database lookup. SuperAdmin/Admin had a fallback (create shift if missing), but regular operators didn't.
+- **Fixes implemented:**
+  1. Added fallback logic for regular operators: First tries JWT claim, then queries database for operator's active shift, then throws clear error message.
+  2. Removed strict requirement on JWT claim presence — shift is now reliably found from database if JWT claim fails
+  3. This pattern now matches the SuperAdmin/Admin logic and ensures new operators won't face the same issue
+- **Prevention for new operators:** The fallback logic automatically finds the active shift from the database by operator ID, so even if the JWT token doesn't have the claim, the system will still work
+- **Files changed:** `AppleEsportsErp/src/AppleEsportsErp.Api/Extensions/ControllerExtensions.cs`
+- **Testing:** All operators in a live shift should now see active cash register. No more "No Active Shift" errors.
+
 ### Issue #19 — Reservation time offset and form reset (2026-08-06)
 - **Problem:** Reservation times displayed with 5-hour offset (entered 04:36, showed 09:36). Form time field didn't reset after creation.
 - **Root causes:**
