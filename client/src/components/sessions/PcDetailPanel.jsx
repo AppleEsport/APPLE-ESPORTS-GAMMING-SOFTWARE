@@ -122,13 +122,14 @@ export default function PcDetailPanel({
     );
   }
 
-  const style = walkinReq ? PENDING_STYLE : (STATUS_STYLES[pc.state] || DEFAULT_STYLE);
+  const hasUpcomingReservation = pc.nextReservationTime && new Date(pc.nextReservationTime) > new Date();
+  const style = walkinReq ? PENDING_STYLE : (hasUpcomingReservation ? STATUS_STYLES.Reserved : (STATUS_STYLES[pc.state] || DEFAULT_STYLE));
   const isActive = pc.state === 'Active';
   const isAwaiting = pc.state === 'AwaitingBilling';
-  const isReserved = pc.state === 'Reserved';
+  const isReserved = pc.state === 'Reserved' || hasUpcomingReservation;
   const isExpired = pc.state === 'Expired';
   const isMaintenance = pc.state === 'UnderMaintenance';
-  const canStart = !walkinReq && pc.state === 'Idle';
+  const canStart = !walkinReq && pc.state === 'Idle' && !hasUpcomingReservation;
 
   return (
     <div className={`rounded-lg border ${style.border} bg-bg-2 flex flex-col overflow-hidden`}>
@@ -312,32 +313,37 @@ export default function PcDetailPanel({
         )}
 
         {/* ── RESERVED ── */}
-        {!walkinReq && isReserved && (
+        {!walkinReq && isReserved && pc.nextReservationTime && (
           <>
             <div className="flex items-center gap-1.5 text-pc-reserved text-xs">
               <User className="w-3.5 h-3.5" />
               <span>{pc.customerName || 'Reserved slot'}</span>
             </div>
-            {pc.nextReservationTime && (
-              <div className="flex items-center gap-1 text-[10px] text-text-3 font-mono">
-                <Clock className="w-3 h-3 text-pc-reserved" />
-                <span>Starts: {new Date(pc.nextReservationTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })}</span>
+            <div className="bg-pc-reserved/10 border border-pc-reserved/30 rounded p-2.5 text-[10px]">
+              <div className="flex items-center gap-1 text-pc-reserved font-mono font-bold mb-1">
+                <Clock className="w-3 h-3" />
+                <span>{new Date(pc.nextReservationTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+              </div>
+              <div className="text-text-3 text-[9px]">
+                Reservation starts at this time
+              </div>
+            </div>
+            {pc.state === 'Reserved' && (
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  onClick={() => onStartReservedSession?.(pc.nextReservationId)}
+                  className="py-1.5 rounded border border-pc-active/40 bg-pc-active/10 text-pc-active text-[10px] font-bold uppercase tracking-wider hover:bg-pc-active/20 transition-colors"
+                >
+                  Start Session
+                </button>
+                <button
+                  onClick={() => onOverrideReservation?.(pc.nextReservationId, pc)}
+                  className="py-1.5 rounded border border-neon-orange/40 bg-neon-orange/10 text-neon-orange text-[10px] font-bold uppercase tracking-wider hover:bg-neon-orange/20 transition-colors"
+                >
+                  Override
+                </button>
               </div>
             )}
-            <div className="grid grid-cols-2 gap-1.5">
-              <button
-                onClick={() => onStartReservedSession?.(pc.nextReservationId)}
-                className="py-1.5 rounded border border-pc-active/40 bg-pc-active/10 text-pc-active text-[10px] font-bold uppercase tracking-wider hover:bg-pc-active/20 transition-colors"
-              >
-                Start Session
-              </button>
-              <button
-                onClick={() => onOverrideReservation?.(pc.nextReservationId, pc)}
-                className="py-1.5 rounded border border-neon-orange/40 bg-neon-orange/10 text-neon-orange text-[10px] font-bold uppercase tracking-wider hover:bg-neon-orange/20 transition-colors"
-              >
-                Override
-              </button>
-            </div>
           </>
         )}
 

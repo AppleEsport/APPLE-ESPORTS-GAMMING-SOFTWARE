@@ -22,8 +22,9 @@ const PcTile = memo(({ pc, walkinReq, isSelected, onSelect, onQuickStart, onRefr
   const [isDragOver, setIsDragOver] = useState(false);
   const [isTransferring, setIsTransferring] = useState(false);
 
-  const style = walkinReq ? PENDING_STYLE : (STATUS_STYLES[pc.state] || DEFAULT_STYLE);
-  const isIdle = pc.state === 'Idle' && !walkinReq;
+  const hasReservation = pc.nextReservationTime && new Date(pc.nextReservationTime) > new Date();
+  const style = walkinReq ? PENDING_STYLE : (hasReservation ? STATUS_STYLES.Reserved : (STATUS_STYLES[pc.state] || DEFAULT_STYLE));
+  const isIdle = pc.state === 'Idle' && !walkinReq && !hasReservation;
   const isActive = pc.state === 'Active';
 
   const handleDoubleClick = () => {
@@ -79,7 +80,7 @@ const PcTile = memo(({ pc, walkinReq, isSelected, onSelect, onQuickStart, onRefr
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      title={walkinReq ? `${pc.name}: Walk-in pending` : `${pc.name}: ${style.label}`}
+      title={walkinReq ? `${pc.name}: Walk-in pending` : hasReservation ? `${pc.name}: RESERVED at ${new Date(pc.nextReservationTime).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}` : `${pc.name}: ${style.label}`}
       className={`relative flex flex-col items-center justify-center gap-1.5 rounded-lg border bg-bg-2 py-3 px-1.5 select-none transition-colors
         ${isSelected ? 'border-accent ring-2 ring-accent/40' : `${style.border} hover:brightness-125`}
         ${isDragOver ? 'border-pc-active bg-pc-active/5' : ''}
