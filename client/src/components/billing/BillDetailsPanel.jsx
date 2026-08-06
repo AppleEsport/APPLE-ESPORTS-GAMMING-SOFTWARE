@@ -315,7 +315,7 @@ export default function BillDetailsPanel({ bill, onBillUpdate, onPaymentSuccess,
 
       {/* ── Pay area (only when unpaid) ── */}
       {!isPaid && (
-        <div className="shrink-0 border-t border-border px-5 py-4 space-y-4 bg-bg-3/30 overflow-y-auto max-h-[55vh]">
+        <div className="flex-1 border-t border-border px-5 py-4 bg-bg-3/30 overflow-y-auto flex flex-col gap-4 min-h-0">
 
           {/* Discount quick-tags — SuperAdmin only */}
           {isSuperAdmin && (
@@ -595,15 +595,15 @@ export default function BillDetailsPanel({ bill, onBillUpdate, onPaymentSuccess,
             </div>
           )}
 
-          {/* Complete button */}
+          {/* Complete button — sticky at bottom */}
           {payMethod !== 'wallet' && (
             <button
               onClick={handleComplete}
               disabled={processing || !canComplete}
-              className={`w-full py-3.5 rounded-lg text-sm font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all ${
+              className={`sticky bottom-0 w-full py-3.5 rounded-lg text-sm font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all bg-bg-3/80 backdrop-blur-sm ${
                 canComplete && !processing
-                  ? 'bg-accent/15 border border-accent text-accent hover:bg-accent/25 shadow-[0_0_14px_rgba(255,51,102,0.15)]'
-                  : 'bg-bg-2 border border-border text-text-3 cursor-not-allowed opacity-60'
+                  ? 'border border-accent text-accent hover:bg-bg-3/95 shadow-[0_0_14px_rgba(255,51,102,0.15)]'
+                  : 'border border-border text-text-3 cursor-not-allowed opacity-60'
               }`}
             >
               {processing
