@@ -262,10 +262,13 @@ export default function ReservationsPage() {
       });
 
       toast.success('Reservation created successfully!');
+      const { date, time } = getDefaultDateTime();
       setForm(prev => ({
         ...prev,
         customerName: '',
         pcId: '',
+        date,
+        time,
         notes: '',
         advanceDeposit: 0,
         durationMin: null,
