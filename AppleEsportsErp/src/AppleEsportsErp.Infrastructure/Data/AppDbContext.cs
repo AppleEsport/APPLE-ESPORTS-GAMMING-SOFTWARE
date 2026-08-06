@@ -20,6 +20,7 @@ public class AppDbContext : DbContext
     public DbSet<Pc> Pcs => Set<Pc>();
     public DbSet<Shift> Shifts => Set<Shift>();
     public DbSet<Session> Sessions => Set<Session>();
+    public DbSet<SessionActivity> SessionActivities => Set<SessionActivity>();
     public DbSet<Reservation> Reservations => Set<Reservation>();
     public DbSet<Bill> Bills => Set<Bill>();
     public DbSet<BillItem> BillItems => Set<BillItem>();

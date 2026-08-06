@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.SignalR;
 using AppleEsportsErp.Application.DTOs.Common;
 using AppleEsportsErp.Application.DTOs.Sessions;
 using AppleEsportsErp.Application.Interfaces;
+using AppleEsportsErp.Infrastructure.Services;
 
 namespace AppleEsportsErp.Api.Controllers;
 
@@ -20,15 +21,18 @@ public class SessionsController : ControllerBase
     private readonly ISessionService _sessionService;
     private readonly Microsoft.AspNetCore.SignalR.IHubContext<AppleEsportsErp.Api.Hubs.PcOverlayHub> _pcOverlayHub;
     private readonly AppleEsportsErp.Application.Interfaces.IBillingService _billingService;
+    private readonly ISessionActivityService _activityService;
 
     public SessionsController(
         ISessionService sessionService,
         Microsoft.AspNetCore.SignalR.IHubContext<AppleEsportsErp.Api.Hubs.PcOverlayHub> pcOverlayHub,
-        AppleEsportsErp.Application.Interfaces.IBillingService billingService)
+        AppleEsportsErp.Application.Interfaces.IBillingService billingService,
+        ISessionActivityService activityService)
     {
         _sessionService = sessionService;
         _pcOverlayHub = pcOverlayHub;
         _billingService = billingService;
+        _activityService = activityService;
     }
     private Guid GetBranchId() => Guid.Parse(HttpContext.Items["BranchId"]!.ToString()!);
 
@@ -99,6 +103,36 @@ public class SessionsController : ControllerBase
     {
         var result = await _sessionService.TransferSessionAsync(GetBranchId(), (await this.GetOperatorIdAsync()), id, dto);
         return Ok(ApiResponse<SessionDto>.Ok(result));
+    }
+
+    [HttpGet("{id}/activities")]
+    public async Task<IActionResult> GetSessionActivities(Guid id)
+    {
+        var activities = await _activityService.GetSessionActivitiesAsync(id);
+        return Ok(ApiResponse<IEnumerable<SessionActivityDto>>.Ok(activities.Select(a => new SessionActivityDto
+        {
+            Id = a.Id,
+            SessionId = a.SessionId,
+            Action = a.Action,
+            Description = a.Description,
+            Amount = a.Amount,
+            Timestamp = a.Timestamp
+        })));
+    }
+
+    [HttpGet("activities/recent")]
+    public async Task<IActionResult> GetRecentActivities([FromQuery] int limit = 100)
+    {
+        var activities = await _activityService.GetRecentActivitiesAsync(GetBranchId(), limit);
+        return Ok(ApiResponse<IEnumerable<SessionActivityDto>>.Ok(activities.Select(a => new SessionActivityDto
+        {
+            Id = a.Id,
+            SessionId = a.SessionId,
+            Action = a.Action,
+            Description = a.Description,
+            Amount = a.Amount,
+            Timestamp = a.Timestamp
+        })));
     }
 }
 

@@ -10,6 +10,7 @@ import SessionDiscountModal from './SessionDiscountModal';
 import { formatMoney } from '../../utils/money';
 import { computeRoundedBreakdown } from '../../utils/billRounding';
 import { logActivity } from '../../utils/sessionLog';
+import { getSessionActivities } from '../../api/sessions.api';
 
 function useElapsedTime(startTimeIso) {
   const [elapsed, setElapsed] = useState({ h: 0, m: 0, s: 0, totalMin: 0 });
@@ -66,6 +67,30 @@ export default function PcDetailPanel({
   const navigate = useNavigate();
   const toast = useToast();
   const elapsed = useElapsedTime(pc?.sessionStartTime);
+  const [activities, setActivities] = useState([]);
+  const [loadingActivities, setLoadingActivities] = useState(false);
+
+  useEffect(() => {
+    if (pc?.activeSessionId && pc?.sessionStartTime && pc?.customerName) {
+      logActivity(`${pc.name}: Session running for ${pc.customerName} (started ${fmtTime(pc.sessionStartTime)}).`, 'info');
+    }
+  }, [pc?.activeSessionId]);
+
+  useEffect(() => {
+    if (pc?.activeSessionId) {
+      setLoadingActivities(true);
+      getSessionActivities(pc.activeSessionId)
+        .then(data => setActivities(data || []))
+        .catch(err => {
+          console.error('Failed to fetch session activities:', err);
+          setActivities([]);
+        })
+        .finally(() => setLoadingActivities(false));
+    } else {
+      setActivities([]);
+    }
+  }, [pc?.activeSessionId]);
+
   const [actionLoading, setActionLoading] = useState(null);
   const [showExtendModal, setShowExtendModal] = useState(false);
   const [showDiscountModal, setShowDiscountModal] = useState(false);
@@ -292,6 +317,27 @@ export default function PcDetailPanel({
               pc={pc}
               onRefresh={onRefresh}
             />
+
+            {/* Session Activities Log */}
+            <div className="border-t border-border pt-3">
+              <div className="text-[9px] font-mono font-bold uppercase tracking-widest text-text-3 mb-2">Session Activity Log</div>
+              <div className="bg-bg-3 rounded border border-border/50 max-h-32 overflow-y-auto p-2 text-[10px] font-mono space-y-1">
+                {loadingActivities ? (
+                  <div className="text-text-3 italic">Loading...</div>
+                ) : activities.length === 0 ? (
+                  <div className="text-text-3 italic">No activities yet</div>
+                ) : (
+                  activities.map((act, i) => (
+                    <div key={i} className="text-text-2 leading-relaxed">
+                      <span className="text-text-3">{new Date(act.timestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                      <span className="text-text-3 mx-1">→</span>
+                      <span>{act.description}</span>
+                      {act.amount && <span className="text-neon-orange ml-1">(₹{act.amount})</span>}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
           </>
         )}
 

@@ -21,6 +21,7 @@ public class SessionService : ISessionService
     private readonly IPcStatusService _pcStatus;
     private readonly ILogger<SessionService> _logger;
     private readonly IWalletService _walletService;
+    private readonly ISessionActivityService _activityService;
 
     public SessionService(
         IUnitOfWork uow,
@@ -29,7 +30,8 @@ public class SessionService : ISessionService
         IAuditService audit,
         IPcStatusService pcStatus,
         ILogger<SessionService> logger,
-        IWalletService walletService)
+        IWalletService walletService,
+        ISessionActivityService activityService)
     {
         _uow = uow;
         _db = db;
@@ -38,6 +40,7 @@ public class SessionService : ISessionService
         _pcStatus = pcStatus;
         _logger = logger;
         _walletService = walletService;
+        _activityService = activityService;
     }
 
     public async Task<PaginatedResult<SessionDto>> GetActiveSessionsAsync(Guid branchId, int page, int pageSize)
@@ -213,7 +216,14 @@ public class SessionService : ISessionService
             await _hubNotifier.BroadcastPcStatusChangeAsync(branchId, pc.Id);
             await _hubNotifier.BroadcastSessionUpdateAsync(branchId, session.Id);
             await _hubNotifier.BroadcastBillingUpdateAsync(branchId, bill.Id);
-            
+
+            // Log session activity
+            await _activityService.LogActivityAsync(
+                session.Id, branchId,
+                "session_started",
+                $"Session started for {dto.CustomerName} on {pc.PcNumber} - Duration: {dto.DurationMinutes}m, Amount: ₹{dto.ExpectedAmount}",
+                dto.ExpectedAmount);
+
             // Dispatch Unlock Command to the actual PC Agent
             await _hubNotifier.SendUnlockCommandToAgentAsync(pc.Id, (int)dto.DurationMinutes, dto.CustomerName);
 
@@ -398,6 +408,14 @@ public class SessionService : ISessionService
             
             // Dispatch Lock Command to the actual PC Agent
             await _hubNotifier.SendLockCommandToAgentAsync(pc.Id);
+
+            // Log session activity
+            var status = deferPayment ? "deferred" : (bill?.TotalAmount == 0 ? "free" : "billing");
+            await _activityService.LogActivityAsync(
+                session.Id, branchId,
+                "session_stopped",
+                $"Session stopped - Duration: {session.ActualDurationMin}m, Gaming: ₹{session.GamingAmount}, Total: ₹{session.TotalAmount}, Status: {status}",
+                session.TotalAmount);
 
             return new SessionDto
             {

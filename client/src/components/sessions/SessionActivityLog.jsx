@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { ScrollText, GripHorizontal } from 'lucide-react';
+import { ScrollText, GripHorizontal, Loader2 } from 'lucide-react';
 import { SESSION_LOG_EVENT } from '../../utils/sessionLog';
+import { useActivityLog } from '../../contexts/ActivityLogContext';
+import { getRecentActivities } from '../../api/sessions.api';
 
 const MAX_ENTRIES = 100;
 const MIN_HEIGHT = 90;
@@ -20,17 +22,36 @@ function fmtTime(ts) {
 // ── Fixed-to-viewport activity log strip (Pancafe-style terminal log), pinned
 // to the bottom of the screen with a drag handle to resize its height ──
 export default function SessionActivityLog({ height, onHeightChange }) {
-  const [entries, setEntries] = useState([]);
+  const { entries, addEntry, addEntries } = useActivityLog();
   const scrollRef = useRef(null);
   const resizing = useRef(false);
+  const [loading, setLoading] = useState(true);
 
+  // Load historical activities on mount
+  useEffect(() => {
+    const loadHistoricalActivities = async () => {
+      try {
+        const recentActivities = await getRecentActivities(100);
+        if (recentActivities.length > 0) {
+          addEntries(recentActivities);
+        }
+      } catch (err) {
+        console.error('Failed to load historical activities:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadHistoricalActivities();
+  }, [addEntries]);
+
+  // Listen for new events
   useEffect(() => {
     const handler = (e) => {
-      setEntries((prev) => [...prev.slice(-(MAX_ENTRIES - 1)), e.detail]);
+      addEntry(e.detail);
     };
     window.addEventListener(SESSION_LOG_EVENT, handler);
     return () => window.removeEventListener(SESSION_LOG_EVENT, handler);
-  }, []);
+  }, [addEntry]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -89,12 +110,19 @@ export default function SessionActivityLog({ height, onHeightChange }) {
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-1.5 font-mono text-[11px] leading-5">
-        {entries.length === 0 ? (
+        {loading ? (
+          <div className="flex items-center gap-2 text-text-3">
+            <Loader2 className="w-3 h-3 animate-spin" />
+            <span className="italic">Loading activity log...</span>
+          </div>
+        ) : entries.length === 0 ? (
           <div className="text-text-3 italic">No activity yet.</div>
         ) : (
           entries.map((entry, i) => (
-            <div key={i} className={TYPE_COLORS[entry.type] || TYPE_COLORS.info}>
-              <span className="text-text-3">{fmtTime(entry.timestamp)}-&gt;</span> {entry.message}
+            <div key={entry.id || i} className={TYPE_COLORS[entry.type] || TYPE_COLORS.info}>
+              <span className="text-text-3">{entry.timestamp ? fmtTime(entry.timestamp) : fmtTime(entry.createdAt || new Date().toISOString())}-&gt;</span>
+              {entry.message || entry.description}
+              {entry.amount && <span className="text-neon-orange ml-1">(₹{entry.amount})</span>}
             </div>
           ))
         )}

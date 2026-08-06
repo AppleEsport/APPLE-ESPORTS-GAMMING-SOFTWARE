@@ -39,4 +39,5 @@ public class Session
     public Member? Member { get; set; }
     public ICollection<Bill> Bills { get; set; } = new List<Bill>();
     public ICollection<FoodOrder> FoodOrders { get; set; } = new List<FoodOrder>();
+    public ICollection<SessionActivity> Activities { get; set; } = new List<SessionActivity>();
 }

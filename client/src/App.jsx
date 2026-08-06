@@ -8,6 +8,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { SocketProvider } from './contexts/SocketContext';
 import { BranchProvider } from './contexts/BranchContext';
+import { ActivityLogProvider } from './contexts/ActivityLogContext';
 import { ToastProvider } from './components/ui/Toast';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import AppShell from './components/layout/AppShell';
@@ -74,9 +75,10 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <SocketProvider>
-          <BranchProvider>
-            <ToastProvider>
+        <ActivityLogProvider>
+          <SocketProvider>
+            <BranchProvider>
+              <ToastProvider>
               <Routes>
                 {/* ══════════ Public Routes ══════════ */}
                 <Route path="/login/operator" element={<OperatorLoginPage />} />
@@ -262,9 +264,10 @@ export default function App() {
                 <Route path="/" element={<LandingGatewayPage />} />
                 <Route path="*" element={<NotFoundPage />} />
               </Routes>
-            </ToastProvider>
-          </BranchProvider>
-        </SocketProvider>
+              </ToastProvider>
+            </BranchProvider>
+          </SocketProvider>
+        </ActivityLogProvider>
       </AuthProvider>
     </BrowserRouter>
   );
