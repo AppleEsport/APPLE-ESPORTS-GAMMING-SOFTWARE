@@ -14,6 +14,7 @@ import {
   getWalletHistory, topUpWallet, adminEditMemberValues, deleteMember,
 } from '../../api/members.api';
 import { getWalletTopUpRules } from '../../api/settings.api';
+import { logActivity } from '../../utils/sessionLog';
 
 const TOPUP_PRESETS = [200, 500, 1000, 2000, 5000];
 
@@ -323,6 +324,7 @@ function TopUpModal({ member, isSuperAdmin, onClose, onSuccess }) {
         reason: reason.trim() || 'Manual top-up',
       });
       toast.success(`₹${numAmount} added to ${member.fullName}'s ${walletType} wallet`);
+      logActivity(`${member.fullName}: Wallet top-up of ₹${numAmount} (${walletType}, ${paymentType}).`, 'success');
       onSuccess();
       onClose();
     } catch (err) {
