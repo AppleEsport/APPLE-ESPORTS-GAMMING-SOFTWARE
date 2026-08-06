@@ -23,15 +23,20 @@ How to use this file:
 
 ## New Issues (not fixed yet)
 
-### Issue #19
-- Where: Reservation form → ACTIVE RESERVATIONS LIST
-- What I did: Created a reservation at 04:36, form reset after success
-- What happened: Reservation shows incorrect time - displayed as 09:36 instead of 04:36 (5 hour shift)
-- What should happen instead: Reservation time should display exactly as entered (04:36)
-- Priority: Urgent (blocks all reservations - times are always wrong)
-- Additional note: Form time field didn't reset to current time after creation (showed 04:36 instead of current time)
+(none currently)
 
 ## Fixed (history log)
+
+### Issue #19 — Reservation time offset and form reset (2026-08-06)
+- **Problem:** Reservation times displayed with 5-hour offset (entered 04:36, showed 09:36). Form time field didn't reset after creation.
+- **Root causes:**
+  1. Datetime sent without timezone offset: backend treated local time as UTC and added 5 hours
+  2. Form reset logic didn't include date/time fields, so they kept the submitted values
+- **Fixes implemented:**
+  1. Added IST timezone offset to datetime string: `"2026-08-06T04:36:00+05:30"` instead of bare ISO
+  2. Form reset now calls `getDefaultDateTime()` to reset date and time to current values
+- **Commits:** 54d9ec2, 8f33c0d
+- **Testing:** Create reservation at specific time (e.g., 04:36) → verify it shows as 04:36 in list and form resets to current time
 
 ### Issue #18 — Reservation time displaying incorrect time (2026-08-06)
 - **Problem:** Reservation time in warning messages showed wrong time — displayed 18:09 when actual reservation was at 23:00 (4.5 hour difference, matching IST UTC+5:30 offset).
