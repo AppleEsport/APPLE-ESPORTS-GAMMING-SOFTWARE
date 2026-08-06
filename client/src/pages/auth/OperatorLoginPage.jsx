@@ -47,6 +47,9 @@ export default function LoginPage() {
       try {
         setLoadingBranches(true);
         setIsOffline(false);
+        setSelectedBranch(''); // Reset branch selection on mount
+        setUsername(''); // Reset username
+        setPassword(''); // Reset password
         const res = await api.get('/auth/branches');
         setBranches(res.data?.data || []);
       } catch (err) {
@@ -209,19 +212,27 @@ export default function LoginPage() {
                 <div>
                   <label className="block text-xs text-text-2 mb-1.5 ml-1">Branch Location</label>
                   <div className="relative">
-                    <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-3" />
-                    <select 
+                    <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-3 pointer-events-none z-10" />
+                    <select
                       value={selectedBranch}
                       onChange={(e) => setSelectedBranch(e.target.value)}
-                      className="input w-full pl-10 appearance-none bg-bg-3"
+                      className="input w-full pl-10 pr-10 appearance-none bg-bg-3 cursor-pointer"
                       disabled={loadingBranches}
                     >
-                      <option value="" disabled>Select Branch...</option>
+                      <option value="">Select Branch...</option>
                       {branches.map(b => (
                         <option key={b.id} value={b.id}>{b.name}</option>
                       ))}
                     </select>
-                    {loadingBranches && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-3 animate-spin" />}
+                    {loadingBranches ? (
+                      <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-3 animate-spin pointer-events-none z-10" />
+                    ) : (
+                      <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none z-10 text-text-3">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                        </svg>
+                      </div>
+                    )}
                   </div>
                 </div>
                 

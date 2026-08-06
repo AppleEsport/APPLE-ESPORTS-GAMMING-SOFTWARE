@@ -9,11 +9,14 @@ import PcGrid from '../../components/sessions/PcGrid';
 import PcDetailPanel from '../../components/sessions/PcDetailPanel';
 import QuickStartModal from '../../components/sessions/QuickStartModal';
 import SessionActivityLog from '../../components/sessions/SessionActivityLog';
+import { MaintenanceReasonModal } from '../../components/modals/MaintenanceReasonModal';
 import { useToast } from '../../components/ui/Toast';
 import { startReservedSession, overrideReservation } from '../../api/reservations.api';
 import { getRangeReport } from '../../api/food.api';
 import { getActiveBills, getBill, processPayment } from '../../api/billing.api';
+import { markMaintenanceAsync, resolveMaintenance } from '../../api/maintenanceLogs.api';
 import { logActivity } from '../../utils/sessionLog';
+import { roundBillTotal } from '../../utils/billRounding';
 import { useNavigate } from 'react-router-dom';
 
 export default function SessionsPage() {
@@ -33,6 +36,12 @@ export default function SessionsPage() {
   const [overrideReason, setOverrideReason] = useState('');
   const [overrideLoading, setOverrideLoading] = useState(false);
 
+  // Maintenance modal states
+  const [maintenanceModalOpen, setMaintenanceModalOpen] = useState(false);
+  const [maintenancePc, setMaintenancePc] = useState(null);
+  const [maintenanceIsMarking, setMaintenanceIsMarking] = useState(true); // true to mark, false to resolve
+  const [maintenanceLoading, setMaintenanceLoading] = useState(false);
+
   // Walk-in requests state
   const [walkinRequests, setWalkinRequests] = useState([]);
 
@@ -41,22 +50,28 @@ export default function SessionsPage() {
 
   const targetBranchId = isSuperAdmin ? activeBranch?.id : user?.branchId;
 
-  const fetchPcs = useCallback(async () => {
+  const fetchPcs = useCallback(async (silent = false) => {
     if (!targetBranchId) {
-      setPcs([]);
-      setIsLoading(false);
+      if (!silent) setPcs([]);
+      if (!silent) setIsLoading(false);
       return;
     }
+    if (!silent) setIsLoading(true);
     try {
       const { data } = await api.get('/pcs', { params: { branchId: targetBranchId } });
       const sorted = (data?.data || []).sort((a, b) =>
         a.name.localeCompare(b.name, undefined, { numeric: true })
       );
-      setPcs(sorted);
+      // Only update if data actually changed
+      setPcs(prev => {
+        const prevJson = JSON.stringify(prev?.map(p => ({ id: p.id, state: p.state, totalAmount: p.totalAmount })));
+        const newJson = JSON.stringify(sorted?.map(p => ({ id: p.id, state: p.state, totalAmount: p.totalAmount })));
+        return prevJson !== newJson ? sorted : prev;
+      });
     } catch (err) {
       console.error('Failed to load PCs', err);
     } finally {
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
     }
   }, [targetBranchId]);
 
@@ -77,13 +92,40 @@ export default function SessionsPage() {
   };
 
   const handleFlagMaintenance = async (pc, enable = true) => {
+    if (enable) {
+      setMaintenancePc(pc);
+      setMaintenanceIsMarking(true);
+      setMaintenanceModalOpen(true);
+    } else {
+      setMaintenancePc(pc);
+      setMaintenanceIsMarking(false);
+      setMaintenanceModalOpen(true);
+    }
+  };
+
+  const handleMaintenanceConfirm = async (reason) => {
+    if (!maintenancePc) return;
+
+    setMaintenanceLoading(true);
     try {
-      await api.post(`/pc-management/${pc.id}/maintenance?enable=${enable}`);
-      toast.success(enable ? `${pc.name} flagged for maintenance.` : `${pc.name} restored from maintenance.`);
-      logActivity(enable ? `${pc.name}: Flagged for maintenance.` : `${pc.name}: Restored from maintenance.`, enable ? 'warn' : 'success');
-      fetchPcs();
+      if (maintenanceIsMarking) {
+        await markMaintenanceAsync(maintenancePc.id, reason, targetBranchId);
+        toast.success(`${maintenancePc.name} flagged for maintenance.`);
+        logActivity(`${maintenancePc.name}: Flagged for maintenance - ${reason}`, 'warn');
+      } else {
+        await resolveMaintenance(maintenancePc.id, reason);
+        toast.success(`${maintenancePc.name} resolved from maintenance.`);
+        logActivity(`${maintenancePc.name}: Resolved from maintenance.`, 'success');
+      }
+      setMaintenanceModalOpen(false);
+      setMaintenancePc(null);
+      // Refresh PCs immediately to show updated state
+      setTimeout(() => fetchPcs(), 500);
     } catch (err) {
-      toast.error(err.response?.data?.error || err.response?.data?.message || 'Failed to update maintenance status');
+      console.error('Maintenance error:', err);
+      toast.error(err?.error || err?.message || 'Failed to update maintenance status');
+    } finally {
+      setMaintenanceLoading(false);
     }
   };
 
@@ -109,14 +151,15 @@ export default function SessionsPage() {
   };
 
   useEffect(() => {
+    if (!targetBranchId) return;
     setIsLoading(true);
     fetchPcs();
-  }, [fetchPcs]);
+  }, [fetchPcs, targetBranchId]);
 
-  // Safety net: refetch periodically so rates/buffer minutes never sit stale for long,
-  // even if a real-time event is ever missed (dropped connection, etc.).
+  // Safety net: refetch periodically (silently, without showing loading) so rates/buffer minutes never sit stale
+  // Increased to 20 seconds to minimize visible refresh, only updates if data actually changed
   useEffect(() => {
-    const interval = setInterval(fetchPcs, 10000);
+    const interval = setInterval(() => fetchPcs(true), 20000);
     return () => clearInterval(interval);
   }, [fetchPcs]);
 
@@ -283,11 +326,10 @@ export default function SessionsPage() {
     // Live accrued revenue across all active sessions — use the backend's own live
     // totalAmount (buffer-aware, same formula as the final bill) instead of re-deriving
     // it here, so this stat can never drift from what the PC cards / billing show.
-    const liveRevenue = Math.round(
-      pcs
-        .filter(p => p.state === 'Active')
-        .reduce((sum, p) => sum + (p.totalAmount || 0), 0) * 100
-    ) / 100;
+    const rawRevenue = pcs
+      .filter(p => p.state === 'Active')
+      .reduce((sum, p) => sum + (p.totalAmount || 0), 0);
+    const liveRevenue = roundBillTotal(rawRevenue);
 
     return { activeSessions, idleStations, awaitingBilling, liveRevenue };
   }, [pcs, ticker]);
@@ -454,6 +496,17 @@ export default function SessionsPage() {
         </div>
       )}
 
+      {/* ── Maintenance Reason Modal ── */}
+      <MaintenanceReasonModal
+        isOpen={maintenanceModalOpen}
+        pcNumber={maintenancePc?.name}
+        onConfirm={handleMaintenanceConfirm}
+        onCancel={() => {
+          setMaintenanceModalOpen(false);
+          setMaintenancePc(null);
+        }}
+        isLoading={maintenanceLoading}
+      />
 
     </div>
   );

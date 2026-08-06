@@ -6,10 +6,9 @@ import { authAPI } from '../../api/auth.api';
 export default function ResetPasswordPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  
-  const email = searchParams.get('email');
-  const token = searchParams.get('token');
 
+  const [email, setEmail] = useState('');
+  const [token, setToken] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -18,10 +17,45 @@ export default function ResetPasswordPage() {
   const [success, setSuccess] = useState(false);
 
   useEffect(() => {
-    if (!email || !token) {
-      setError("Invalid reset link. Missing email or token.");
+    // Extract from URL and store securely in sessionStorage
+    const urlEmail = searchParams.get('email');
+    const urlToken = searchParams.get('token');
+
+    if (!urlEmail || !urlToken) {
+      // Try to get from sessionStorage as fallback
+      const storedEmail = sessionStorage.getItem('resetEmail');
+      const storedToken = sessionStorage.getItem('resetToken');
+
+      if (!storedEmail || !storedToken) {
+        setError("Invalid reset link. Missing email or token.");
+        return;
+      }
+
+      setEmail(storedEmail);
+      setToken(storedToken);
+    } else {
+      // Store in sessionStorage and clean URL
+      sessionStorage.setItem('resetEmail', urlEmail);
+      sessionStorage.setItem('resetToken', urlToken);
+      setEmail(urlEmail);
+      setToken(urlToken);
+
+      // Remove sensitive data from URL
+      window.history.replaceState({}, document.title, '/reset-password');
     }
-  }, [email, token]);
+  }, [searchParams]);
+
+  // Cleanup on component unmount
+  useEffect(() => {
+    return () => {
+      // Clear sessionStorage after 1 hour or on unmount
+      const timeout = setTimeout(() => {
+        sessionStorage.removeItem('resetEmail');
+        sessionStorage.removeItem('resetToken');
+      }, 3600000); // 1 hour
+      return () => clearTimeout(timeout);
+    };
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -42,7 +76,11 @@ export default function ResetPasswordPage() {
     try {
       await authAPI.resetPassword(email, token, password);
       setSuccess(true);
-      setTimeout(() => window.location.href = 'https://appleesports.in/', 3000);
+      // Clear sensitive data from sessionStorage
+      sessionStorage.removeItem('resetEmail');
+      sessionStorage.removeItem('resetToken');
+      const externalUrl = import.meta.env.VITE_EXTERNAL_REDIRECT_URL || 'https://appleesports.in/';
+      setTimeout(() => window.location.href = externalUrl, 3000);
     } catch (err) {
       setError(err.response?.data?.error || "Failed to reset password. Link may be expired.");
     } finally {

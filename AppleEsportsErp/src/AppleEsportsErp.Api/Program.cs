@@ -231,6 +231,7 @@ builder.Services.AddScoped<IReportsService, ReportsService>();
 builder.Services.AddScoped<ISystemDesksService, AppleEsportsErp.Infrastructure.Services.SystemDesksService>();
 builder.Services.AddScoped<IUnitOfWork, AppleEsportsErp.Infrastructure.Repositories.UnitOfWork>();
 builder.Services.AddScoped<ISessionActivityService, SessionActivityService>();
+builder.Services.AddScoped<IMaintenanceLogService, MaintenanceLogService>();
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.ReservationBackgroundService>();
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.OpenSessionMonitorService>();
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.FixedDurationSessionMonitorService>();

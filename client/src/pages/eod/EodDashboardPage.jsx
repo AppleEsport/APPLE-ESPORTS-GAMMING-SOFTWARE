@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { ShieldCheck, AlertTriangle, FileText, CheckCircle, Lock, Monitor, Utensils, Clock, Printer, Download } from 'lucide-react';
+import { ShieldCheck, AlertTriangle, FileText, CheckCircle, Lock, Monitor, Utensils, Clock, Printer, Download, Wrench, Clock as ClockIcon } from 'lucide-react';
 import { printBill } from '../../utils/printBill';
 import { useAuth } from '../../contexts/AuthContext';
 import { useBranch } from '../../contexts/BranchContext';
@@ -8,6 +8,7 @@ import PageHeader from '../../components/layout/PageHeader';
 import { useSocket } from '../../contexts/SocketContext';
 import { createReport, addStatGrid, addTable, save, ROW_TINT_RED, ROW_TINT_GREEN } from '../../utils/pdfReport';
 import EodPaymentSummaryBar from '../../components/eod/EodPaymentSummaryBar';
+import { getBranchMaintenanceLogs } from '../../api/maintenanceLogs.api';
 
 export default function EodDashboardPage() {
   const { isSuperAdmin, user } = useAuth();
@@ -25,6 +26,7 @@ export default function EodDashboardPage() {
 
   const [pcs, setPcs] = useState([]);
   const [allBills, setAllBills] = useState([]);
+  const [maintenanceLogs, setMaintenanceLogs] = useState([]);
   const [selectedPcId, setSelectedPcId] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(Date.now());
   const [isUpdating, setIsUpdating] = useState(false);
@@ -71,7 +73,7 @@ export default function EodDashboardPage() {
         }
       }
 
-      // Also fetch range-report to get allBills and PCs for PC-Wise Grid
+      // Also fetch range-report to get allBills and PCs for PC-Wise Grid, and maintenance logs
       const [pcsRes, billsRes] = await Promise.all([
         api.get('/pcs', { params: { branchId: targetBranchId } }),
         api.get('/eod/range-report', {
@@ -84,6 +86,16 @@ export default function EodDashboardPage() {
       ]);
       setPcs(pcsRes.data?.data || []);
       setAllBills(billsRes.data?.data?.allBills || []);
+
+      // Fetch maintenance logs separately so it doesn't break EOD if it fails
+      try {
+        const maintenanceRes = await getBranchMaintenanceLogs(targetBranchId, 30);
+        setMaintenanceLogs(maintenanceRes.data || []);
+      } catch (err) {
+        console.error('Failed to fetch maintenance logs:', err);
+        setMaintenanceLogs([]);
+      }
+
       setLastUpdated(Date.now());
 
     } catch (err) {
@@ -660,6 +672,65 @@ export default function EodDashboardPage() {
                         <td className="py-3 px-4 text-text-3">
                           {credit.clearedAt ? new Date(credit.clearedAt).toLocaleString() : '-'}
                         </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+
+          {/* ── Maintenance Audit Logs ── */}
+          <div className="card bg-bg-2 border border-border p-6 rounded-xl shadow-lg mt-8">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="font-heading font-extrabold text-sm uppercase tracking-wider text-text flex items-center gap-2">
+                <Wrench className="w-4.5 h-4.5 text-neon-orange" />
+                Maintenance Logs (Last 30 Days)
+              </h2>
+            </div>
+
+            <div className="overflow-x-auto">
+              {!maintenanceLogs || maintenanceLogs.length === 0 ? (
+                <div className="text-center text-text-3 text-xs italic py-8 border border-dashed border-border rounded-lg">
+                  No maintenance records found.
+                </div>
+              ) : (
+                <table className="w-full text-left border-collapse text-xs whitespace-nowrap">
+                  <thead>
+                    <tr className="border-b border-border text-text-3 uppercase tracking-wider font-bold text-[10px]">
+                      <th className="py-3 px-4">PC</th>
+                      <th className="py-3 px-4">Marked Date & Time</th>
+                      <th className="py-3 px-4">Marked By</th>
+                      <th className="py-3 px-4">Reason</th>
+                      <th className="py-3 px-4">Duration</th>
+                      <th className="py-3 px-4">Status</th>
+                      <th className="py-3 px-4">Resolved Date & Time</th>
+                      <th className="py-3 px-4">Resolution Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/40 font-mono">
+                    {maintenanceLogs.map(log => (
+                      <tr key={log.id} className={`hover:bg-bg-3/40 transition-colors ${log.isResolved ? 'opacity-75' : ''}`}>
+                        <td className="py-3 px-4 text-text font-bold">{log.pcName}</td>
+                        <td className="py-3 px-4 text-text-2">
+                          {log.markedAt ? new Date(log.markedAt).toLocaleString() : '-'}
+                        </td>
+                        <td className="py-3 px-4 text-neon-blue font-bold">{log.operatorName}</td>
+                        <td className="py-3 px-4 text-text-2">{log.reason}</td>
+                        <td className="py-3 px-4 text-text-2">
+                          {log.durationMinutes > 0 ? `${Math.floor(log.durationMinutes / 60)}h ${log.durationMinutes % 60}m` : '-'}
+                        </td>
+                        <td className="py-3 px-4 text-center">
+                          {log.isResolved ? (
+                            <span className="text-neon-green font-bold uppercase tracking-wider text-[10px] bg-neon-green/10 px-2 py-1 rounded border border-neon-green/20">Resolved</span>
+                          ) : (
+                            <span className="text-neon-orange font-bold uppercase tracking-wider text-[10px] bg-neon-orange/10 px-2 py-1 rounded border border-neon-orange/20">Active</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 text-text-3">
+                          {log.resolvedAt ? new Date(log.resolvedAt).toLocaleString() : '-'}
+                        </td>
+                        <td className="py-3 px-4 text-text-3 text-[10px]">{log.resolutionNotes || '-'}</td>
                       </tr>
                     ))}
                   </tbody>

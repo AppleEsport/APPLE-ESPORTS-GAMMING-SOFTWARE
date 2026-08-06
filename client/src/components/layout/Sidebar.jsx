@@ -17,6 +17,13 @@ const NAV_ITEMS = [
     section: 'Operations',
     items: [
       {
+        label: 'Sessions',
+        route: '/app/sessions',
+        dashboard: DASHBOARDS.SESSIONS,
+        roles: [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.OPERATOR],
+        icon: 'M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z',
+      },
+      {
         label: 'Billing Counter',
         route: '/app/billing',
         dashboard: DASHBOARDS.BILLING_COUNTER,
@@ -24,11 +31,11 @@ const NAV_ITEMS = [
         icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01',
       },
       {
-        label: 'Sessions',
-        route: '/app/sessions',
-        dashboard: DASHBOARDS.SESSIONS,
+        label: 'Members',
+        route: '/app/members',
+        dashboard: DASHBOARDS.MEMBERS,
         roles: [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.OPERATOR],
-        icon: 'M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z',
+        icon: 'M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z',
       },
       {
         label: 'Reservations',
@@ -96,13 +103,6 @@ const NAV_ITEMS = [
   {
     section: 'Management',
     items: [
-      {
-        label: 'Members',
-        route: '/app/members',
-        dashboard: DASHBOARDS.MEMBERS,
-        roles: [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.OPERATOR],
-        icon: 'M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z',
-      },
       {
         label: 'Menu Editor',
         route: '/app/menu-editor',

@@ -39,4 +39,5 @@ public class Pc
     public PricingProfile? PricingProfile { get; set; }
     public ICollection<Session> Sessions { get; set; } = new List<Session>();
     public ICollection<Reservation> Reservations { get; set; } = new List<Reservation>();
+    public ICollection<MaintenanceLog> MaintenanceLogs { get; set; } = new List<MaintenanceLog>();
 }

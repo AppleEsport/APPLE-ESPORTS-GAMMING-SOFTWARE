@@ -1,8 +1,10 @@
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { RefreshCw, X, Clock } from 'lucide-react';
 import api from '../../config/api';
 import { useToast } from '../../components/ui/Toast';
+import { logActivity } from '../../utils/sessionLog';
 
 export default function ExtendSessionModal({ pc, onClose, onActionSuccess }) {
   const [loading, setLoading] = useState(false);
@@ -27,6 +29,7 @@ export default function ExtendSessionModal({ pc, onClose, onActionSuccess }) {
         packageName: `Extension - ${durationMinutes}m`
       });
       toast.success(`Successfully extended session by ${durationMinutes} mins!`);
+      logActivity(`${pc.name}: Session extended by ${durationMinutes} mins. Additional charge: ₹${Math.ceil(additionalAmount)}`, 'success');
       onActionSuccess?.();
     } catch (err) {
       setError(err.response?.data?.error || err.response?.data?.message || 'Failed to extend session');
@@ -35,14 +38,14 @@ export default function ExtendSessionModal({ pc, onClose, onActionSuccess }) {
     }
   };
 
-  return (
+  return createPortal(
     <AnimatePresence>
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+      <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
         <motion.div
           initial={{ opacity: 0, scale: 0.96, y: 10 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.96, y: 10 }}
-          className="w-full max-w-sm bg-bg-2 border border-border rounded-xl shadow-2xl overflow-hidden"
+          className="w-full max-w-md bg-bg-2 border border-border rounded-xl shadow-2xl overflow-hidden"
         >
           {/* Header */}
           <div className="px-5 py-4 border-b border-border bg-bg-3 flex items-center justify-between">
@@ -68,22 +71,20 @@ export default function ExtendSessionModal({ pc, onClose, onActionSuccess }) {
             )}
 
             {/* Duration Selector */}
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-mono font-semibold text-text-2 uppercase tracking-wider flex items-center gap-1">
-                <Clock className="w-3 h-3" /> Additional Time
-              </label>
-              <div className="grid grid-cols-4 gap-1.5">
+            <div className="space-y-3">
+              <label className="text-xs font-mono font-bold text-text-2 uppercase tracking-widest">Select Time to Extend</label>
+              <div className="grid grid-cols-2 gap-2.5">
                 {[30, 60, 120, 180].map(min => {
-                  const label = min < 60 ? `${min}m` : (min === 60 ? '1 Hr' : `${min / 60} Hrs`);
+                  const label = min < 60 ? `${min}m` : (min === 60 ? '1 Hour' : `${min / 60} Hours`);
                   return (
                     <button
                       key={min}
                       type="button"
                       onClick={() => setDurationMinutes(min)}
-                      className={`py-2 rounded border text-xs font-semibold transition-colors ${
+                      className={`w-full py-3 px-2 rounded-lg border-2 font-bold text-sm uppercase tracking-wide transition-all duration-200 ${
                         durationMinutes === min
-                          ? 'border-neon-blue bg-neon-blue/10 text-neon-blue'
-                          : 'border-border bg-bg-3 text-text-2 hover:border-border-2 hover:text-text'
+                          ? 'border-neon-blue bg-neon-blue/25 text-neon-blue shadow-[0_0_12px_rgba(30,144,255,0.4)]'
+                          : 'border-border bg-bg-3 text-text-2 hover:border-neon-blue/60 hover:bg-bg-2'
                       }`}
                     >
                       {label}
@@ -94,9 +95,9 @@ export default function ExtendSessionModal({ pc, onClose, onActionSuccess }) {
             </div>
             
             {/* Charge Preview */}
-            <div className="bg-bg-3 rounded border border-border p-3 flex justify-between items-center">
-              <span className="text-xs text-text-2 font-mono uppercase">Additional Charge</span>
-              <span className="font-bold text-neon-orange font-mono">
+            <div className="bg-bg-3 rounded border border-border p-4 flex justify-between items-center gap-4">
+              <span className="text-xs text-text-2 font-mono uppercase tracking-wider">Additional Charge</span>
+              <span className="font-bold text-neon-orange font-mono text-lg">
                 ₹{Math.ceil((durationMinutes / 60) * (pc.ratePerHour || 0))}
               </span>
             </div>
@@ -121,6 +122,7 @@ export default function ExtendSessionModal({ pc, onClose, onActionSuccess }) {
           </form>
         </motion.div>
       </div>
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body
   );
 }

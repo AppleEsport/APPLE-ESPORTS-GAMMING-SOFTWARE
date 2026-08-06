@@ -290,6 +290,7 @@ public class PcManagementService : IPcManagementService
             State = p.State,
             PricingProfileId = p.PricingProfileId,
             PricingProfileName = p.PricingProfile?.Name,
+            RatePerHour = p.PricingProfile?.BaseHourlyRate ?? 0,
             HardwareNotes = p.HardwareNotes,
             MonitorHz = p.MonitorHz,
             IsActive = p.IsActive,

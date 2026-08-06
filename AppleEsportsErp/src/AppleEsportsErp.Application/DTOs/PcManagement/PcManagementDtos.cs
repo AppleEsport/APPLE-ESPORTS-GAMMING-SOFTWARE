@@ -13,6 +13,7 @@ public class PcDto
     public PcState State { get; set; }
     public Guid? PricingProfileId { get; set; }
     public string? PricingProfileName { get; set; }
+    public decimal RatePerHour { get; set; }
     public string? HardwareNotes { get; set; }
     public string? MonitorHz { get; set; }
     public bool IsActive { get; set; }

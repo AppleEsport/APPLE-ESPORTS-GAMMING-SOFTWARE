@@ -48,6 +48,9 @@ public class AppDbContext : DbContext
     // HR Module
     public DbSet<Employee> Employees => Set<Employee>();
 
+    // Maintenance Logs
+    public DbSet<MaintenanceLog> MaintenanceLogs => Set<MaintenanceLog>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);

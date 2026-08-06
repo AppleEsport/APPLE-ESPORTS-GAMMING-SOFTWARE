@@ -102,11 +102,18 @@ public class EodService : IEodService
             GeneratedAt = DateTimeOffset.UtcNow
         };
 
+        // Fetch Credits (for deduction from revenue)
+        var credits = await _unitOfWork.Repository<CustomerCredit>().Query()
+            .Where(c => c.BranchId == branchId && ((c.CreatedAt >= startOfDay && c.CreatedAt < endOfDay) || (c.ClearedAt >= startOfDay && c.ClearedAt < endOfDay)))
+            .ToListAsync();
+
+        var pendingCredits = credits.Where(c => c.Status == "pending").Sum(c => c.CreditAmount);
+
         // Revenue (Gaming / Food)
         report.Revenue.TotalGamingRevenue = completedBills.Sum(b => b.GamingAmount);
         report.Revenue.TotalFoodRevenue = completedBills.Sum(b => b.FoodAmount);
         report.Revenue.TotalDiscounts = completedBills.Sum(b => b.DiscountAmount);
-        report.Revenue.NetRevenue = completedBills.Sum(b => b.TotalAmount);
+        report.Revenue.NetRevenue = completedBills.Sum(b => b.TotalAmount) - pendingCredits;
 
         // Payment Methods
         report.PaymentMethods.TotalCash = payments.Sum(p => p.CashAmount);
@@ -147,11 +154,7 @@ public class EodService : IEodService
         report.Operations.TotalFoodOrders = await _unitOfWork.Repository<FoodOrder>().Query().CountAsync(o => o.BranchId == branchId && o.CreatedAt >= startOfDay && o.CreatedAt < endOfDay);
         report.Operations.NewMembersRegistered = await _unitOfWork.Repository<Member>().Query().CountAsync(m => m.HomeBranchId == branchId && m.CreatedAt >= startOfDay && m.CreatedAt < endOfDay);
 
-        // Credit Logs
-        var credits = await _unitOfWork.Repository<CustomerCredit>().Query()
-            .Where(c => c.BranchId == branchId && ((c.CreatedAt >= startOfDay && c.CreatedAt < endOfDay) || (c.ClearedAt >= startOfDay && c.ClearedAt < endOfDay)))
-            .ToListAsync();
-
+        // Credit Logs (reuse credits fetched earlier)
         report.CreditLogs = credits.Select(c => new EodCreditLogDto
         {
             CreditId = c.Id,

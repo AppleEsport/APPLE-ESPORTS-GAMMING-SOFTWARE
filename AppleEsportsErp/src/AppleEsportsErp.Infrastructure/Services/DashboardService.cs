@@ -64,9 +64,9 @@ public class DashboardService : IDashboardService
         var todaysPayments = await paymentsQuery.Where(p => p.CreatedAt >= today).ToListAsync();
 
         var totalRevenue = todaysPayments.Sum(p => p.TotalAmount);
-        var cashTotal = todaysPayments.Where(p => p.PaymentType == PaymentType.Cash).Sum(p => p.TotalAmount);
-        var onlineTotal = todaysPayments.Where(p => p.PaymentType == PaymentType.Online).Sum(p => p.TotalAmount);
-        var walletTotal = todaysPayments.Where(p => p.PaymentType == PaymentType.Wallet).Sum(p => p.TotalAmount);
+        var cashTotal = todaysPayments.Sum(p => p.CashAmount);
+        var onlineTotal = todaysPayments.Sum(p => p.OnlineAmount);
+        var walletTotal = todaysPayments.Sum(p => p.WalletAmount);
 
         var gamingRevenue = todaysBills.Sum(b => b.GamingAmount);
         var foodRevenue = todaysBills.Sum(b => b.FoodAmount);

@@ -70,11 +70,6 @@ export default function PcDetailPanel({
   const [activities, setActivities] = useState([]);
   const [loadingActivities, setLoadingActivities] = useState(false);
 
-  useEffect(() => {
-    if (pc?.activeSessionId && pc?.sessionStartTime && pc?.customerName) {
-      logActivity(`${pc.name}: Session running for ${pc.customerName} (started ${fmtTime(pc.sessionStartTime)}).`, 'info');
-    }
-  }, [pc?.activeSessionId]);
 
   useEffect(() => {
     if (pc?.activeSessionId) {
