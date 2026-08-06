@@ -295,17 +295,17 @@ export default function BillingCounterPage() {
         </div>
       )}
 
-      <div className="flex flex-col lg:flex-row gap-6 mt-4 flex-1 min-h-0">
-        
-        {/* Left Column: Lists */}
-        <div className="w-full lg:w-[28%] flex flex-col h-full bg-bg-2 border border-border rounded-xl p-4 shadow-lg overflow-y-auto">
+      <div className="flex flex-col lg:flex-row gap-4 mt-4 flex-1 min-h-0">
+
+        {/* Left Column: Bills & Lists */}
+        <div className="w-full lg:w-[22%] flex flex-col h-full bg-bg-2 border border-border rounded-xl p-3 shadow-lg overflow-y-auto">
           {isLoading ? (
             <div className="flex items-center justify-center flex-1">
               <div className="w-8 h-8 rounded-full border-2 border-accent border-t-transparent animate-spin" />
             </div>
           ) : (
-            <ActiveBillsList 
-              bills={bills} 
+            <ActiveBillsList
+              bills={bills}
               activeSessions={activeSessions}
               reservations={reservations}
               selectedId={selectedItem?.id}
@@ -314,8 +314,30 @@ export default function BillingCounterPage() {
           )}
         </div>
 
-        {/* Middle Column: Add Items */}
-        <div className="w-full lg:w-[38%] h-full">
+        {/* Middle Column: Current Bill (Primary Focus) */}
+        <div className="w-full lg:w-[44%] h-full overflow-y-auto">
+          {selectedBillData ? (
+            <BillDetailsPanel
+              bill={selectedBillData}
+              onBillUpdate={(updated) => {
+                fetchBillDetails(updated.id);
+                fetchDashboardData();
+              }}
+              onPaymentSuccess={() => {
+                setSelectedItem(null);
+                fetchDashboardData();
+              }}
+              defaultPaymentMethod={selectedBillData.pcId === autoSelectPcId ? state?.autoSelectPaymentMethod : undefined}
+            />
+          ) : (
+            <div className="bg-bg-2 border border-border rounded-xl p-6 text-center h-full flex items-center justify-center">
+              <p className="text-text-3">Select a bill to view details</p>
+            </div>
+          )}
+        </div>
+
+        {/* Right Column: Add Items */}
+        <div className="w-full lg:w-[34%] h-full overflow-y-auto">
           <BillingAddItemsPanel
             bill={selectedBillData}
             onOrderPlaced={(newBillId) => {
@@ -327,24 +349,6 @@ export default function BillingCounterPage() {
               }
             }}
           />
-        </div>
-
-        {/* Right Column: Details Panel */}
-        <div className="w-full lg:w-[34%] h-full">
-          {selectedBillData ? (
-            <BillDetailsPanel 
-              bill={selectedBillData} 
-              onBillUpdate={(updated) => {
-                fetchBillDetails(updated.id);
-                fetchDashboardData();
-              }}
-              onPaymentSuccess={() => {
-                setSelectedItem(null);
-                fetchDashboardData();
-              }}
-              defaultPaymentMethod={selectedBillData.pcId === autoSelectPcId ? state?.autoSelectPaymentMethod : undefined}
-            />
-          ) : null}
         </div>
 
       </div>
