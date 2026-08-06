@@ -436,41 +436,43 @@ export default function BillDetailsPanel({ bill, onBillUpdate, onPaymentSuccess,
 
           {/* ── Credit section ── */}
           {payMethod === 'credit' && (
-            <div className="bg-bg-2 border border-border rounded-lg p-3 space-y-3">
-              <div className="space-y-2 mb-3 border-b border-border pb-3">
-                <label className="text-[10px] text-neon-orange uppercase font-bold tracking-widest block">
-                  Compulsory Customer Info
-                </label>
+            <div className="bg-bg-2 border border-border rounded-lg p-2 space-y-2">
+              <label className="text-[9px] text-neon-orange uppercase font-bold tracking-widest block">
+                Compulsory Customer Info
+              </label>
+              <div className="grid grid-cols-2 gap-2">
                 <input
                   type="text"
                   value={customerName}
                   onChange={e => setCustomerName(e.target.value)}
-                  placeholder="Customer Name"
-                  className="w-full bg-bg-3 border border-border text-text text-sm rounded-lg p-2 focus:border-neon-orange focus:ring-1 focus:ring-neon-orange transition-all"
+                  placeholder="Name"
+                  className="w-full bg-bg-3 border border-border text-text text-xs rounded p-1.5 focus:border-neon-orange focus:ring-1 focus:ring-neon-orange transition-all"
                 />
                 <input
                   type="text"
                   value={customerPhone}
                   onChange={e => setCustomerPhone(e.target.value)}
-                  placeholder="Contact Number (Phone)"
-                  className="w-full bg-bg-3 border border-border text-text text-sm rounded-lg p-2 focus:border-neon-orange focus:ring-1 focus:ring-neon-orange transition-all"
+                  placeholder="Phone"
+                  className="w-full bg-bg-3 border border-border text-text text-xs rounded p-1.5 focus:border-neon-orange focus:ring-1 focus:ring-neon-orange transition-all"
                 />
               </div>
-              <label className="text-[10px] text-text-3 uppercase font-bold tracking-widest block">
-                Amount Paid Today (₹)
-              </label>
-              <input
+              <div>
+                <label className="text-[9px] text-text-3 uppercase font-bold tracking-widest block mb-1">
+                  Amount Paid (₹)
+                </label>
+                <input
                   type="number"
                   max={total}
                   value={cashReceived}
                   onChange={e => setCashReceived(e.target.value)}
                   placeholder="0"
-                className="w-full bg-bg-3 border border-border text-text font-mono text-xl rounded-lg p-2.5 focus:border-accent focus:ring-1 focus:ring-accent transition-all"
-              />
+                  className="w-full bg-bg-3 border border-border text-text font-mono text-base rounded p-1.5 focus:border-accent focus:ring-1 focus:ring-accent transition-all"
+                />
+              </div>
               {/* Show Credit Remaining */}
-              <div className="flex justify-between items-center bg-neon-orange/10 border border-neon-orange/30 rounded-lg px-3 py-2.5">
-                <span className="text-xs font-bold uppercase tracking-wider text-neon-orange">Credit Remaining</span>
-                <span className="font-mono text-xl font-bold text-neon-orange">
+              <div className="flex justify-between items-center bg-neon-orange/10 border border-neon-orange/30 rounded px-2.5 py-1.5">
+                <span className="text-[9px] font-bold uppercase tracking-wider text-neon-orange">Credit Remaining</span>
+                <span className="font-mono text-sm font-bold text-neon-orange">
                   ₹{Math.max(0, total - (parseFloat(cashReceived) || 0)).toFixed(0)}
                 </span>
               </div>
