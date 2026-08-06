@@ -277,16 +277,6 @@ export default function EodDashboardPage() {
             </button>
           </div>
           <div className="flex items-center gap-3">
-            {!isHistorical && (
-              <span className={`px-3 py-1 rounded border text-xs font-bold uppercase tracking-widest flex items-center gap-1.5 transition-all ${
-                isUpdating
-                  ? 'bg-neon-blue/10 text-neon-blue border-neon-blue/30'
-                  : 'bg-neon-green/10 text-neon-green border-neon-green/30'
-              }`}>
-                <div className={`w-2 h-2 rounded-full ${isUpdating ? 'bg-neon-blue animate-pulse' : 'bg-neon-green'}`} />
-                {isUpdating ? 'Updating...' : 'Live'}
-              </span>
-            )}
             {isHistorical && (
               <span className="bg-neon-green/10 text-neon-green px-3 py-1 rounded border border-neon-green/30 text-xs font-bold uppercase tracking-widest flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4" /> Finalized
