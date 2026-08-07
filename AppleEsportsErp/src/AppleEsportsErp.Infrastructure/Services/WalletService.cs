@@ -23,14 +23,16 @@ public class WalletService : IWalletService
     private readonly IAuditService _auditService;
     private readonly IEmailService _emailService;
     private readonly IConfiguration _configuration;
+    private readonly IAppUrlProvider _appUrls;
     private readonly ILogger<WalletService> _logger;
 
-    public WalletService(IUnitOfWork unitOfWork, IAuditService auditService, IEmailService emailService, IConfiguration configuration, ILogger<WalletService> logger)
+    public WalletService(IUnitOfWork unitOfWork, IAuditService auditService, IEmailService emailService, IConfiguration configuration, IAppUrlProvider appUrls, ILogger<WalletService> logger)
     {
         _unitOfWork = unitOfWork;
         _auditService = auditService;
         _emailService = emailService;
         _configuration = configuration;
+        _appUrls = appUrls;
         _logger = logger;
     }
 
@@ -269,19 +271,6 @@ public class WalletService : IWalletService
         };
     }
 
-    private string GetFrontendBaseUrl()
-    {
-        var configuredBaseUrl = _configuration["App:BaseUrl"];
-        if (!string.IsNullOrWhiteSpace(configuredBaseUrl))
-            return configuredBaseUrl.Trim().TrimEnd('/');
-
-        var frontendUrl = _configuration["FRONTEND_URL"];
-        if (!string.IsNullOrWhiteSpace(frontendUrl))
-            return frontendUrl.Trim().TrimEnd('/');
-
-        return "http://localhost:5173";
-    }
-
     private async Task SendTopUpEmailsAsync(Member member, decimal amount, decimal bonusAmount, decimal totalCredit)
     {
         if (string.IsNullOrWhiteSpace(member.Email))
@@ -289,7 +278,6 @@ public class WalletService : IWalletService
 
         try
         {
-            var appBaseUrl = GetFrontendBaseUrl();
             var receiptBody = $@"
                 <div style='background-color:#050505; color:#ffffff; font-family:""Segoe UI"", Tahoma, Geneva, Verdana, sans-serif; padding:40px 20px; text-align:center;'>
                     <div style='max-width: 600px; margin: 0 auto; background-color: #111111; border: 1px solid #333333; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.5);'>
@@ -332,7 +320,7 @@ public class WalletService : IWalletService
             _unitOfWork.Repository<Member>().Update(member);
             await _unitOfWork.SaveChangesAsync();
 
-            string resetLink = $"{appBaseUrl}/reset-password?email={Uri.EscapeDataString(member.Email)}&token={Uri.EscapeDataString(setupToken)}";
+            string resetLink = _appUrls.BuildResetPasswordLink(member.Email, setupToken);
             string welcomeBody = $@"
                 <div style='background-color:#050505; color:#ffffff; font-family:""Segoe UI"", Tahoma, Geneva, Verdana, sans-serif; padding:40px 20px; text-align:center;'>
                     <div style='max-width: 600px; margin: 0 auto; background-color: #111111; border: 1px solid #333333; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.5);'>
