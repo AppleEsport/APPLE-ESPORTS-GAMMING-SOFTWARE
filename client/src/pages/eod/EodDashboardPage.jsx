@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { ShieldCheck, AlertTriangle, FileText, CheckCircle, Lock, Monitor, Utensils, Clock, Printer, Download, Wrench, Clock as ClockIcon } from 'lucide-react';
 import { printBill } from '../../utils/printBill';
 import { useAuth } from '../../contexts/AuthContext';
@@ -32,12 +32,16 @@ export default function EodDashboardPage() {
   const [isUpdating, setIsUpdating] = useState(false);
 
   const targetBranchId = isSuperAdmin ? activeBranch?.id : user?.branchId;
+  const isFetchingRef = useRef(false);
 
   const fetchEodData = useCallback(async () => {
     if (isSuperAdmin && !targetBranchId) {
       setIsLoading(false);
       return;
     }
+
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
 
     setIsUpdating(true);
     setError(null);
@@ -115,6 +119,7 @@ export default function EodDashboardPage() {
     } finally {
       setIsLoading(false);
       setIsUpdating(false);
+      isFetchingRef.current = false;
     }
   }, [targetDate, targetBranchId, isSuperAdmin]);
 
@@ -140,10 +145,10 @@ export default function EodDashboardPage() {
       fetchEodData();
     });
 
-    // Aggressive polling every 3 seconds to ensure real-time accuracy
+    // Safety-net polling; SignalR events above already push immediate refreshes
     const pollInterval = setInterval(() => {
       fetchEodData();
-    }, 3000);
+    }, 20000);
 
     return () => {
       unsubCash();
