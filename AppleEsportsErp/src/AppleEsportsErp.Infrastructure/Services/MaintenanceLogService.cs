@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.PcManagement;
 using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Infrastructure.Data;
@@ -8,8 +9,8 @@ namespace AppleEsportsErp.Infrastructure.Services;
 
 public interface IMaintenanceLogService
 {
-    Task LogMaintenanceAsync(Guid pcId, Guid branchId, Guid operatorId, string reason);
-    Task ResolveMaintenanceAsync(Guid maintenanceLogId, string? resolutionNotes);
+    Task LogMaintenanceAsync(Guid pcId, Guid branchId, Guid actorId, string actorRole, string reason);
+    Task ResolveMaintenanceAsync(Guid maintenanceLogId, Guid actorId, string actorRole, string? resolutionNotes);
     Task<IEnumerable<MaintenanceLogDto>> GetBranchMaintenanceLogsAsync(Guid branchId, int days = 7);
     Task<IEnumerable<MaintenanceLogDto>> GetPcMaintenanceHistoryAsync(Guid pcId);
     Task<MaintenanceLogDto?> GetActiveMaintenanceAsync(Guid pcId);
@@ -26,7 +27,21 @@ public class MaintenanceLogService : IMaintenanceLogService
         _logger = logger;
     }
 
-    public async Task LogMaintenanceAsync(Guid pcId, Guid branchId, Guid operatorId, string reason)
+    // Marking/resolving maintenance is open to Operators as well as Admin/SuperAdmin, so the
+    // actor id may live in either the Operators or Users table — resolve by role, not by a fixed FK.
+    private async Task<string> ResolveActorNameAsync(Guid actorId, string actorRole)
+    {
+        if (actorRole == Roles.Operator)
+        {
+            var op = await _db.Operators.AsNoTracking().FirstOrDefaultAsync(o => o.Id == actorId);
+            return op?.FullName ?? "Unknown";
+        }
+
+        var user = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == actorId);
+        return user?.FullName ?? "Unknown";
+    }
+
+    public async Task LogMaintenanceAsync(Guid pcId, Guid branchId, Guid actorId, string actorRole, string reason)
     {
         try
         {
@@ -35,7 +50,9 @@ public class MaintenanceLogService : IMaintenanceLogService
                 Id = Guid.NewGuid(),
                 PcId = pcId,
                 BranchId = branchId,
-                OperatorId = operatorId,
+                OperatorId = actorId,
+                ActorRole = actorRole,
+                MarkedByName = await ResolveActorNameAsync(actorId, actorRole),
                 Reason = reason,
                 MarkedAt = DateTimeOffset.UtcNow,
                 IsResolved = false
@@ -52,7 +69,7 @@ public class MaintenanceLogService : IMaintenanceLogService
         }
     }
 
-    public async Task ResolveMaintenanceAsync(Guid maintenanceLogId, string? resolutionNotes)
+    public async Task ResolveMaintenanceAsync(Guid maintenanceLogId, Guid actorId, string actorRole, string? resolutionNotes)
     {
         try
         {
@@ -62,6 +79,7 @@ public class MaintenanceLogService : IMaintenanceLogService
 
             log.ResolvedAt = DateTimeOffset.UtcNow;
             log.ResolutionNotes = resolutionNotes;
+            log.ResolvedByName = await ResolveActorNameAsync(actorId, actorRole);
             log.IsResolved = true;
 
             _db.MaintenanceLogs.Update(log);
@@ -82,24 +100,11 @@ public class MaintenanceLogService : IMaintenanceLogService
         var logs = await _db.MaintenanceLogs
             .AsNoTracking()
             .Include(m => m.Pc)
-            .Include(m => m.Operator)
             .Where(m => m.BranchId == branchId && m.MarkedAt >= cutoffDate)
             .OrderByDescending(m => m.MarkedAt)
             .ToListAsync();
 
-        return logs.Select(m => new MaintenanceLogDto
-        {
-            Id = m.Id,
-            PcId = m.PcId,
-            PcName = m.Pc.PcNumber,
-            OperatorId = m.OperatorId,
-            OperatorName = m.Operator.FullName,
-            Reason = m.Reason,
-            MarkedAt = m.MarkedAt,
-            ResolvedAt = m.ResolvedAt,
-            ResolutionNotes = m.ResolutionNotes,
-            IsResolved = m.IsResolved
-        });
+        return logs.Select(MapToDto);
     }
 
     public async Task<IEnumerable<MaintenanceLogDto>> GetPcMaintenanceHistoryAsync(Guid pcId)
@@ -107,24 +112,11 @@ public class MaintenanceLogService : IMaintenanceLogService
         var logs = await _db.MaintenanceLogs
             .AsNoTracking()
             .Include(m => m.Pc)
-            .Include(m => m.Operator)
             .Where(m => m.PcId == pcId)
             .OrderByDescending(m => m.MarkedAt)
             .ToListAsync();
 
-        return logs.Select(m => new MaintenanceLogDto
-        {
-            Id = m.Id,
-            PcId = m.PcId,
-            PcName = m.Pc.PcNumber,
-            OperatorId = m.OperatorId,
-            OperatorName = m.Operator.FullName,
-            Reason = m.Reason,
-            MarkedAt = m.MarkedAt,
-            ResolvedAt = m.ResolvedAt,
-            ResolutionNotes = m.ResolutionNotes,
-            IsResolved = m.IsResolved
-        });
+        return logs.Select(MapToDto);
     }
 
     public async Task<MaintenanceLogDto?> GetActiveMaintenanceAsync(Guid pcId)
@@ -132,24 +124,23 @@ public class MaintenanceLogService : IMaintenanceLogService
         var log = await _db.MaintenanceLogs
             .AsNoTracking()
             .Include(m => m.Pc)
-            .Include(m => m.Operator)
             .FirstOrDefaultAsync(m => m.PcId == pcId && !m.IsResolved);
 
-        if (log == null)
-            return null;
-
-        return new MaintenanceLogDto
-        {
-            Id = log.Id,
-            PcId = log.PcId,
-            PcName = log.Pc.PcNumber,
-            OperatorId = log.OperatorId,
-            OperatorName = log.Operator.FullName,
-            Reason = log.Reason,
-            MarkedAt = log.MarkedAt,
-            ResolvedAt = log.ResolvedAt,
-            ResolutionNotes = log.ResolutionNotes,
-            IsResolved = log.IsResolved
-        };
+        return log == null ? null : MapToDto(log);
     }
+
+    private static MaintenanceLogDto MapToDto(MaintenanceLog m) => new()
+    {
+        Id = m.Id,
+        PcId = m.PcId,
+        PcName = m.Pc.PcNumber,
+        OperatorId = m.OperatorId,
+        OperatorName = m.MarkedByName,
+        ResolvedByName = m.ResolvedByName,
+        Reason = m.Reason,
+        MarkedAt = m.MarkedAt,
+        ResolvedAt = m.ResolvedAt,
+        ResolutionNotes = m.ResolutionNotes,
+        IsResolved = m.IsResolved
+    };
 }

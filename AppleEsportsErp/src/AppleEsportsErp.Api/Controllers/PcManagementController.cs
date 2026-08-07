@@ -27,6 +27,7 @@ public class PcManagementController : ControllerBase
     }
 
     private Guid GetSuperAdminId() => Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    private string GetActorRole() => User.FindFirstValue(ClaimTypes.Role)!;
 
     [HttpGet("branch/{branchId:guid}")]
     [Authorize(Roles = Roles.SuperAdmin + "," + Roles.Admin)]
@@ -64,7 +65,7 @@ public class PcManagementController : ControllerBase
     [Authorize(Roles = Roles.SuperAdmin + "," + Roles.Admin + "," + Roles.Operator)]
     public async Task<IActionResult> MarkMaintenance(Guid pcId, [FromQuery] bool enable)
     {
-        var result = await _pcManagementService.MarkMaintenanceAsync(pcId, GetSuperAdminId(), enable);
+        var result = await _pcManagementService.MarkMaintenanceAsync(pcId, GetSuperAdminId(), GetActorRole(), enable);
         return Ok(ApiResponse<PcDto>.Ok(result));
     }
 
@@ -94,10 +95,10 @@ public class PcManagementController : ControllerBase
                 return Unauthorized(new { error = "Operator ID not found in token" });
 
             // Log the maintenance event
-            await _maintenanceLogService.LogMaintenanceAsync(dto.PcId, dto.BranchId, operatorId, dto.Reason);
+            await _maintenanceLogService.LogMaintenanceAsync(dto.PcId, dto.BranchId, operatorId, GetActorRole(), dto.Reason);
 
             // Also mark the PC as under maintenance (changes its state)
-            await _pcManagementService.MarkMaintenanceAsync(dto.PcId, GetSuperAdminId(), true);
+            await _pcManagementService.MarkMaintenanceAsync(dto.PcId, operatorId, GetActorRole(), true);
 
             return Ok(new { success = true, message = "PC marked for maintenance" });
         }
@@ -113,16 +114,22 @@ public class PcManagementController : ControllerBase
     {
         try
         {
+            var operatorIdString = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                ?? User.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)?.Value;
+
+            if (!Guid.TryParse(operatorIdString, out var operatorId))
+                return Unauthorized(new { error = "Operator ID not found in token" });
+
             // Find active maintenance log for this PC
             var activeMaintenance = await _maintenanceLogService.GetActiveMaintenanceAsync(pcId);
             if (activeMaintenance != null)
             {
                 // Resolve the maintenance log entry
-                await _maintenanceLogService.ResolveMaintenanceAsync(activeMaintenance.Id, dto?.ResolutionNotes);
+                await _maintenanceLogService.ResolveMaintenanceAsync(activeMaintenance.Id, operatorId, GetActorRole(), dto?.ResolutionNotes);
             }
 
             // Restore PC from maintenance (changes its state back to Idle)
-            await _pcManagementService.MarkMaintenanceAsync(pcId, GetSuperAdminId(), false);
+            await _pcManagementService.MarkMaintenanceAsync(pcId, operatorId, GetActorRole(), false);
 
             return Ok(new { success = true, message = "PC restored from maintenance" });
         }
