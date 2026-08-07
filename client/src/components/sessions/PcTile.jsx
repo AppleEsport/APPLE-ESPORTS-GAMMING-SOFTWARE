@@ -1,5 +1,5 @@
 import { memo, useState } from 'react';
-import { Monitor } from 'lucide-react';
+import { Monitor, Infinity as InfinityIcon } from 'lucide-react';
 import { motion } from 'framer-motion';
 import api from '../../config/api';
 import { useToast } from '../ui/Toast';
@@ -26,6 +26,7 @@ const PcTile = memo(({ pc, walkinReq, isSelected, onSelect, onQuickStart, onRefr
   const style = walkinReq ? PENDING_STYLE : (hasReservation ? STATUS_STYLES.Reserved : (STATUS_STYLES[pc.state] || DEFAULT_STYLE));
   const isIdle = pc.state === 'Idle' && !walkinReq && !hasReservation;
   const isActive = pc.state === 'Active';
+  const isPayAsYouGo = isActive && !pc.sessionEndTime;
 
   const handleDoubleClick = () => {
     if (isIdle) onQuickStart?.(pc);
@@ -80,9 +81,9 @@ const PcTile = memo(({ pc, walkinReq, isSelected, onSelect, onQuickStart, onRefr
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      title={walkinReq ? `${pc.name}: Walk-in pending` : hasReservation ? `${pc.name}: RESERVED at ${new Date(pc.nextReservationTime).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}` : `${pc.name}: ${style.label}`}
-      className={`relative flex flex-col items-center justify-center gap-1.5 rounded-lg border bg-bg-2 py-3 px-1.5 select-none transition-colors
-        ${isSelected ? 'border-accent ring-2 ring-accent/40' : `${style.border} hover:brightness-125`}
+      title={walkinReq ? `${pc.name}: Walk-in pending` : hasReservation ? `${pc.name}: RESERVED at ${new Date(pc.nextReservationTime).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}` : isPayAsYouGo ? `${pc.name}: ${style.label} (Pay-As-You-Go)` : `${pc.name}: ${style.label}`}
+      className={`relative flex flex-col items-center justify-center gap-1.5 rounded-lg border bg-bg-2 py-3 px-1.5 select-none transition-all
+        ${style.border} ${isSelected ? 'brightness-150' : 'hover:brightness-125'}
         ${isDragOver ? 'border-pc-active bg-pc-active/5' : ''}
         ${isActive ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'}
       `}
@@ -91,6 +92,12 @@ const PcTile = memo(({ pc, walkinReq, isSelected, onSelect, onQuickStart, onRefr
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-bg/80 backdrop-blur-sm rounded-lg">
           <span className="w-4 h-4 border-2 border-pc-active border-t-transparent rounded-full animate-spin" />
         </div>
+      )}
+
+      {isPayAsYouGo && (
+        <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center w-5 h-5 rounded-full bg-neon-purple shadow-[0_0_8px_rgba(155,114,255,0.8)] animate-pulse">
+          <InfinityIcon className="w-3 h-3 text-white" strokeWidth={2.5} />
+        </span>
       )}
 
       <div className={`flex items-center justify-center w-10 h-10 rounded-lg bg-bg-3 border border-border ${(walkinReq || pc.state === 'AwaitingBilling') ? 'animate-pulse' : ''}`}>
