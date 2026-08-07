@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Common;
 using AppleEsportsErp.Application.DTOs.Sessions;
 using AppleEsportsErp.Application.Interfaces;
@@ -23,6 +24,12 @@ namespace AppleEsportsErp.Api.Controllers;
 [AllowAnonymous]
 public class PublicController : ControllerBase
 {
+    /// <summary>
+    /// Sessions that have already had their low-balance alert sent, so the overlay's
+    /// once-per-second tick can't spam the member's inbox or the operator's alert feed.
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, DateTimeOffset> LowBalanceAlertsSent = new();
+
     private readonly AppDbContext _db;
 
     public PublicController(AppDbContext db)
@@ -342,6 +349,24 @@ public class PublicController : ControllerBase
 
         var branchId = pc.BranchId;
 
+        // A member session bills straight out of the Gaming wallet — refuse to start one on an
+        // empty wallet. Checked up front so it also covers the reservation auto-start path
+        // below, which builds its session directly instead of going through StartSessionAsync.
+        var startingMember = await _db.Members.AsNoTracking().FirstOrDefaultAsync(m => m.Id == memberId);
+        if (startingMember == null)
+            return BadRequest(new { success = false, error = "Member not found." });
+
+        if (startingMember.GamingBalance < MemberWalletRules.MinimumGamingBalanceToStart)
+        {
+            return BadRequest(new
+            {
+                success = false,
+                error = $"Your Gaming wallet balance is ₹{startingMember.GamingBalance:0.00}. Please top up your Gaming wallet at the counter to start a session.",
+                code = "INSUFFICIENT_GAMING_BALANCE",
+                gamingBalance = startingMember.GamingBalance
+            });
+        }
+
         // ── AUTO-START FROM RESERVATION (SOP §22) ──
         // If a pending reservation exists for this (memberId, pcId) within the time window,
         // auto-start the session from it — no operator approval needed.
@@ -587,6 +612,136 @@ public class PublicController : ControllerBase
         return Ok(new { success = true, data = sessionResult });
     }
 
+    /// <summary>
+    /// The signed-in member's current profile and wallet balances. Used by the overlay to
+    /// re-check the Gaming balance after an operator top-up, without a re-login.
+    /// </summary>
+    [HttpGet("members/me")]
+    [Authorize] // Requires valid MemberToken
+    public async Task<IActionResult> GetMyMemberProfile()
+    {
+        var memberIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(memberIdStr) || !Guid.TryParse(memberIdStr, out var memberId))
+            return Unauthorized(new { success = false, error = "Invalid Member token." });
+
+        var member = await _db.Members.AsNoTracking()
+            .Where(m => m.Id == memberId)
+            .Select(m => new
+            {
+                id = m.Id,
+                fullName = m.FullName,
+                username = m.Username,
+                email = m.Email,
+                mobileNumber = m.MobileNumber,
+                gamingBalance = m.GamingBalance,
+                foodBalance = m.FoodBalance,
+                homeBranchId = m.HomeBranchId
+            })
+            .FirstOrDefaultAsync();
+
+        if (member == null)
+            return NotFound(new { success = false, error = "Member not found." });
+
+        return Ok(ApiResponse<object>.Ok(member));
+    }
+
+    /// <summary>
+    /// Raised by the overlay the first time a running member session's remaining Gaming balance
+    /// drops past the reminder threshold. Emails the member and alerts the branch's operators.
+    /// Fires at most once per session — the overlay ticks every second, so the guard matters.
+    /// </summary>
+    [HttpPost("sessions/{sessionId:guid}/low-balance-alert")]
+    [Authorize] // Requires valid MemberToken
+    public async Task<IActionResult> LowBalanceAlert(
+        Guid sessionId,
+        [FromBody] LowBalanceAlertRequest req,
+        [FromServices] IEmailService emailService,
+        [FromServices] IHubContext<NotificationHub> notificationHub,
+        [FromServices] ILogger<PublicController> logger)
+    {
+        var memberIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(memberIdStr) || !Guid.TryParse(memberIdStr, out var memberId))
+            return Unauthorized(new { success = false, error = "Invalid Member token." });
+
+        var session = await _db.Sessions.Include(s => s.Pc)
+            .FirstOrDefaultAsync(s => s.Id == sessionId);
+        if (session == null || session.MemberId != memberId)
+            return BadRequest(new { success = false, error = "Session not found or not owned by you." });
+
+        // Only ever notify once per session, no matter how many ticks report the threshold.
+        if (!LowBalanceAlertsSent.TryAdd(sessionId, DateTimeOffset.UtcNow))
+            return Ok(new { success = true, alreadySent = true });
+
+        var member = await _db.Members.AsNoTracking().FirstOrDefaultAsync(m => m.Id == memberId);
+        if (member == null)
+            return BadRequest(new { success = false, error = "Member not found." });
+
+        var pcName = session.Pc?.PcName ?? session.Pc?.PcNumber ?? "your PC";
+        var remaining = req.RemainingBalance;
+        var minutesLeft = req.MinutesRemaining;
+
+        // Alert the operators on duty so they can walk over and offer a top-up.
+        try
+        {
+            await notificationHub.Clients.Group($"branch:{session.BranchId}").SendAsync("Alert", new
+            {
+                Type = "MemberLowBalance",
+                pcId = session.PcId,
+                pcName,
+                branchId = session.BranchId,
+                memberId,
+                memberName = member.FullName,
+                remainingBalance = remaining,
+                minutesRemaining = minutesLeft,
+                timestamp = DateTimeOffset.UtcNow.ToString("o"),
+                message = $"{member.FullName} on {pcName} has ₹{remaining:0.00} Gaming balance left (~{minutesLeft} min)."
+            });
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to push low-balance operator alert for session {SessionId}", sessionId);
+        }
+
+        // Email the member. Never let a mail failure break the running session.
+        if (!string.IsNullOrWhiteSpace(member.Email))
+        {
+            try
+            {
+                var body = $@"
+                <div style='background-color:#050505; color:#ffffff; font-family:""Segoe UI"", Tahoma, Geneva, Verdana, sans-serif; padding:40px 20px; text-align:center;'>
+                    <div style='max-width: 600px; margin: 0 auto; background-color: #111111; border: 1px solid #333333; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.5);'>
+                        <div style='background: linear-gradient(135deg, #1a1a24 0%, #0d0d14 100%); padding: 30px 20px; border-bottom: 2px solid #f59e0b;'>
+                            <h1 style='margin: 0; font-size: 28px; letter-spacing: 2px; color: #ffffff; text-transform: uppercase;'>
+                                <img src='https://appleesports.in/apple-touch-icon.png' alt='Logo' style='height: 40px; vertical-align: middle; margin-right: 15px;' /> APPLE ESPORTS
+                            </h1>
+                        </div>
+                        <div style='padding: 40px 30px; text-align: left;'>
+                            <h2 style='margin-top: 0; color: #f59e0b; font-size: 24px; border-bottom: 2px solid #333333; padding-bottom: 15px;'>Low Gaming Wallet Balance</h2>
+                            <p style='font-size: 16px; color: #d1d5db; line-height: 1.6;'>Hi <strong>{member.FullName}</strong>,</p>
+                            <p style='font-size: 16px; color: #d1d5db; line-height: 1.6;'>Your session on <strong>{pcName}</strong> is running low on Gaming wallet balance.</p>
+                            <div style='background-color: #0a0a0a; border: 1px solid #222222; border-radius: 8px; padding: 20px; margin-top: 25px;'>
+                                <p style='margin: 10px 0; color: #d1d5db;'>Remaining balance: <strong style='color: #f59e0b;'>₹{remaining:0.00}</strong></p>
+                                <p style='margin: 10px 0; color: #d1d5db;'>Approximate play time left: <strong style='color: #ffffff;'>{minutesLeft} minute(s)</strong></p>
+                            </div>
+                            <p style='font-size: 15px; color: #d1d5db; line-height: 1.6; margin-top: 25px;'>Please top up at the counter to keep playing. Your session will stop automatically once the balance runs out.</p>
+                        </div>
+                        <div style='background-color: #080808; padding: 20px; border-top: 1px solid #222222; text-align: center;'>
+                            <p style='margin: 0; color: #6b7280; font-size: 12px;'>This is an automated notification from Apple Esports ERP.</p>
+                        </div>
+                    </div>
+                </div>";
+
+                await emailService.SendEmailAsync(member.Email, "Apple Esports - Low Gaming Wallet Balance", body);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to send low-balance email to member {MemberId}", memberId);
+            }
+        }
+
+        return Ok(new { success = true });
+    }
+
     [HttpPost("bills/{billId:guid}/approve-wallet")]
     public async Task<IActionResult> ApproveWalletPayment(Guid billId, [FromBody] ApproveWalletRequest req, [FromServices] IBillingService billingService, [FromServices] IHubContext<BillingHub> billingHub)
     {
@@ -673,6 +828,12 @@ public class PublicController : ControllerBase
 public class ApproveWalletRequest
 {
     public Guid ApprovalToken { get; set; }
+}
+
+public class LowBalanceAlertRequest
+{
+    public decimal RemainingBalance { get; set; }
+    public int MinutesRemaining { get; set; }
 }
 
 public class SetMonitorHzDto

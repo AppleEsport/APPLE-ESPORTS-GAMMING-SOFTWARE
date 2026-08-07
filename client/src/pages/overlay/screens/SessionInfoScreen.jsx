@@ -1,16 +1,74 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useOverlaySocket } from '../../../contexts/OverlaySocketContext';
 import { MonitorPlay, Clock, IndianRupee, User, AlertTriangle, LogOut, CheckCircle2, X } from 'lucide-react';
 import { format } from 'date-fns';
+import api from '../../../config/api';
 import { formatMoney } from '../../../utils/money';
 import { computeRoundedBreakdown } from '../../../utils/billRounding';
+import { MIN_GAMING_BALANCE_TO_START } from '../../../utils/memberWalletRules';
 
 export default function SessionInfoScreen() {
-  const { sessionData, pcId, connectionStatus, memberCheckout } = useOverlaySocket();
+  const { sessionData, pcId, connectionStatus, memberCheckout, lowBalanceWarning } = useOverlaySocket();
+  const navigate = useNavigate();
   const [now, setNow] = useState(Date.now());
-  const [isCheckingOut, setIsCheckingOut] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [checkoutError, setCheckoutError] = useState(null);
+  const [resumeChecking, setResumeChecking] = useState(false);
+  const [resumeError, setResumeError] = useState(null);
+
+  // Logging out is a single tap — the bill is settled straight from the wallet with no
+  // confirmation step, because the member has already agreed to wallet billing by playing.
+  const handleLogout = async () => {
+    if (!sessionData?.sessionId || checkoutLoading) return;
+    setCheckoutLoading(true);
+    setCheckoutError(null);
+    const res = await memberCheckout(sessionData.sessionId);
+    if (!res?.success) {
+      setCheckoutError(res?.error || 'Failed to log out. Please see the operator.');
+      setCheckoutLoading(false);
+    }
+    // On success the PC flips to Idle via SignalR, which unmounts this screen.
+  };
+
+  // After the wallet runs dry the member can top up at the counter and come straight back —
+  // re-check the live balance rather than trusting the stale cached profile.
+  const handleToppedUpResume = async () => {
+    setResumeChecking(true);
+    setResumeError(null);
+    try {
+      const token = localStorage.getItem('memberToken');
+      const res = await api.get('/public/members/me', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const profile = res.data?.data;
+
+      if (!profile) {
+        setResumeError('Could not read your wallet. Please see the operator.');
+        return;
+      }
+
+      if (profile.gamingBalance < MIN_GAMING_BALANCE_TO_START) {
+        setResumeError(`Your Gaming wallet is still ₹${profile.gamingBalance.toFixed(2)}. Please complete the top-up at the counter.`);
+        return;
+      }
+
+      localStorage.setItem('memberProfile', JSON.stringify(profile));
+      localStorage.removeItem('walletEmptyAlert');
+      navigate(`/pc-overlay/${pcId}/login`);
+    } catch (err) {
+      setResumeError(err.response?.data?.error || 'Could not check your wallet. Please see the operator.');
+    } finally {
+      setResumeChecking(false);
+    }
+  };
+
+  const handleWalletEmptyLogout = () => {
+    localStorage.removeItem('walletEmptyAlert');
+    localStorage.removeItem('memberToken');
+    localStorage.removeItem('memberProfile');
+    navigate(`/pc-overlay/${pcId}/login`);
+  };
 
   useEffect(() => {
     const interval = setInterval(() => setNow(Date.now()), 1000);
@@ -55,14 +113,41 @@ export default function SessionInfoScreen() {
             <AlertTriangle className="w-12 h-12 text-neon-red mx-auto mb-4" />
             <h2 className="font-heading text-2xl font-bold text-neon-red tracking-wide uppercase mb-2">Session Ended</h2>
             <p className="text-neon-red font-body font-bold text-lg">
-              You have no balance left.<br/>Please recharge!!!
+              Your gaming wallet is empty.<br/>Your bill has been paid from your wallet.
             </p>
-            <button 
-              onClick={() => localStorage.removeItem('walletEmptyAlert')}
-              className="mt-4 px-4 py-2 bg-bg-3 border border-border text-text hover:bg-bg-4 rounded-md transition-colors text-sm"
-            >
-              Dismiss
-            </button>
+            <p className="text-text-2 font-body text-sm mt-3">
+              Top up at the counter, then tap below to jump straight back in.
+            </p>
+
+            {resumeError && (
+              <div className="mt-4 bg-neon-orange/10 border border-neon-orange/30 p-3 rounded-md text-neon-orange text-sm font-body">
+                {resumeError}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 gap-2 mt-5">
+              <button
+                onClick={handleToppedUpResume}
+                disabled={resumeChecking}
+                className="w-full py-3 rounded-xl bg-neon-green/15 hover:bg-neon-green/25 border border-neon-green/50 text-neon-green font-heading uppercase tracking-widest font-bold text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2"
+              >
+                {resumeChecking ? (
+                  <div className="w-5 h-5 border-2 border-neon-green/30 border-t-neon-green rounded-full animate-spin" />
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-4 h-4" />
+                    I've Topped Up — Resume
+                  </>
+                )}
+              </button>
+              <button
+                onClick={handleWalletEmptyLogout}
+                className="w-full py-3 rounded-xl bg-bg-3 hover:bg-bg-2 border border-border text-text-2 hover:text-text font-heading uppercase tracking-widest font-bold text-sm transition-colors flex justify-center items-center gap-2"
+              >
+                <LogOut className="w-4 h-4" />
+                Log Out
+              </button>
+            </div>
           </div>
         ) : (
           <>
@@ -142,13 +227,20 @@ export default function SessionInfoScreen() {
           </div>
         </div>
         <div className="flex gap-3">
-          {sessionData.memberLinked && !isCheckingOut && (
-            <button 
-              onClick={() => setIsCheckingOut(true)}
-              className="bg-neon-red/10 hover:bg-neon-red/20 border border-neon-red/30 p-2 sm:p-3 rounded-xl transition-colors shadow-inner flex items-center gap-2 group"
+          {sessionData.memberLinked && (
+            <button
+              onClick={handleLogout}
+              disabled={checkoutLoading}
+              className="bg-neon-red/10 hover:bg-neon-red/20 border border-neon-red/30 p-2 sm:p-3 rounded-xl transition-colors shadow-inner flex items-center gap-2 group disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <LogOut className="w-5 h-5 text-neon-red group-hover:scale-110 transition-transform" />
-              <span className="text-neon-red font-heading uppercase text-sm font-bold tracking-widest hidden sm:inline-block">Logout</span>
+              {checkoutLoading ? (
+                <div className="w-5 h-5 border-2 border-neon-red/30 border-t-neon-red rounded-full animate-spin" />
+              ) : (
+                <LogOut className="w-5 h-5 text-neon-red group-hover:scale-110 transition-transform" />
+              )}
+              <span className="text-neon-red font-heading uppercase text-sm font-bold tracking-widest hidden sm:inline-block">
+                {checkoutLoading ? 'Paying…' : 'Logout'}
+              </span>
             </button>
           )}
           {!sessionData.memberLinked && (
@@ -182,70 +274,37 @@ export default function SessionInfoScreen() {
         </div>
       )}
 
-      {isCheckingOut ? (
-        <div className="flex-1 flex flex-col items-center justify-center animate-in fade-in zoom-in duration-300">
-          <div className="bg-bg-3 border border-border rounded-2xl p-8 w-full max-w-md shadow-2xl relative overflow-hidden">
-            {/* Glow effect */}
-            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-neon-red to-transparent opacity-50" />
-            
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="font-heading text-2xl font-bold text-text uppercase tracking-wider">Checkout</h2>
-              <button onClick={() => setIsCheckingOut(false)} className="text-text-3 hover:text-text transition-colors">
-                <X className="w-6 h-6" />
-              </button>
-            </div>
-
-            <div className="space-y-4 mb-8">
-              <div className="flex justify-between items-center p-3 rounded-lg bg-bg-2 border border-border">
-                <span className="text-text-2 font-body">Gaming Charges</span>
-                <span className="text-text font-mono font-bold">₹{formatMoney(liveGamingCharge)}</span>
-              </div>
-              <div className="flex justify-between items-center p-3 rounded-lg bg-bg-2 border border-border">
-                <span className="text-text-2 font-body">Food Orders</span>
-                <span className="text-text font-mono font-bold">₹{formatMoney(sessionData.foodCharges || 0)}</span>
-              </div>
-              <div className="flex justify-between items-center p-4 rounded-xl bg-accent/5 border border-accent/20 mt-4">
-                <span className="text-accent font-heading font-bold uppercase tracking-wider">Grand Total</span>
-                <span className="text-accent font-mono text-2xl font-bold">₹{formatMoney(liveTotalBill)}</span>
-              </div>
-            </div>
-
-            {checkoutError && (
-              <div className="mb-6 bg-neon-orange/10 border border-neon-orange/30 p-3 rounded-md flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 text-neon-orange shrink-0" />
-                <span className="text-neon-orange text-sm font-body">{checkoutError}</span>
-              </div>
-            )}
-
-            <button 
-              onClick={async () => {
-                setCheckoutLoading(true);
-                setCheckoutError(null);
-                const res = await memberCheckout(sessionData.sessionId);
-                if (!res?.success) {
-                  setCheckoutError(res?.error || 'Failed to checkout. Please see operator.');
-                  setCheckoutLoading(false);
-                }
-                // on success, PC goes to idle via SignalR so no local state change needed
-              }}
-              disabled={checkoutLoading}
-              className="w-full bg-neon-red/20 hover:bg-neon-red/30 border border-neon-red/50 text-neon-red py-4 rounded-xl font-heading uppercase tracking-widest font-bold transition-all hover:shadow-[0_0_20px_rgba(255,51,102,0.3)] disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2"
-            >
-              {checkoutLoading ? (
-                <div className="w-6 h-6 border-2 border-neon-red/30 border-t-neon-red rounded-full animate-spin" />
-              ) : (
-                <>
-                  <CheckCircle2 className="w-5 h-5" />
-                  Pay from Wallet & End Session
-                </>
-              )}
-            </button>
+      {/* Low-balance reminder — a banner, never a popup, so it can't interrupt play. */}
+      {lowBalanceWarning && (
+        <div className={`mb-4 rounded-xl border p-4 flex items-start gap-3 animate-in fade-in slide-in-from-top-2 ${
+          lowBalanceWarning.isFinal
+            ? 'bg-neon-red/10 border-neon-red/40'
+            : 'bg-neon-orange/10 border-neon-orange/40'
+        }`}>
+          <AlertTriangle className={`w-6 h-6 shrink-0 mt-0.5 ${lowBalanceWarning.isFinal ? 'text-neon-red' : 'text-neon-orange'}`} />
+          <div>
+            <p className={`font-heading font-bold uppercase tracking-wider text-sm ${lowBalanceWarning.isFinal ? 'text-neon-red' : 'text-neon-orange'}`}>
+              {lowBalanceWarning.isFinal ? 'Final reminder' : 'Low gaming balance'}
+            </p>
+            <p className="text-text-2 font-body text-sm mt-1">
+              <strong className="text-text">₹{formatMoney(lowBalanceWarning.remaining)}</strong> remaining
+              {lowBalanceWarning.minutes > 0 && <> — about <strong className="text-text">{lowBalanceWarning.minutes} min</strong> of play left</>}.
+              {' '}Please top up at the counter to keep playing.
+            </p>
           </div>
         </div>
-      ) : (
-        /* Main Info Grid */
-        <div className="grid grid-cols-2 gap-4 mb-6 flex-1">
-        
+      )}
+
+      {checkoutError && (
+        <div className="mb-4 bg-neon-orange/10 border border-neon-orange/30 p-3 rounded-md flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 text-neon-orange shrink-0" />
+          <span className="text-neon-orange text-sm font-body">{checkoutError}</span>
+        </div>
+      )}
+
+      {/* Main Info Grid */}
+      <div className="grid grid-cols-2 gap-4 mb-6 flex-1">
+
         {/* Time Display */}
         <div className={`col-span-2 p-6 rounded-xl border relative overflow-hidden ${isLowTime ? 'bg-neon-orange/10 border-neon-orange/50 shadow-[0_0_15px_rgba(255,165,0,0.2)]' : 'bg-bg-3 border-border shadow-inner'}`}>
           <div className="flex items-center justify-between mb-2 relative z-10">
@@ -281,8 +340,7 @@ export default function SessionInfoScreen() {
             {format(new Date(sessionData.sessionStart), 'hh:mm a')}
           </div>
         </div>
-        </div>
-      )}
+      </div>
 
       <div className="mt-auto">
         <div className="bg-bg-3 border border-border rounded-xl p-4 flex items-center justify-between shadow-inner">

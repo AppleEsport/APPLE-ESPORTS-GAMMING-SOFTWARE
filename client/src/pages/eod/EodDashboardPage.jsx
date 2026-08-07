@@ -90,7 +90,19 @@ export default function EodDashboardPage() {
       // Fetch maintenance logs separately so it doesn't break EOD if it fails
       try {
         const maintenanceRes = await getBranchMaintenanceLogs(targetBranchId, 30);
-        setMaintenanceLogs(maintenanceRes.data || []);
+        // Show maintenance logs that were ACTIVE on the target date:
+        // - Marked on or before the target date
+        // - Either not resolved yet, OR resolved after the target date
+        const logsActiveOnDate = (maintenanceRes.data || []).filter(log => {
+          const markedDate = new Date(log.markedAt).toISOString().split('T')[0];
+          const resolvedDate = log.resolvedAt ? new Date(log.resolvedAt).toISOString().split('T')[0] : null;
+
+          const markedOnOrBefore = markedDate <= targetDate;
+          const notResolvedOrResolvedAfter = !resolvedDate || resolvedDate > targetDate;
+
+          return markedOnOrBefore && notResolvedOrResolvedAfter;
+        });
+        setMaintenanceLogs(logsActiveOnDate);
       } catch (err) {
         console.error('Failed to fetch maintenance logs:', err);
         setMaintenanceLogs([]);

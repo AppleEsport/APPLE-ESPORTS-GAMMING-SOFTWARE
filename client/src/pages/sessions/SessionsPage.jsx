@@ -230,6 +230,19 @@ export default function SessionsPage() {
     const unsubNotification = subscribe(SIGNALR_HUBS.NOTIFICATIONS, 'Alert', (alert) => {
       console.log('[SessionsPage] Received Alert:', alert);
       const type = alert.type || alert.Type;
+
+      // A member's gaming wallet is running low — surface it so the operator can walk over
+      // and offer a top-up before the session auto-stops.
+      if (type === 'MemberLowBalance') {
+        const pcName = alert.pcName || alert.PcName || 'a PC';
+        const memberName = alert.memberName || alert.MemberName || 'Member';
+        const remaining = alert.remainingBalance ?? alert.RemainingBalance ?? 0;
+        const mins = alert.minutesRemaining ?? alert.MinutesRemaining ?? 0;
+        toast.warning(`${memberName} on ${pcName}: ₹${Number(remaining).toFixed(2)} gaming balance left (~${mins} min)`);
+        logActivity(`${pcName}: ${memberName} low gaming balance — ₹${Number(remaining).toFixed(2)} left (~${mins} min). Offer a top-up.`, 'warn');
+        return;
+      }
+
       if (type === 'WalkinSessionRequest') {
         console.log('[SessionsPage] Setting Walkin Request state for pcId:', alert.pcId);
         setWalkinRequests(prev => {

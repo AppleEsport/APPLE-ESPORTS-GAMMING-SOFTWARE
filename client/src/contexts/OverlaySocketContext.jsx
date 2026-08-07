@@ -1,6 +1,12 @@
 import React, { createContext, useContext, useEffect, useState, useRef, useCallback } from 'react';
 import { HubConnectionBuilder, LogLevel } from '@microsoft/signalr';
 import api from '../config/api';
+import {
+  AUTO_STOP_REMAINING_BALANCE,
+  FIRST_REMINDER_REMAINING_BALANCE,
+  SECOND_REMINDER_REMAINING_BALANCE,
+  minutesRemainingFor
+} from '../utils/memberWalletRules';
 
 const OverlaySocketContext = createContext(null);
 
@@ -177,6 +183,59 @@ export function OverlaySocketProvider({ children, pcId, isMinimized: initialMini
   // session, so it can only ever trigger once (and can't double-fire from a fast tick).
   const autoCheckoutRef = useRef({ sessionId: null, triggered: false });
 
+  // Tracks which low-balance reminders have already fired for the current session, so the
+  // once-per-second tick shows each reminder exactly once (a top-up resets it below).
+  const balanceRemindersRef = useRef({ sessionId: null, fired: new Set() });
+
+  // The low-balance reminder currently on screen — rendered as a banner, never a popup, so
+  // it can't interrupt the customer mid-game. Cleared when they top up or the session ends.
+  const [lowBalanceWarning, setLowBalanceWarning] = useState(null);
+
+  // Announces the reminder out loud, mirroring the time-remaining alerts.
+  const playBalanceAlert = (remaining, minutes) => {
+    try {
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const oscillator = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+      oscillator.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+      oscillator.type = 'triangle';
+      oscillator.frequency.setValueAtTime(400, audioCtx.currentTime);
+      gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+      oscillator.start();
+      oscillator.stop(audioCtx.currentTime + 0.3);
+
+      if ('speechSynthesis' in window) {
+        setTimeout(() => {
+          const utterance = new SpeechSynthesisUtterance(
+            `Attention. ${Math.floor(remaining)} rupees remaining in your gaming wallet. That is about ${minutes} minute${minutes === 1 ? '' : 's'} of play. Please top up to continue.`
+          );
+          utterance.rate = 0.9;
+          utterance.pitch = 1.1;
+          window.speechSynthesis.speak(utterance);
+        }, 400);
+      }
+    } catch (e) {
+      console.warn('Balance alert failed', e);
+    }
+  };
+
+  // Tells the backend to email the member and alert the branch's operators. The server
+  // de-dupes per session, so a retry here is harmless.
+  const sendLowBalanceAlert = async (sessionId, remaining, minutes) => {
+    const token = localStorage.getItem('memberToken');
+    if (!token) return;
+    try {
+      await api.post(
+        `/public/sessions/${sessionId}/low-balance-alert`,
+        { remainingBalance: remaining, minutesRemaining: minutes },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+    } catch (err) {
+      console.warn('[Overlay] Low-balance alert failed:', err?.message);
+    }
+  };
+
   // ── REAL MODE: Live countdown from remainingTime ──
   // Runs at the provider level (not inside a screen component) so it keeps ticking — and a
   // member's wallet-exhausted auto-checkout keeps working — no matter which overlay screen
@@ -191,6 +250,8 @@ export function OverlaySocketProvider({ children, pcId, isMinimized: initialMini
     const timer = setInterval(() => {
       let shouldAutoCheckout = false;
       let checkoutSessionId = null;
+      let reminderToFire = null;
+      let clearWarning = false;
 
       setSessionData(prev => {
         if (!prev) return prev;
@@ -220,18 +281,41 @@ export function OverlaySocketProvider({ children, pcId, isMinimized: initialMini
           nextGamingCharges = elapsedMin <= bufferMinutes ? 0 : (elapsedMin / 60) * (prev.ratePerHour || 0);
         }
 
-        // A member's session must stop the instant their gaming wallet balance is used up —
-        // this has to live here (not in a screen component) so it can't be skipped just
-        // because the customer navigated to Food/Extend/Call/Bill.
-        if (
-          prev.memberLinked &&
-          prev.gamingBalance != null &&
-          nextGamingCharges >= prev.gamingBalance &&
-          !autoCheckoutRef.current.triggered
-        ) {
-          autoCheckoutRef.current.triggered = true;
-          shouldAutoCheckout = true;
-          checkoutSessionId = prev.sessionId;
+        // Everything below is wallet-funded member play — this has to live here (not in a
+        // screen component) so it can't be skipped just because the customer navigated to
+        // Food/Extend/Call/Bill.
+        if (prev.memberLinked && prev.gamingBalance != null) {
+          const remaining = prev.gamingBalance - nextGamingCharges;
+
+          if (balanceRemindersRef.current.sessionId !== prev.sessionId) {
+            balanceRemindersRef.current = { sessionId: prev.sessionId, fired: new Set() };
+          }
+          const firedReminders = balanceRemindersRef.current.fired;
+
+          // An operator top-up mid-session lifts the balance back up (the 10s silent refetch
+          // picks it up) — re-arm both reminders and drop the banner.
+          if (remaining >= FIRST_REMINDER_REMAINING_BALANCE && firedReminders.size > 0) {
+            firedReminders.clear();
+            clearWarning = true;
+          }
+
+          // The session must stop the instant the wallet can no longer cover the next rupee,
+          // so the member is never billed more than they hold.
+          if (remaining < AUTO_STOP_REMAINING_BALANCE && !autoCheckoutRef.current.triggered) {
+            autoCheckoutRef.current.triggered = true;
+            shouldAutoCheckout = true;
+            checkoutSessionId = prev.sessionId;
+          } else if (autoCheckoutRef.current.triggered) {
+            // Checkout is already in flight — don't raise a reminder behind it.
+          } else if (remaining < SECOND_REMINDER_REMAINING_BALANCE && !firedReminders.has(SECOND_REMINDER_REMAINING_BALANCE)) {
+            firedReminders.add(SECOND_REMINDER_REMAINING_BALANCE);
+            // Both reminders are considered spent once the final one fires.
+            firedReminders.add(FIRST_REMINDER_REMAINING_BALANCE);
+            reminderToFire = { remaining, sessionId: prev.sessionId, ratePerHour: prev.ratePerHour, isFinal: true };
+          } else if (remaining < FIRST_REMINDER_REMAINING_BALANCE && !firedReminders.has(FIRST_REMINDER_REMAINING_BALANCE)) {
+            firedReminders.add(FIRST_REMINDER_REMAINING_BALANCE);
+            reminderToFire = { remaining, sessionId: prev.sessionId, ratePerHour: prev.ratePerHour, isFinal: false };
+          }
         }
 
         return {
@@ -242,8 +326,27 @@ export function OverlaySocketProvider({ children, pcId, isMinimized: initialMini
         };
       });
 
+      if (clearWarning) setLowBalanceWarning(null);
+
+      if (reminderToFire) {
+        const minutes = minutesRemainingFor(reminderToFire.remaining, reminderToFire.ratePerHour);
+        setLowBalanceWarning({
+          remaining: reminderToFire.remaining,
+          minutes,
+          isFinal: reminderToFire.isFinal
+        });
+        playBalanceAlert(reminderToFire.remaining, minutes);
+
+        // Only the first reminder emails the member and pings the operator — the second is
+        // an on-screen nudge, so it doesn't double up on their inbox.
+        if (!reminderToFire.isFinal) {
+          sendLowBalanceAlert(reminderToFire.sessionId, reminderToFire.remaining, minutes);
+        }
+      }
+
       if (shouldAutoCheckout && checkoutSessionId) {
         localStorage.setItem('walletEmptyAlert', 'true');
+        setLowBalanceWarning(null);
         memberCheckout(checkoutSessionId).then(res => {
           if (res?.success) {
             fetchSession();
@@ -577,7 +680,9 @@ export function OverlaySocketProvider({ children, pcId, isMinimized: initialMini
       walletApprovalRequest,
       respondToWalletApproval,
       branchId,
-      memberCheckout
+      memberCheckout,
+      lowBalanceWarning,
+      dismissLowBalanceWarning: () => setLowBalanceWarning(null)
     }}>
       {children}
     </OverlaySocketContext.Provider>

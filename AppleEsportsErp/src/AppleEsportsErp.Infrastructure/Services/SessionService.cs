@@ -131,6 +131,25 @@ public class SessionService : ISessionService
                 }
             }
 
+            // A member session bills straight out of the Gaming wallet, so it can never be
+            // started on an empty one — it would be auto-stopped by the wallet monitor on the
+            // very first tick. Blocked here so it covers every entry point (operator start,
+            // member overlay start, walk-in conversion) with one rule.
+            if (dto.MemberId.HasValue)
+            {
+                var member = await _db.Members.AsNoTracking()
+                    .FirstOrDefaultAsync(m => m.Id == dto.MemberId.Value)
+                    ?? throw new NotFoundException("Member not found", "MEMBER_NOT_FOUND");
+
+                if (member.GamingBalance < MemberWalletRules.MinimumGamingBalanceToStart)
+                {
+                    throw new AppException(
+                        $"Cannot start session — {member.FullName}'s Gaming wallet balance is ₹{member.GamingBalance:0.00}. Please top up the Gaming wallet before starting a session.",
+                        System.Net.HttpStatusCode.BadRequest,
+                        "INSUFFICIENT_GAMING_BALANCE");
+                }
+            }
+
             var now = DateTimeOffset.UtcNow;
             
             var session = new Session
