@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.PcManagement;
 using AppleEsportsErp.Application.Exceptions;
 using AppleEsportsErp.Application.Interfaces;
@@ -200,7 +201,7 @@ public class PcManagementService : IPcManagementService
         return MapToDto(transferred!);
     }
 
-    public async Task<PcDto> MarkMaintenanceAsync(Guid pcId, Guid superAdminId, bool isMaintenance)
+    public async Task<PcDto> MarkMaintenanceAsync(Guid pcId, Guid actorId, string actorRole, bool isMaintenance)
     {
         var pc = await _unitOfWork.Repository<Pc>().Query()
             .FirstOrDefaultAsync(p => p.Id == pcId)
@@ -213,7 +214,7 @@ public class PcManagementService : IPcManagementService
         {
             if (pc.State == PcState.Active || pc.State == PcState.Reserved || pc.State == PcState.AwaitingBilling)
                 throw new AppException("Cannot place PC under maintenance while it is actively used or reserved.");
-                
+
             pc.State = PcState.UnderMaintenance;
         }
         else
@@ -221,15 +222,29 @@ public class PcManagementService : IPcManagementService
             if (pc.State == PcState.UnderMaintenance || pc.State == PcState.Offline)
                 pc.State = PcState.Idle;
         }
-        
+
         pc.UpdatedAt = DateTimeOffset.UtcNow;
         _unitOfWork.Repository<Pc>().Update(pc);
 
+        var isOperatorActor = actorRole == Roles.Operator;
+        var actorName = "Unknown";
+        if (isOperatorActor)
+        {
+            var op = await _unitOfWork.Repository<Operator>().Query().FirstOrDefaultAsync(o => o.Id == actorId);
+            if (op != null) actorName = op.FullName;
+        }
+        else
+        {
+            var user = await _unitOfWork.Repository<User>().Query().FirstOrDefaultAsync(u => u.Id == actorId);
+            if (user != null) actorName = user.FullName;
+        }
+
         await _auditService.LogAsync(new AuditEntry
         {
-            OperatorId = superAdminId,
-            UserRole = "SuperAdmin",
-            UserName = "System",
+            UserId = isOperatorActor ? null : actorId,
+            OperatorId = isOperatorActor ? actorId : null,
+            UserRole = actorRole,
+            UserName = actorName,
             Action = isMaintenance ? "pc_maintenance_enabled" : "pc_maintenance_disabled",
             BranchId = pc.BranchId,
             TargetType = "pc",

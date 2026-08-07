@@ -7,6 +7,7 @@ public class MaintenanceLogDto
     public string PcName { get; set; } = null!;
     public Guid OperatorId { get; set; }
     public string OperatorName { get; set; } = null!;
+    public string? ResolvedByName { get; set; }
     public string Reason { get; set; } = null!;
     public DateTimeOffset MarkedAt { get; set; }
     public DateTimeOffset? ResolvedAt { get; set; }
