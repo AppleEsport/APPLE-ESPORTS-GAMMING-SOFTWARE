@@ -3,6 +3,7 @@ using System;
 using AppleEsportsErp.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace AppleEsportsErp.Infrastructure.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260807144438_AddVersionTracking")]
+    partial class AddVersionTracking
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -2317,47 +2320,6 @@ namespace AppleEsportsErp.Infrastructure.Migrations
                         .HasDatabaseName("idx_shifts_status");
 
                     b.ToTable("shifts", (string)null);
-                });
-
-            modelBuilder.Entity("AppleEsportsErp.Domain.Entities.SyncOutboxEntry", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("AggregateId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("AggregateType")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<int>("AttemptCount")
-                        .HasColumnType("integer");
-
-                    b.Property<Guid>("BranchId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("EventData")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("EventType")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("LastError")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime?>("SyncedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("SyncOutboxEntries");
                 });
 
             modelBuilder.Entity("AppleEsportsErp.Domain.Entities.SystemConfig", b =>

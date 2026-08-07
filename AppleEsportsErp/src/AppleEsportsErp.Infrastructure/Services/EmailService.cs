@@ -1,11 +1,14 @@
 using System;
 using System.Net;
 using System.Net.Mail;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.EntityFrameworkCore;
 using AppleEsportsErp.Application.Interfaces;
+using AppleEsportsErp.Domain.Entities;
 
 namespace AppleEsportsErp.Infrastructure.Services
 {
@@ -14,17 +17,26 @@ namespace AppleEsportsErp.Infrastructure.Services
         private readonly IUnitOfWork _unitOfWork;
         private readonly ILogger<EmailService> _logger;
         private readonly IConfiguration _configuration;
+        private readonly bool _isHeadOffice;
 
         public EmailService(IUnitOfWork unitOfWork, ILogger<EmailService> logger, IConfiguration configuration)
         {
             _unitOfWork = unitOfWork;
             _logger = logger;
             _configuration = configuration;
+            _isHeadOffice = bool.TryParse(configuration["Deployment:IsHeadOffice"], out var isHO) && isHO;
         }
 
         public async Task SendEmailAsync(string to, string subject, string body)
         {
             if (string.IsNullOrWhiteSpace(to)) return;
+
+            // If this is a branch (not Head Office), queue the email instead of sending it
+            if (!_isHeadOffice)
+            {
+                await QueueEmailForHeadOfficeAsync(to, subject, body);
+                return;
+            }
 
             string host = _configuration["EmailSettings:Host"] ?? "";
             string portString = _configuration["EmailSettings:Port"] ?? "587";
@@ -108,6 +120,51 @@ namespace AppleEsportsErp.Infrastructure.Services
             {
                 _logger.LogError($"Failed to send email to {to}: {ex.Message}");
                 System.IO.File.AppendAllText("email_log.txt", $"[EmailService] EXCEPTION SENDING: {ex.ToString()}\n");
+            }
+        }
+
+        private async Task QueueEmailForHeadOfficeAsync(string to, string subject, string body)
+        {
+            try
+            {
+                // Get the first branch (this is a branch deployment)
+                var branch = await _unitOfWork.Repository<Branch>()
+                    .Query()
+                    .FirstOrDefaultAsync();
+
+                if (branch == null)
+                {
+                    _logger.LogWarning("Cannot queue email: no branch found in this deployment");
+                    return;
+                }
+
+                // Queue email as outbox event so Head Office can send it
+                var outboxEntry = new SyncOutboxEntry
+                {
+                    BranchId = branch.Id,
+                    AggregateType = "Email",
+                    AggregateId = Guid.NewGuid(),
+                    EventType = "email.send_requested",
+                    EventData = JsonSerializer.Serialize(new
+                    {
+                        to,
+                        subject,
+                        body,
+                        requestedAt = DateTime.UtcNow
+                    }),
+                    CreatedAt = DateTime.UtcNow,
+                    SyncedAt = null,
+                    AttemptCount = 0
+                };
+
+                await _unitOfWork.Repository<SyncOutboxEntry>().AddAsync(outboxEntry);
+                await _unitOfWork.CommitTransactionAsync();
+
+                _logger.LogInformation($"Queued email for Head Office to send to {to} with subject: {subject}");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Failed to queue email: {ex.Message}");
             }
         }
     }
