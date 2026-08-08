@@ -1,0 +1,2 @@
+# Publish output — the built .exe is a release artefact, not source
+publish/
