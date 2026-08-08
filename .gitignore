@@ -55,3 +55,4 @@ pcs.json
 
 # Dashboard password gate — holds a credential hash, created on the server, never committed
 nginx/.htpasswd
+docker-compose.override.yml
