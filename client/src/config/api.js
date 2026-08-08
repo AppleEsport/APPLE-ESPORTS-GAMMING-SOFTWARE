@@ -10,6 +10,7 @@ const API_BASE_URL = '/api';
 const api = axios.create({
   baseURL: API_BASE_URL,
   timeout: 15000,
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
     'Cache-Control': 'no-cache, no-store, must-revalidate',
@@ -18,17 +19,10 @@ const api = axios.create({
   },
 });
 
-// ── Request Interceptor — attach JWT token ──
+// ── Request Interceptor — attach branch header ──
+// Tokens are now sent as HTTP-only cookies automatically (no manual attach needed)
 api.interceptors.request.use(
   (config) => {
-    // Check if there is an active Admin Switch session
-    const adminSwitchToken = sessionStorage.getItem('adminSwitchToken');
-    const token = adminSwitchToken || localStorage.getItem('accessToken');
-    
-    if (token && !config.headers.Authorization && !config.headers.authorization) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-
     // Attach branch header for Super Admin branch switching
     const activeBranch = localStorage.getItem('activeBranchId');
     if (activeBranch) {
@@ -65,7 +59,7 @@ api.interceptors.response.use(
       return Promise.reject(error);
     }
 
-    // Token expired — attempt refresh
+    // Token expired — attempt refresh (cookies are sent automatically)
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
 
@@ -73,56 +67,33 @@ api.interceptors.response.use(
         isRefreshing = true;
 
         try {
-          const refreshToken = localStorage.getItem('refreshToken');
-          if (!refreshToken) throw new Error('No refresh token');
-
-          const response = await axios.post(`${API_BASE_URL}/auth/refresh`, {
-            refreshToken,
+          // Send refresh request with credentials (cookies auto-included)
+          await axios.post(`${API_BASE_URL}/auth/refresh`, {}, {
+            withCredentials: true
           });
 
-          const { accessToken } = response.data.data;
-          localStorage.setItem('accessToken', accessToken);
-          api.defaults.headers.common['Authorization'] = `Bearer ${accessToken}`;
-          
           isRefreshing = false;
-          
-          // Queue the original request FIRST before flushing
-          const retryOriginalRequest = new Promise((resolve, reject) => {
-            subscribeTokenRefresh((token) => {
-              if (token instanceof Error) {
-                reject(token);
-              } else {
-                originalRequest.headers.Authorization = `Bearer ${token}`;
-                resolve(api(originalRequest));
-              }
-            });
-          });
-          
-          onRefreshed(accessToken);
-          return retryOriginalRequest;
+          onRefreshed(true);
+          return api(originalRequest);
 
         } catch (refreshError) {
           isRefreshing = false;
-          
-          // Reject all queued requests
           onRefreshed(new Error('Refresh failed'));
           refreshSubscribers = [];
-          
+
           // Refresh failed — force logout
-          localStorage.removeItem('accessToken');
-          localStorage.removeItem('refreshToken');
           localStorage.removeItem('user');
+          localStorage.removeItem('activeBranchId');
           window.location.href = '/';
           return Promise.reject(refreshError);
         }
       } else {
-        // Already refreshing, just join the queue
+        // Already refreshing, join the queue
         return new Promise((resolve, reject) => {
           subscribeTokenRefresh((token) => {
             if (token instanceof Error) {
               reject(token);
             } else {
-              originalRequest.headers.Authorization = `Bearer ${token}`;
               resolve(api(originalRequest));
             }
           });
