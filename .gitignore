@@ -63,3 +63,6 @@ dist/
 # Branch installer working files — 120MB of PostgreSQL and build output
 installer/branch/staging/
 installer/branch/.cache/
+
+# Agent publish output — a 156MB self-contained exe, built not stored
+AppleEsportsErp/src/AppleEsportsErp.ClientAgent/publish/
