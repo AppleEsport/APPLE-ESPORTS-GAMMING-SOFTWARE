@@ -26,7 +26,9 @@ public class WalletService : IWalletService
     private readonly IAppUrlProvider _appUrls;
     private readonly ILogger<WalletService> _logger;
 
-    public WalletService(IUnitOfWork unitOfWork, IAuditService auditService, IEmailService emailService, IConfiguration configuration, IAppUrlProvider appUrls, ILogger<WalletService> logger)
+    private readonly IOutboxService _outbox;
+
+    public WalletService(IUnitOfWork unitOfWork, IAuditService auditService, IEmailService emailService, IConfiguration configuration, IAppUrlProvider appUrls, ILogger<WalletService> logger, IOutboxService outbox)
     {
         _unitOfWork = unitOfWork;
         _auditService = auditService;
@@ -34,6 +36,7 @@ public class WalletService : IWalletService
         _configuration = configuration;
         _appUrls = appUrls;
         _logger = logger;
+        _outbox = outbox;
     }
 
     private async Task<(decimal minGamingTopUp, decimal defaultBonusPercent)> GetTopUpRulesAsync()
@@ -170,6 +173,25 @@ public class WalletService : IWalletService
             TargetType = "wallet",
             TargetId = member.Id,
             Details = new { Amount = dto.Amount, PaymentType = dto.PaymentType }
+        });
+
+        // A wallet is shared across all four branches, so Head Office must learn about a
+        // top-up quickly — it is the only place that can spot the same balance being spent
+        // in two towns at once. Sent with the resulting balance, not just the delta, so a
+        // batch that arrives out of order can still be reconciled.
+        await _outbox.RecordEventAsync(branchId, "Member", member.Id, "wallet.topped_up", new
+        {
+            memberId = member.Id,
+            memberUsername = member.Username,
+            walletTransactionId = walletTx.Id,
+            operatorId,
+            shiftId,
+            cashAmount = dto.Amount,
+            bonusAmount,
+            totalCredit,
+            paymentType = dto.PaymentType,
+            gamingBalanceAfter = member.GamingBalance,
+            occurredAt = DateTimeOffset.UtcNow,
         });
 
         await _unitOfWork.CommitTransactionAsync();
