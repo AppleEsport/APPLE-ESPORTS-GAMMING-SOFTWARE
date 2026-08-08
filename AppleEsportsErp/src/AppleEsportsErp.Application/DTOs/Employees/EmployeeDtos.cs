@@ -45,6 +45,10 @@ public class EmployeeDto
     public string? RefPhone { get; set; }
     public string? RefAddress { get; set; }
 
+    // Documents
+    public string? PhotoDataUrl { get; set; }
+    public string? AadharDataUrl { get; set; }
+
     public string Status { get; set; } = "Active";
     public string? SubmittedByName { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
@@ -89,6 +93,10 @@ public class CreateEmployeeDto
     public string? RefRelationship { get; set; }
     public string? RefPhone { get; set; }
     public string? RefAddress { get; set; }
+
+    // Documents
+    public string? PhotoDataUrl { get; set; }
+    public string? AadharDataUrl { get; set; }
 
     // System Account Link
     public bool CreateSystemAccount { get; set; }

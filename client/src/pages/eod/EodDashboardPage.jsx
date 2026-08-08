@@ -96,13 +96,14 @@ export default function EodDashboardPage() {
         const maintenanceRes = await getBranchMaintenanceLogs(targetBranchId, 30);
         // Show maintenance logs that were ACTIVE on the target date:
         // - Marked on or before the target date
-        // - Either not resolved yet, OR resolved after the target date
+        // - Either not resolved yet, OR resolved on/after the target date
+        //   (">=", not ">": a PC marked and restored on the same day must still show up)
         const logsActiveOnDate = (maintenanceRes.data || []).filter(log => {
           const markedDate = new Date(log.markedAt).toISOString().split('T')[0];
           const resolvedDate = log.resolvedAt ? new Date(log.resolvedAt).toISOString().split('T')[0] : null;
 
           const markedOnOrBefore = markedDate <= targetDate;
-          const notResolvedOrResolvedAfter = !resolvedDate || resolvedDate > targetDate;
+          const notResolvedOrResolvedAfter = !resolvedDate || resolvedDate >= targetDate;
 
           return markedOnOrBefore && notResolvedOrResolvedAfter;
         });
@@ -263,6 +264,28 @@ export default function EodDashboardPage() {
       ]),
       rowColor: (rowIndex) => eodCreditRows[rowIndex]?.status?.toLowerCase() === 'cleared' ? ROW_TINT_GREEN : ROW_TINT_RED,
     });
+
+    const maintenanceRows = maintenanceLogs || [];
+    if (maintenanceRows.length) {
+      y = addTable(doc, y, {
+        title, subtitle,
+        heading: `Maintenance Logs (${targetDate})`,
+        head: ['PC', 'Marked At', 'Marked By', 'Reason', 'Duration', 'Status', 'Resolved At', 'Resolution Notes'],
+        body: maintenanceRows.map(log => [
+          log.pcName || '-',
+          log.markedAt ? new Date(log.markedAt).toLocaleString() : '-',
+          log.operatorName || '-',
+          log.reason || '-',
+          log.durationMinutes > 0
+            ? `${Math.floor(log.durationMinutes / 60)}h ${log.durationMinutes % 60}m`
+            : (log.isResolved ? '< 1m' : '-'),
+          log.isResolved ? 'Resolved' : 'Active',
+          log.resolvedAt ? new Date(log.resolvedAt).toLocaleString() : '-',
+          log.resolutionNotes || '-'
+        ]),
+        rowColor: (rowIndex) => maintenanceRows[rowIndex]?.isResolved ? ROW_TINT_GREEN : ROW_TINT_RED,
+      });
+    }
 
     save(doc, `Apple_Esports_EOD_${targetDate}.pdf`);
   };
@@ -735,7 +758,9 @@ export default function EodDashboardPage() {
                         <td className="py-3 px-4 text-neon-blue font-bold">{log.operatorName}</td>
                         <td className="py-3 px-4 text-text-2">{log.reason}</td>
                         <td className="py-3 px-4 text-text-2">
-                          {log.durationMinutes > 0 ? `${Math.floor(log.durationMinutes / 60)}h ${log.durationMinutes % 60}m` : '-'}
+                          {log.durationMinutes > 0
+                            ? `${Math.floor(log.durationMinutes / 60)}h ${log.durationMinutes % 60}m`
+                            : (log.isResolved ? '< 1m' : '-')}
                         </td>
                         <td className="py-3 px-4 text-center">
                           {log.isResolved ? (

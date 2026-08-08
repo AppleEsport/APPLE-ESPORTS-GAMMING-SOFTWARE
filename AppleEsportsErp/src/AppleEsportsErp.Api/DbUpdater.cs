@@ -78,6 +78,65 @@ ADD COLUMN IF NOT EXISTS ""ChangeReturned"" numeric(10,2) NOT NULL DEFAULT 0.0,
 ADD COLUMN IF NOT EXISTS ""ActualCashCollected"" numeric(10,2) NOT NULL DEFAULT 0.0;
 ");
 
+        // Employees table (SOP §HR-01) — never shipped as an EF migration, only as a
+        // standalone /migrations/001_add_employees.sql that nothing executes automatically.
+        // Create it here so fresh/existing databases both end up with it.
+        db.Database.ExecuteSqlRaw(@"
+CREATE TABLE IF NOT EXISTS employees (
+    ""Id""                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    ""BranchId""                UUID NOT NULL REFERENCES branches(""Id"") ON DELETE RESTRICT,
+    ""EmployeeNumber""          TEXT NOT NULL,
+    ""FullName""                TEXT NOT NULL,
+    ""Gender""                  TEXT,
+    ""DateOfBirth""             DATE,
+    ""Nationality""             TEXT DEFAULT 'Indian',
+    ""MaritalStatus""           TEXT,
+    ""PermanentAddress""        TEXT,
+    ""CurrentAddress""          TEXT,
+    ""Phone""                   TEXT,
+    ""Email""                   TEXT,
+    ""EmergencyName""           TEXT,
+    ""EmergencyRelationship""   TEXT,
+    ""EmergencyPhone""          TEXT,
+    ""EmergencyEmail""          TEXT,
+    ""EmergencyAddress""        TEXT,
+    ""PositionTitle""           TEXT,
+    ""Department""              TEXT,
+    ""Supervisor""              TEXT,
+    ""StartDate""                DATE,
+    ""BankName""                TEXT,
+    ""AccountNumber""           TEXT,
+    ""AccountHolderName""       TEXT,
+    ""BankBranch""              TEXT,
+    ""RefName""                 TEXT,
+    ""RefRelationship""         TEXT,
+    ""RefPhone""                TEXT,
+    ""RefAddress""              TEXT,
+    ""PhotoDataUrl""            TEXT,
+    ""AadharDataUrl""           TEXT,
+    ""Status""                  TEXT NOT NULL DEFAULT 'Active',
+    ""SubmittedBy""             UUID REFERENCES operators(""Id"") ON DELETE SET NULL,
+    ""CreatedAt""                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    ""UpdatedAt""                TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'employees_employeenumber_unique'
+  ) THEN
+    ALTER TABLE employees ADD CONSTRAINT employees_employeenumber_unique UNIQUE (""EmployeeNumber"");
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_employees_branch_id ON employees(""BranchId"");
+CREATE INDEX IF NOT EXISTS idx_employees_employee_number ON employees(""EmployeeNumber"");
+CREATE INDEX IF NOT EXISTS idx_employees_status ON employees(""Status"");
+
+ALTER TABLE employees
+ADD COLUMN IF NOT EXISTS ""PhotoDataUrl"" text,
+ADD COLUMN IF NOT EXISTS ""AadharDataUrl"" text;
+");
+
         // Execute data seeding for branches, PCs, operators, etc.
         DataSeeder.SeedBranchesAsync(db).GetAwaiter().GetResult();
     }
