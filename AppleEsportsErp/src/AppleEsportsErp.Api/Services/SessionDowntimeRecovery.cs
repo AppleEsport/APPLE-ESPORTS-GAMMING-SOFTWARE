@@ -32,7 +32,10 @@ public static class SessionDowntimeRecovery
 
         var now = DateTimeOffset.UtcNow;
 
+        // Branch comes along for the ride: deciding whether an outage needs a human to
+        // look at it depends on that branch's trading hours, not on how long it lasted.
         var liveSessions = await db.Sessions
+            .Include(s => s.Branch)
             .Where(s => s.State == SessionState.Active)
             .ToListAsync();
 
@@ -56,11 +59,16 @@ public static class SessionDowntimeRecovery
                 continue;
             }
 
-            if (SessionTimeCalculator.RequiresReview(downtimeSeconds))
+            var gapStart = session.LastHeartbeatAt!.Value;
+            var needsReview = session.Branch is { } branch
+                && SessionTimeCalculator.RequiresReview(gapStart, now, branch.OpeningTime, branch.ClosingTime);
+
+            if (needsReview)
             {
-                // Too long to be a power cut. Almost certainly a session left open —
-                // crediting it silently would hide the mistake, and charging for it
-                // would be indefensible. Ask a human.
+                // The gap runs through hours this branch is shut, so it is far more likely
+                // a session nobody stopped than a power cut with a customer waiting.
+                // Crediting it silently would hide the mistake, and charging for it would
+                // be indefensible. Ask a human.
                 session.NeedsTimeReview = true;
                 session.State = SessionState.Interrupted;
                 session.InterruptedAt = now;
@@ -69,8 +77,10 @@ public static class SessionDowntimeRecovery
 
                 logger.LogWarning(
                     "Downtime recovery: session {SessionId} on branch {BranchId} has a {Gap:N0} minute gap " +
-                    "since its last heartbeat — flagged for operator review rather than credited.",
-                    session.Id, session.BranchId, downtimeSeconds / 60.0);
+                    "({From} to {To} IST) running through closed hours — flagged for operator review " +
+                    "rather than credited.",
+                    session.Id, session.BranchId, downtimeSeconds / 60.0,
+                    IndiaTime.Format(gapStart), IndiaTime.Format(now));
                 continue;
             }
 
