@@ -22,6 +22,7 @@ public class SessionService : ISessionService
     private readonly ILogger<SessionService> _logger;
     private readonly IWalletService _walletService;
     private readonly ISessionActivityService _activityService;
+    private readonly IOutboxService _outbox;
 
     public SessionService(
         IUnitOfWork uow,
@@ -31,7 +32,8 @@ public class SessionService : ISessionService
         IPcStatusService pcStatus,
         ILogger<SessionService> logger,
         IWalletService walletService,
-        ISessionActivityService activityService)
+        ISessionActivityService activityService,
+        IOutboxService outbox)
     {
         _uow = uow;
         _db = db;
@@ -41,6 +43,7 @@ public class SessionService : ISessionService
         _logger = logger;
         _walletService = walletService;
         _activityService = activityService;
+        _outbox = outbox;
     }
 
     public async Task<PaginatedResult<SessionDto>> GetActiveSessionsAsync(Guid branchId, int page, int pageSize)
@@ -248,6 +251,25 @@ public class SessionService : ISessionService
             pc.CurrentSessionId = session.Id;
             _uow.Repository<Pc>().Update(pc);
 
+            // Tell Head Office this happened. Written inside the same transaction as the
+            // session itself, so the two commit together or not at all — a session that
+            // exists at the branch but never reaches Head Office is exactly the "the
+            // numbers don't add up across branches" problem this whole design avoids.
+            await _outbox.RecordEventAsync(branchId, "Session", session.Id, "session.started", new
+            {
+                sessionId = session.Id,
+                pcId = pc.Id,
+                pcNumber = pc.PcNumber,
+                operatorId,
+                shiftId,
+                memberId = dto.MemberId,
+                customerName = dto.CustomerName,
+                startTime = session.StartTime,
+                plannedDurationMin = session.PlannedDurationMin,
+                gamingType = session.GamingType,
+                expectedAmount = dto.ExpectedAmount,
+            });
+
             await _uow.CommitTransactionAsync();
 
             await _audit.LogAsync(new AuditEntry
@@ -442,7 +464,29 @@ public class SessionService : ISessionService
             _uow.Repository<Session>().Update(session);
             if (bill != null) _uow.Repository<Bill>().Update(bill);
             _uow.Repository<Pc>().Update(pc);
-            
+
+            // The money event. Carries the billed duration and the paused seconds behind it,
+            // so Head Office can see not just what was charged but why it differs from the
+            // wall clock when a power cut ate part of the session.
+            await _outbox.RecordEventAsync(branchId, "Session", session.Id, "session.stopped", new
+            {
+                sessionId = session.Id,
+                pcId = pc.Id,
+                pcNumber = pc.PcNumber,
+                operatorId,
+                memberId = session.MemberId,
+                customerName = session.CustomerName,
+                startTime = session.StartTime,
+                endTime = session.EndTime,
+                billedMinutes = session.ActualDurationMin,
+                pausedSeconds = session.PausedSeconds,
+                gamingAmount = session.GamingAmount,
+                foodAmount = session.FoodAmount,
+                totalAmount = session.TotalAmount,
+                billId = bill?.Id,
+                deferred = deferPayment,
+            });
+
             await _uow.CommitTransactionAsync();
 
             await _audit.LogAsync(new AuditEntry
