@@ -31,6 +31,7 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> AdminLogin([FromBody] AdminLoginDto dto)
     {
         var result = await _authService.LoginAdminAsync(dto);
+        SetAuthCookies(result.AccessToken, result.RefreshToken);
         return Ok(ApiResponse<LoginResponseDto>.Ok(result));
     }
 
@@ -40,6 +41,7 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> OperatorLogin([FromBody] OperatorLoginDto dto)
     {
         var result = await _authService.LoginOperatorAsync(dto);
+        SetAuthCookies(result.AccessToken, result.RefreshToken);
         return Ok(ApiResponse<LoginResponseDto>.Ok(result));
     }
 
@@ -49,6 +51,7 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> MemberLogin([FromBody] MemberLoginDto dto)
     {
         var result = await _authService.LoginMemberAsync(dto);
+        SetAuthCookies(result.AccessToken, result.RefreshToken);
         return Ok(ApiResponse<LoginResponseDto>.Ok(result));
     }
 
@@ -72,6 +75,7 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> Refresh([FromBody] RefreshTokenDto dto)
     {
         var result = await _authService.RefreshAccessTokenAsync(dto.RefreshToken);
+        SetAuthCookies(result.AccessToken);
         return Ok(ApiResponse<TokenResponseDto>.Ok(result));
     }
 
@@ -128,6 +132,7 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> SetupMasterAccount([FromBody] SetupMasterDto dto)
     {
         var result = await _authService.SetupMasterAccountAsync(dto);
+        SetAuthCookies(result.AccessToken, result.RefreshToken);
         return Ok(ApiResponse<LoginResponseDto>.Ok(result));
     }
 
@@ -136,6 +141,7 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> SetupOperatorAccount([FromBody] SetupOperatorDto dto)
     {
         var result = await _authService.SetupOperatorAccountAsync(dto);
+        SetAuthCookies(result.AccessToken, result.RefreshToken);
         return Ok(ApiResponse<LoginResponseDto>.Ok(result));
     }
 
@@ -215,6 +221,7 @@ public class AuthController : ControllerBase
 
         dto.ShiftId = Guid.Parse(shiftIdClaim);
         var result = await _authService.AdminSwitchInAsync(dto);
+        SetAuthCookies(result.AccessToken, result.RefreshToken);
         return Ok(ApiResponse<LoginResponseDto>.Ok(result));
     }
 
@@ -237,6 +244,30 @@ public class AuthController : ControllerBase
         }
 
         return Ok(ApiResponse.Ok());
+    }
+
+    private void SetAuthCookies(string accessToken, string? refreshToken = null)
+    {
+        var isSecure = Request.IsHttps;
+
+        Response.Cookies.Append("accessToken", accessToken, new Microsoft.AspNetCore.Http.CookieOptions
+        {
+            HttpOnly = true,
+            Secure = isSecure,
+            SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Strict,
+            Expires = DateTimeOffset.UtcNow.AddHours(24)
+        });
+
+        if (!string.IsNullOrEmpty(refreshToken))
+        {
+            Response.Cookies.Append("refreshToken", refreshToken, new Microsoft.AspNetCore.Http.CookieOptions
+            {
+                HttpOnly = true,
+                Secure = isSecure,
+                SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Strict,
+                Expires = DateTimeOffset.UtcNow.AddDays(7)
+            });
+        }
     }
 }
 

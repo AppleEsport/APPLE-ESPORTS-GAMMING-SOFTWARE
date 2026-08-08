@@ -24,53 +24,40 @@ export function AuthProvider({ children }) {
       localStorage.setItem('user', JSON.stringify(userData));
     } catch (error) {
       if (error.response && (error.response.status === 401 || error.response.status === 403)) {
-        logout();
+        setUser(null);
+        localStorage.removeItem('user');
       }
     }
   }, []);
 
-  // ── Initialize auth state from localStorage and sessionStorage ──
+  // ── Initialize auth state from localStorage (tokens are now in HTTP-only cookies) ──
   useEffect(() => {
     const storedUser = localStorage.getItem('user');
-    const token = localStorage.getItem('accessToken');
-    
-    // Check for Admin Quick-Switch
-    const storedAdminUser = sessionStorage.getItem('adminSwitchUser');
-    if (storedAdminUser) {
-      try {
-        setAdminSwitchUser(JSON.parse(storedAdminUser));
-      } catch (e) {
-        sessionStorage.removeItem('adminSwitchUser');
-        sessionStorage.removeItem('adminSwitchToken');
-      }
-    }
 
-    if (storedUser && storedUser !== 'undefined' && token) {
+    if (storedUser && storedUser !== 'undefined') {
       try {
         setUser(JSON.parse(storedUser));
+        // Verify token is still valid by fetching current user
+        fetchCurrentUser().finally(() => setLoading(false));
       } catch (e) {
         console.error("Failed to parse stored user", e);
         localStorage.removeItem('user');
+        setLoading(false);
       }
-      // Verify token is still valid by fetching current user
-      // Note: if admin switch is active, api.js will send adminSwitchToken
-      fetchCurrentUser().finally(() => setLoading(false));
     } else {
       setLoading(false);
     }
-  }, []);
+  }, [fetchCurrentUser]);
 
   // ── Super Admin Login (SOP §6.2) ──
+  // Tokens are now set as HTTP-only cookies by the backend
   const loginAdmin = useCallback(async (email, password) => {
     try {
       setError(null);
       const response = await api.post('/auth/admin/login', { email, password });
-      const { user: userData, accessToken, refreshToken } = response.data.data;
+      const { user: userData } = response.data.data;
 
-      localStorage.setItem('accessToken', accessToken);
-      localStorage.setItem('refreshToken', refreshToken);
       localStorage.setItem('user', JSON.stringify(userData));
-
       setUser(userData);
       return userData;
     } catch (err) {
@@ -81,16 +68,14 @@ export function AuthProvider({ children }) {
   }, []);
 
   // ── Operator Login (SOP §6.3) ──
+  // Tokens are now set as HTTP-only cookies by the backend
   const loginOperator = useCallback(async (branchId, username, password) => {
     try {
       setError(null);
       const response = await api.post('/auth/operator/login', { branchId, username, password });
-      const { user: userData, accessToken, refreshToken } = response.data.data;
+      const { user: userData } = response.data.data;
 
-      localStorage.setItem('accessToken', accessToken);
-      localStorage.setItem('refreshToken', refreshToken);
       localStorage.setItem('user', JSON.stringify(userData));
-
       setUser(userData);
       return userData;
     } catch (err) {
@@ -101,15 +86,13 @@ export function AuthProvider({ children }) {
   }, []);
 
   // ── Admin Quick-Switch In (SOP §22) ──
+  // Tokens are now set as HTTP-only cookies by the backend
   const adminSwitchIn = useCallback(async (adminId, accessPin) => {
     try {
       setError(null);
       const response = await api.post('/auth/admin-switch/in', { adminId, accessPin });
-      const { user: adminData, accessToken } = response.data.data;
+      const { user: adminData } = response.data.data;
 
-      sessionStorage.setItem('adminSwitchToken', accessToken);
-      sessionStorage.setItem('adminSwitchUser', JSON.stringify(adminData));
-      
       setAdminSwitchUser(adminData);
       return adminData;
     } catch (err) {
@@ -134,10 +117,8 @@ export function AuthProvider({ children }) {
     try {
       await api.post('/auth/admin-switch/out').catch(() => {});
     } finally {
-      sessionStorage.removeItem('adminSwitchToken');
-      sessionStorage.removeItem('adminSwitchUser');
       setAdminSwitchUser(null);
-      // Re-fetch operator user data just in case
+      // Re-fetch operator user data
       await fetchCurrentUser();
     }
   }, [fetchCurrentUser]);
@@ -146,18 +127,14 @@ export function AuthProvider({ children }) {
   const logout = useCallback(async () => {
     // Capture role to determine where to redirect after logout
     const role = user?.role || user?.Role || '';
-    
+
     try {
-      const token = localStorage.getItem('accessToken');
-      if (token) {
-        await api.post('/auth/logout', { shiftId: user?.shiftId }).catch(() => {});
-      }
+      await api.post('/auth/logout', { shiftId: user?.shiftId }).catch(() => {});
     } finally {
-      localStorage.removeItem('accessToken');
-      localStorage.removeItem('refreshToken');
       localStorage.removeItem('user');
       localStorage.removeItem('activeBranchId');
       setUser(null);
+      setAdminSwitchUser(null);
       setError(null);
 
       // Explicitly navigate to the correct login portal
@@ -169,7 +146,7 @@ export function AuthProvider({ children }) {
       } else if (typeof role === 'string' && role.toLowerCase().includes('operator')) {
         redirectPath = '/login/operator';
       }
-      
+
       window.location.href = redirectPath;
     }
   }, [user]);

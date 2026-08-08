@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ssh -i \"C:\\\\Users\\\\harsh\\\\Downloads\\\\ORACLE\\\\ssh-key-2026-07-21 \\(Private\\).key\" ubuntu@140.245.195.222 \"df -h / && echo '' && echo '=== DOCKER DISK USAGE AFTER CLEANUP ===' && docker system df\")",
+      "Bash(openssl passwd *)",
+      "Bash(ssh -i \"C:\\\\Users\\\\harsh\\\\Downloads\\\\ORACLE\\\\ssh-key-2026-07-21 \\(Private\\).key\" ubuntu@140.245.195.222 \"cd /home/ubuntu/APPLE-ESPORTS-GAMMING-SOFTWARE-new && echo 'Creating password file...' && sudo sh -c 'echo admin:$\\(openssl passwd -crypt Admin@123\\) > /etc/nginx/.htpasswd' && sudo cat /etc/nginx/.htpasswd\")",
+      "Bash(ssh -i \"C:\\\\Users\\\\harsh\\\\Downloads\\\\ORACLE\\\\ssh-key-2026-07-21 \\(Private\\).key\" ubuntu@140.245.195.222 \"cd /home/ubuntu/APPLE-ESPORTS-GAMMING-SOFTWARE-new && echo 'Creating htpasswd file...' && sudo apt-get install -y apache2-utils > /dev/null 2>&1 && sudo htpasswd -c -b /tmp/.htpasswd admin Admin@123 && sudo cat /tmp/.htpasswd\")",
+      "Bash(ssh -i \"C:\\\\Users\\\\harsh\\\\Downloads\\\\ORACLE\\\\ssh-key-2026-07-21 \\(Private\\).key\" ubuntu@140.245.195.222 \"docker exec appleesports-v2-nginx cat /etc/nginx/conf.d/default.conf | head -30\")",
+      "Bash(ssh -i *)",
+      "Bash(ssh -i \"C:\\\\Users\\\\harsh\\\\Downloads\\\\ORACLE\\\\ssh-key-2026-07-21 \\(Private\\).key\" ubuntu@140.245.195.222 \"docker compose ps 2>&1 | grep -E '\\(nginx|api|postgres|redis\\)'\")",
+      "Bash(ssh -i \"C:\\\\Users\\\\harsh\\\\Downloads\\\\ORACLE\\\\ssh-key-2026-07-21 \\(Private\\).key\" ubuntu@140.245.195.222 \"docker ps --format 'table {{.Names}}\\\\t{{.Status}}'\")",
+      "Bash(ssh -i \"C:\\\\Users\\\\harsh\\\\Downloads\\\\ORACLE\\\\ssh-key-2026-07-21 \\(Private\\).key\" ubuntu@140.245.195.222 \"docker logs appleesports-v2-nginx 2>&1 | tail -20\")",
+      "Bash(ssh -i \"C:\\\\Users\\\\harsh\\\\Downloads\\\\ORACLE\\\\ssh-key-2026-07-21 \\(Private\\).key\" ubuntu@140.245.195.222)",
+      "Bash(ssh -i \"C:\\\\Users\\\\harsh\\\\Downloads\\\\ORACLE\\\\ssh-key-2026-07-21 \\(Private\\).key\" ubuntu@140.245.195.222 \"docker exec appleesports-v2-nginx cat /etc/nginx/conf.d/default.conf | head -10 && echo '---' && docker exec appleesports-v2-nginx ls -la /etc/nginx/.htpasswd 2>/dev/null || echo 'Checking for htpasswd file...'\")",
+      "Bash(ssh -i \"C:\\\\Users\\\\harsh\\\\Downloads\\\\ORACLE\\\\ssh-key-2026-07-21 \\(Private\\).key\" ubuntu@140.245.195.222 \"cd /home/ubuntu/APPLE-ESPORTS-GAMMING-SOFTWARE-new && cp docker-compose.yml.backup docker-compose.yml && cat docker-compose.yml | grep -A 5 'nginx:' | head -20\")",
+      "Read(//home/ubuntu/APPLE-ESPORTS-GAMMING-SOFTWARE-new/**)",
+      "Bash(ssh -i \"C:\\\\Users\\\\harsh\\\\Downloads\\\\ORACLE\\\\ssh-key-2026-07-21 \\(Private\\).key\" ubuntu@140.245.195.222 \"cd /home/ubuntu/APPLE-ESPORTS-GAMMING-SOFTWARE-new && sed -n '/^  nginx:/,/^  [a-z]/p' docker-compose.yml | head -30\")",
+      "Bash(npm run *)"
+    ]
+  }
+}
