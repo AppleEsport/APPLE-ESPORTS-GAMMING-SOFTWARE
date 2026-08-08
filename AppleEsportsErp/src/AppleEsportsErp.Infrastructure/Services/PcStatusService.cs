@@ -112,7 +112,8 @@ public class PcStatusService : IPcStatusService
                 {
                     // Still running — compute the live charge with the exact same formula
                     // StopSessionAsync will use, so this number never diverges from the real bill.
-                    decimal elapsedMinutes = (decimal)(now - session.StartTime).TotalMinutes;
+                    decimal elapsedMinutes = SessionTimeCalculator.ElapsedMinutes(
+                        session.StartTime, session.PausedSeconds, now);
                     decimal liveGamingAmount = SessionPricingCalculator.CalculateGamingAmount(calculatedRate, bufferMinutes, elapsedMinutes);
                     dto.TotalAmount = liveGamingAmount + session.FoodAmount;
                 }

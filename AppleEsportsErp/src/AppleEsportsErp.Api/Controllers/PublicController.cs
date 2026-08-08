@@ -107,7 +107,10 @@ public class PublicController : ControllerBase
             return Ok(new { success = true, data = (object?)null });
 
         var foodCharges = session.FoodOrders.Sum(fo => fo.TotalAmount);
-        var elapsedMinutes = (DateTimeOffset.UtcNow - session.StartTime).TotalMinutes;
+        // Downtime already credited back is excluded, so the countdown a customer sees on
+        // the PC overlay matches what they are actually billed for after a power cut.
+        var elapsedMinutes = (double)AppleEsportsErp.Application.Services.SessionTimeCalculator.ElapsedMinutes(
+            session.StartTime, session.PausedSeconds, DateTimeOffset.UtcNow);
         var remainingSeconds = session.PlannedDurationMin.HasValue
             ? Math.Max(0, (session.PlannedDurationMin.Value - elapsedMinutes) * 60)
             : null as double?;
