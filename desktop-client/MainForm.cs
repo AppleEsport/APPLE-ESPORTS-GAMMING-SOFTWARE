@@ -231,6 +231,79 @@ public sealed class MainForm : Form
             ShowOverlay("The embedded browser stopped responding.", showActions: true);
 
         Connect();
+
+        // Fire and forget. An update check must never delay the dashboard appearing — the
+        // shop opens whether or not Head Office is reachable.
+        _ = Task.Run(UpdateLoopAsync);
+    }
+
+    /// <summary>
+    /// Checks Head Office for an approved update, then again every few hours.
+    ///
+    /// Runs for the life of the app rather than only at launch: a branch PC can stay on for
+    /// days, and a fix nobody restarts to collect is a fix nobody has.
+    /// </summary>
+    private async Task UpdateLoopAsync()
+    {
+        // Let the dashboard settle first. Competing with page load for bandwidth on a branch
+        // connection is a poor trade for something with no deadline.
+        await Task.Delay(TimeSpan.FromMinutes(2));
+
+        while (!IsDisposed)
+        {
+            try
+            {
+                await CheckForUpdateOnceAsync();
+            }
+            catch
+            {
+                // Never let an update check take the app down with it.
+            }
+
+            await Task.Delay(TimeSpan.FromHours(4));
+        }
+    }
+
+    private async Task CheckForUpdateOnceAsync()
+    {
+        using var updates = new UpdateService(_config);
+
+        var available = await updates.CheckAsync();
+        if (available is null) return;
+
+        var installer = await updates.DownloadAndVerifyAsync(available);
+        if (installer is null) return;   // failed or, more importantly, failed verification
+
+        // An update must never interrupt a customer mid-session. On a locked gaming PC that
+        // means waiting: the next check comes round in four hours, and the verified download
+        // is already cached, so nothing is wasted by deferring.
+        if (_config.IsUserPc && await IsSessionRunningAsync()) return;
+
+        BeginInvoke(() =>
+        {
+            _allowClose = true;   // the installer needs this process gone to replace the exe
+            UpdateService.Install(installer);
+            Application.Exit();
+        });
+    }
+
+    /// <summary>
+    /// Whether someone is currently playing at this PC. Asked of the dashboard itself rather
+    /// than guessed, and a failed answer counts as "yes" — interrupting a paying customer is
+    /// far worse than postponing an update by four hours.
+    /// </summary>
+    private async Task<bool> IsSessionRunningAsync()
+    {
+        try
+        {
+            var result = await _web.CoreWebView2!.ExecuteScriptAsync(
+                "(function(){try{return !!document.querySelector('[data-session-active=\"true\"]');}catch(e){return true;}})()");
+            return result?.Trim() != "false";
+        }
+        catch
+        {
+            return true;
+        }
     }
 
     private void Connect()
