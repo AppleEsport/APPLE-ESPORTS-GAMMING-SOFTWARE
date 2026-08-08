@@ -23,7 +23,22 @@ internal static class Program
 
         try
         {
-            Application.Run(new MainForm(AppConfig.Load()));
+            var config = AppConfig.Load();
+
+            // An unclaimed machine must never reach the dashboard. Head Office keeps its PC
+            // in "awaiting setup" and will not let it hold a session, so showing the
+            // dashboard would only invite an operator to seat a customer at a screen that
+            // can never unlock. Setup first, every time, until it succeeds.
+            if (!config.IsSetUp)
+            {
+                using var wizard = new SetupWizard(config);
+                if (wizard.ShowDialog() != DialogResult.OK)
+                    return;   // cancelled — nothing was written, so it will ask again next time
+
+                config = AppConfig.Load();
+            }
+
+            Application.Run(new MainForm(config));
         }
         catch (Exception ex)
         {

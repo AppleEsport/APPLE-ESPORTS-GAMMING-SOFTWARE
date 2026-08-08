@@ -49,6 +49,19 @@ public sealed class AppConfig
     /// <summary>Which PC this machine is set up as, e.g. "PC-1". Empty until setup is done.</summary>
     public string PcNumber { get; set; } = "";
 
+    /// <summary>Branch this machine belongs to, as Head Office knows it.</summary>
+    public string BranchId { get; set; } = "";
+
+    public string BranchName { get; set; } = "";
+
+    /// <summary>
+    /// Set only once Head Office has confirmed the claim. Until then the setup wizard runs
+    /// instead of the dashboard — a machine that has not been claimed cannot take customers,
+    /// so showing the dashboard would only invite an operator to seat someone at a PC that
+    /// will never unlock.
+    /// </summary>
+    public bool IsSetUp { get; set; }
+
     public bool IsUserPc => string.Equals(Role, "user", StringComparison.OrdinalIgnoreCase);
 
     // ── Paths ─────────────────────────────────────────────────────────────
@@ -102,6 +115,9 @@ public sealed class AppConfig
             if (!string.IsNullOrWhiteSpace(loaded.Role)) target.Role = loaded.Role.Trim();
             if (loaded.AdminPin is not null) target.AdminPin = loaded.AdminPin;
             if (loaded.PcNumber is not null) target.PcNumber = loaded.PcNumber;
+            if (loaded.BranchId is not null) target.BranchId = loaded.BranchId;
+            if (loaded.BranchName is not null) target.BranchName = loaded.BranchName;
+            if (loaded.IsSetUp) target.IsSetUp = true;
         }
         catch
         {
