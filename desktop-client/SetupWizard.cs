@@ -3,13 +3,17 @@ namespace AppleEsports.Desktop;
 /// <summary>
 /// What staff see the first time Apple Esports runs on a new machine.
 ///
-/// Deliberately one screen rather than a multi-step wizard: there are only a handful of
-/// decisions and each narrows the next, so showing them together makes the whole setup
-/// legible at a glance. Nothing is saved until Head Office has confirmed, so an abandoned
-/// setup leaves no misleading state behind.
+/// Deliberately only two questions. Everything else that used to be asked here — which
+/// branch, which seat, operator or customer — belongs later, when the answer is actually
+/// needed and the person answering knows it:
 ///
-/// Role is asked before the seat, because the answer decides whether a seat is even a
-/// question. A counter PC is not a gaming station and has no PC number.
+///   • Operators, admins and their permissions are created in the Super Admin portal, not
+///     by whoever happens to be installing software on a PC.
+///   • A gaming seat is claimed when someone first uses the machine as one, because that is
+///     the moment it is standing in front of a real PC with a real number on it.
+///
+/// Asking all of it up front made the installer look like a configuration console and
+/// invited wrong answers from the person least able to give them.
 /// </summary>
 public sealed class SetupWizard : Form
 {
@@ -20,30 +24,19 @@ public sealed class SetupWizard : Form
     private static readonly Color Accent = Color.FromArgb(200, 30, 40);
     private static readonly Color Good = Color.FromArgb(60, 180, 110);
 
-    private const int Pad = 24;
+    private const int Pad = 26;
 
     private readonly AppConfig _config;
 
-    private readonly TextBox _serverBox = new();
-    private readonly Button _connectButton = new();
-    private readonly Label _connectStatus = new();
-
-    private readonly ComboBox _branchBox = new();
-    private readonly RadioButton _operatorRadio = new();
-    private readonly RadioButton _userRadio = new();
-
-    // The seat question lives in its own panel so it can disappear entirely for a counter
-    // PC, rather than sitting there greyed out inviting the question "why can't I fill this in".
-    private readonly Panel _seatPanel = new();
-    private readonly ComboBox _pcBox = new();
-    private readonly Label _seatHint = new();
+    private readonly ComboBox _serverBox = new();
+    private readonly Button _testButton = new();
+    private readonly Label _serverStatus = new();
 
     private readonly TextBox _pinBox = new();
-    private readonly Label _pinHint = new();
     private readonly Label _finishStatus = new();
     private readonly Button _finishButton = new();
 
-    private int _seatPanelTop;
+    private bool _serverConfirmed;
 
     public SetupWizard(AppConfig config)
     {
@@ -57,7 +50,7 @@ public sealed class SetupWizard : Form
         StartPosition = FormStartPosition.CenterScreen;
         MaximizeBox = false;
         MinimizeBox = false;
-        ClientSize = new Size(560, 640);
+        ClientSize = new Size(540, 430);
 
         try
         {
@@ -66,13 +59,12 @@ public sealed class SetupWizard : Form
         catch { /* cosmetic only */ }
 
         Build();
-        ApplyRole();
     }
 
     private void Build()
     {
         var width = ClientSize.Width - (Pad * 2);
-        var y = 20;
+        var y = 22;
 
         var title = new Label
         {
@@ -83,301 +75,182 @@ public sealed class SetupWizard : Form
             AutoSize = true,
         };
         Controls.Add(title);
-        // Measured rather than guessed — an 18pt line is taller than the 34px I first
-        // assumed, which is what made the subtitle overlap the heading.
-        y += title.PreferredHeight + 6;
+        y += title.PreferredHeight + 4;
 
         Controls.Add(new Label
         {
-            Text = "This PC has not been set up yet. It cannot take customers until it has.",
+            Text = "Two quick things and this PC is ready.",
             ForeColor = Muted,
             Location = new Point(Pad, y),
             Size = new Size(width, 20),
         });
-        y += 34;
+        y += 38;
 
         // ── 1. Server ──
         y = AddStep("1.  Where is the server?", y);
-        StyleField(_serverBox, y, width - 130);
-        _serverBox.Text = _config.ServerUrl;
+
+        _serverBox.Location = new Point(Pad, y);
+        _serverBox.Size = new Size(width - 110, 30);
+        _serverBox.BackColor = Field;
+        _serverBox.ForeColor = Foreground;
+        _serverBox.FlatStyle = FlatStyle.Flat;
+        _serverBox.Font = new Font("Segoe UI", 10F);
+        // Editable, not a fixed list: the known addresses are a convenience, but the owner's
+        // own server will eventually be one nobody has typed here before.
+        _serverBox.DropDownStyle = ComboBoxStyle.DropDown;
+        _serverBox.Items.AddRange(new object[]
+        {
+            "http://140.245.195.222:8081",
+            "http://localhost:8081",
+        });
+        _serverBox.Text = string.IsNullOrWhiteSpace(_config.ServerUrl)
+            ? "http://140.245.195.222:8081"
+            : _config.ServerUrl;
+        _serverBox.TextChanged += (_, _) =>
+        {
+            // Any edit invalidates a previous successful test, so the tick cannot linger
+            // next to an address it was never checked against.
+            _serverConfirmed = false;
+            _serverStatus.Text = "";
+        };
         Controls.Add(_serverBox);
 
-        _connectButton.Text = "Connect";
-        _connectButton.Location = new Point(ClientSize.Width - Pad - 120, y);
-        _connectButton.Size = new Size(120, 30);
-        StyleButton(_connectButton, Accent, Color.White);
-        _connectButton.Click += async (_, _) => await ConnectAsync();
-        Controls.Add(_connectButton);
+        _testButton.Text = "Test";
+        _testButton.Location = new Point(ClientSize.Width - Pad - 100, y);
+        _testButton.Size = new Size(100, 30);
+        StyleButton(_testButton, Accent, Color.White);
+        _testButton.Click += async (_, _) => await TestServerAsync();
+        Controls.Add(_testButton);
         y += 36;
 
-        _connectStatus.ForeColor = Muted;
-        _connectStatus.Location = new Point(Pad, y);
-        _connectStatus.Size = new Size(width, 20);
-        Controls.Add(_connectStatus);
-        y += 32;
+        _serverStatus.ForeColor = Muted;
+        _serverStatus.Location = new Point(Pad, y);
+        _serverStatus.Size = new Size(width, 20);
+        Controls.Add(_serverStatus);
+        y += 40;
 
-        // ── 2. Branch ──
-        y = AddStep("2.  Which branch is this PC in?", y);
-        StyleCombo(_branchBox, y, width);
-        _branchBox.SelectedIndexChanged += async (_, _) => await LoadPcsAsync();
-        Controls.Add(_branchBox);
-        y += 44;
+        // ── 2. PIN ──
+        y = AddStep("2.  Choose an admin PIN", y);
 
-        // ── 3. Role — asked before the seat, because it decides whether a seat applies ──
-        y = AddStep("3.  What is this machine for?", y);
-
-        _operatorRadio.Text = "Operator counter PC  —  full dashboard, staff can close it";
-        _operatorRadio.Location = new Point(Pad, y);
-        _operatorRadio.Size = new Size(width, 24);
-        _operatorRadio.ForeColor = Foreground;
-        _operatorRadio.Checked = true;
-        _operatorRadio.CheckedChanged += (_, _) => ApplyRole();
-        Controls.Add(_operatorRadio);
+        Controls.Add(new Label
+        {
+            // Worded as a choice, not a challenge. Labelled "enter the admin PIN" people
+            // reasonably assume one already exists and go looking for it.
+            Text = "Make one up now — staff will type it to change or undo this setup later.",
+            ForeColor = Muted,
+            Location = new Point(Pad, y),
+            Size = new Size(width, 20),
+        });
         y += 26;
 
-        _userRadio.Text = "Customer gaming PC  —  locked, no close button";
-        _userRadio.Location = new Point(Pad, y);
-        _userRadio.Size = new Size(width, 24);
-        _userRadio.ForeColor = Foreground;
-        Controls.Add(_userRadio);
-        y += 36;
-
-        // ── 4. Seat — customer PCs only ──
-        _seatPanelTop = y;
-        _seatPanel.Location = new Point(0, y);
-        _seatPanel.Size = new Size(ClientSize.Width, 76);
-        _seatPanel.BackColor = Backdrop;
-
-        _seatPanel.Controls.Add(new Label
-        {
-            Text = "4.  Which PC is this machine?",
-            Font = new Font("Segoe UI", 10F, FontStyle.Bold),
-            ForeColor = Foreground,
-            Location = new Point(Pad, 0),
-            AutoSize = true,
-        });
-
-        StyleCombo(_pcBox, 24, width);
-        _seatPanel.Controls.Add(_pcBox);
-
-        _seatHint.ForeColor = Muted;
-        _seatHint.Location = new Point(Pad, 56);
-        _seatHint.Size = new Size(width, 18);
-        _seatPanel.Controls.Add(_seatHint);
-
-        Controls.Add(_seatPanel);
-
-        // Everything below shifts depending on whether the seat panel is showing.
-        var afterSeat = y + _seatPanel.Height + 8;
-
-        Controls.Add(_pinHint);
-        _pinHint.Text = "Admin PIN  (needed to change or undo this setup later)";
-        _pinHint.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
-        _pinHint.Location = new Point(Pad, afterSeat);
-        _pinHint.AutoSize = true;
-
-        StyleField(_pinBox, afterSeat + 22, 200);
-        _pinBox.UseSystemPasswordChar = true;
+        _pinBox.Location = new Point(Pad, y);
+        _pinBox.Size = new Size(190, 34);
+        _pinBox.BackColor = Field;
+        _pinBox.ForeColor = Foreground;
+        _pinBox.BorderStyle = BorderStyle.FixedSingle;
+        _pinBox.Font = new Font("Segoe UI", 14F);
+        _pinBox.TextAlign = HorizontalAlignment.Center;
         _pinBox.Text = _config.AdminPin;
         Controls.Add(_pinBox);
+        y += 48;
 
         _finishStatus.ForeColor = Muted;
-        _finishStatus.Location = new Point(Pad, afterSeat + 62);
-        _finishStatus.Size = new Size(width, 36);
+        _finishStatus.Location = new Point(Pad, y);
+        _finishStatus.Size = new Size(width, 34);
         Controls.Add(_finishStatus);
+        y += 40;
 
         _finishButton.Text = "Finish setup";
-        _finishButton.Location = new Point(ClientSize.Width - Pad - 180, afterSeat + 104);
-        _finishButton.Size = new Size(180, 40);
+        _finishButton.Location = new Point(ClientSize.Width - Pad - 180, y);
+        _finishButton.Size = new Size(180, 42);
         StyleButton(_finishButton, Accent, Color.White);
-        _finishButton.Enabled = false;
-        TrackEnabledLook(_finishButton, Accent, Color.White);
         _finishButton.Click += async (_, _) => await FinishAsync();
         Controls.Add(_finishButton);
 
-        SetStepsEnabled(false);
-    }
-
-    /// <summary>
-    /// Shows or hides the seat question and closes the gap behind it. A counter PC is not a
-    /// gaming station, so asking which PC number it is has no meaning — and leaving the
-    /// control visible but disabled just invites the question.
-    /// </summary>
-    private void ApplyRole()
-    {
-        var needsSeat = _userRadio.Checked;
-        _seatPanel.Visible = needsSeat;
-
-        var shift = needsSeat ? _seatPanel.Height + 8 : 0;
-        var top = _seatPanelTop + shift;
-
-        _pinHint.Top = top;
-        _pinBox.Top = top + 22;
-        _finishStatus.Top = top + 62;
-        _finishButton.Top = top + 104;
-
-        ClientSize = new Size(ClientSize.Width, _finishButton.Bottom + 24);
+        ClientSize = new Size(ClientSize.Width, _finishButton.Bottom + Pad);
     }
 
     // ── Behaviour ──
 
-    private async Task ConnectAsync()
+    private string NormalisedServer()
     {
         var url = _serverBox.Text.Trim();
-        if (url.Length == 0)
-        {
-            _connectStatus.ForeColor = Accent;
-            _connectStatus.Text = "Enter the server address first.";
-            return;
-        }
+        if (url.Length == 0) return "";
 
         if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
             !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
         {
             url = "http://" + url;
         }
+        return url.TrimEnd('/');
+    }
 
-        _connectButton.Enabled = false;
-        _connectStatus.ForeColor = Muted;
-        _connectStatus.Text = "Connecting…";
+    private async Task<bool> TestServerAsync()
+    {
+        var url = NormalisedServer();
+        if (url.Length == 0)
+        {
+            _serverStatus.ForeColor = Accent;
+            _serverStatus.Text = "Enter the server address first.";
+            return false;
+        }
+
+        _testButton.Enabled = false;
+        _serverStatus.ForeColor = Muted;
+        _serverStatus.Text = "Checking…";
 
         try
         {
             using var client = new HeadOfficeClient(url, _config.GateUsername, _config.GatePassword);
             var (reachable, message) = await client.PingAsync();
 
-            if (!reachable)
-            {
-                _connectStatus.ForeColor = Accent;
-                _connectStatus.Text = message;
-                SetStepsEnabled(false);
-                return;
-            }
-
-            var branches = await client.GetBranchesAsync();
-            _branchBox.Items.Clear();
-            foreach (var branch in branches) _branchBox.Items.Add(branch);
-
-            _serverBox.Text = url;
-            _connectStatus.ForeColor = Good;
-            _connectStatus.Text = $"{message}  {branches.Count} branches found.";
-            SetStepsEnabled(true);
-
-            if (_branchBox.Items.Count > 0) _branchBox.SelectedIndex = 0;
+            _serverStatus.ForeColor = reachable ? Good : Accent;
+            _serverStatus.Text = message;
+            _serverConfirmed = reachable;
+            if (reachable) _serverBox.Text = url;
+            return reachable;
         }
         catch (Exception ex)
         {
-            _connectStatus.ForeColor = Accent;
-            _connectStatus.Text = ex.Message;
-            SetStepsEnabled(false);
+            _serverStatus.ForeColor = Accent;
+            _serverStatus.Text = ex.Message;
+            _serverConfirmed = false;
+            return false;
         }
         finally
         {
-            _connectButton.Enabled = true;
-        }
-    }
-
-    private async Task LoadPcsAsync()
-    {
-        if (_branchBox.SelectedItem is not HeadOfficeClient.BranchOption branch) return;
-
-        _pcBox.Items.Clear();
-        _finishButton.Enabled = false;
-
-        try
-        {
-            using var client = new HeadOfficeClient(_serverBox.Text.Trim(), _config.GateUsername, _config.GatePassword);
-            var provisioning = await client.GetBranchAsync(branch.Id);
-            if (provisioning is null) return;
-
-            foreach (var pc in provisioning.Pcs) _pcBox.Items.Add(pc);
-
-            // Land on the first free seat rather than a claimed one, so the obvious action
-            // is also the correct one.
-            var firstFree = provisioning.Pcs.FindIndex(p => !p.IsProvisioned);
-            if (firstFree >= 0) _pcBox.SelectedIndex = firstFree;
-
-            var free = provisioning.Pcs.Count(p => !p.IsProvisioned);
-            _seatHint.Text = $"{free} of {provisioning.Pcs.Count} PCs at {branch.Name} still need setting up.";
-
-            _finishStatus.ForeColor = Muted;
-            _finishStatus.Text = "";
-            _finishButton.Enabled = true;
-        }
-        catch (Exception ex)
-        {
-            _finishStatus.ForeColor = Accent;
-            _finishStatus.Text = $"Could not load PCs. {ex.Message}";
+            _testButton.Enabled = true;
         }
     }
 
     private async Task FinishAsync()
     {
-        if (_branchBox.SelectedItem is not HeadOfficeClient.BranchOption branch) return;
-
-        var isUserPc = _userRadio.Checked;
-
-        if (isUserPc && _pcBox.SelectedItem is not HeadOfficeClient.PcOption)
+        var pin = _pinBox.Text.Trim();
+        if (pin.Length < 4)
         {
             _finishStatus.ForeColor = Accent;
-            _finishStatus.Text = "Pick which PC this machine is.";
-            return;
-        }
-
-        if (isUserPc && _pinBox.Text.Trim().Length == 0)
-        {
-            // A customer PC with no PIN cannot be unlocked or undone from the machine itself,
-            // so refusing here saves a site visit later.
-            _finishStatus.ForeColor = Accent;
-            _finishStatus.Text = "A customer gaming PC needs an admin PIN, or it cannot be unlocked later.";
+            _finishStatus.Text = "Choose a PIN of at least 4 characters.";
             return;
         }
 
         _finishButton.Enabled = false;
-        _finishStatus.ForeColor = Muted;
 
         try
         {
-            var pcNumber = "";
-
-            if (isUserPc)
+            // Check the address rather than take it on trust, but only if it has not already
+            // been confirmed — nobody should have to press Test to be allowed to continue.
+            if (!_serverConfirmed && !await TestServerAsync())
             {
-                var pc = (HeadOfficeClient.PcOption)_pcBox.SelectedItem!;
-                pcNumber = pc.PcNumber;
-                _finishStatus.Text = $"Claiming {pcNumber} at {branch.Name}…";
-
-                using var client = new HeadOfficeClient(_serverBox.Text.Trim(), _config.GateUsername, _config.GatePassword);
-                var (ok, message, _) = await client.ProvisionAsync(branch.Id, pcNumber, MachineIdentity.Current());
-
-                if (!ok)
-                {
-                    _finishStatus.ForeColor = Accent;
-                    _finishStatus.Text = message;
-                    _finishButton.Enabled = true;
-                    return;
-                }
-
-                _finishStatus.ForeColor = Good;
-                _finishStatus.Text = message;
-            }
-            else
-            {
-                // A counter PC claims no seat. The pcs table holds gaming stations, and
-                // registering the counter as one would leave a phantom seat an operator
-                // could try to sell.
-                _finishStatus.ForeColor = Good;
-                _finishStatus.Text = $"Set up as the operator counter PC for {branch.Name}.";
+                _finishStatus.ForeColor = Accent;
+                _finishStatus.Text = "That server could not be reached. Fix the address, or check the network.";
+                return;
             }
 
-            // Only written once the claim (if any) succeeded, so a failed setup leaves no
-            // misleading configuration on the machine.
-            _config.ServerUrl = _serverBox.Text.Trim();
-            _config.BranchId = branch.Id.ToString();
-            _config.BranchName = branch.Name;
-            _config.PcNumber = pcNumber;
-            _config.Role = isUserPc ? "user" : "operator";
-            _config.AdminPin = _pinBox.Text.Trim();
+            _config.ServerUrl = NormalisedServer();
+            _config.AdminPin = pin;
             _config.IsSetUp = true;
+            // Role and seat are deliberately left unset. This machine is a plain client until
+            // someone uses it as a gaming PC, and that is when it claims a seat.
             _config.Save();
 
             DialogResult = DialogResult.OK;
@@ -387,40 +260,11 @@ public sealed class SetupWizard : Form
         {
             _finishStatus.ForeColor = Accent;
             _finishStatus.Text = ex.Message;
-            _finishButton.Enabled = true;
         }
-    }
-
-    /// <summary>
-    /// Only the choices that genuinely need Head Office are gated on the connection.
-    ///
-    /// Role and the admin PIN are local decisions — whether this is a counter PC or a gaming
-    /// seat has nothing to do with whether the server answers — so disabling them was simply
-    /// wrong. It also made them unreadable: WinForms paints disabled text in a grey chosen
-    /// for light backgrounds, which all but vanishes against this one.
-    /// </summary>
-    private void SetStepsEnabled(bool connected)
-    {
-        _branchBox.Enabled = connected;
-        _pcBox.Enabled = connected;
-        if (!connected) _finishButton.Enabled = false;
-    }
-
-    /// <summary>
-    /// Repaints a button for its enabled state by hand. A flat button greys its own text
-    /// when disabled, which is invisible here, so the whole button is dimmed instead and
-    /// stays legible either way.
-    /// </summary>
-    private static void TrackEnabledLook(Button button, Color activeBack, Color activeFore)
-    {
-        void Apply()
+        finally
         {
-            button.BackColor = button.Enabled ? activeBack : Color.FromArgb(46, 46, 58);
-            button.ForeColor = button.Enabled ? activeFore : Color.FromArgb(120, 120, 134);
+            if (!IsDisposed) _finishButton.Enabled = true;
         }
-
-        button.EnabledChanged += (_, _) => Apply();
-        Apply();
     }
 
     // ── Styling ──
@@ -430,34 +274,13 @@ public sealed class SetupWizard : Form
         var label = new Label
         {
             Text = text,
-            Font = new Font("Segoe UI", 10F, FontStyle.Bold),
+            Font = new Font("Segoe UI", 11F, FontStyle.Bold),
             ForeColor = Foreground,
             Location = new Point(Pad, y),
             AutoSize = true,
         };
         Controls.Add(label);
-        return y + label.PreferredHeight + 6;
-    }
-
-    private void StyleField(TextBox box, int y, int width)
-    {
-        box.Location = new Point(Pad, y);
-        box.Size = new Size(width, 30);
-        box.BackColor = Field;
-        box.ForeColor = Foreground;
-        box.BorderStyle = BorderStyle.FixedSingle;
-        box.Font = new Font("Segoe UI", 10F);
-    }
-
-    private void StyleCombo(ComboBox box, int y, int width)
-    {
-        box.Location = new Point(Pad, y);
-        box.Size = new Size(width, 30);
-        box.BackColor = Field;
-        box.ForeColor = Foreground;
-        box.FlatStyle = FlatStyle.Flat;
-        box.Font = new Font("Segoe UI", 10F);
-        box.DropDownStyle = ComboBoxStyle.DropDownList;
+        return y + label.PreferredHeight + 8;
     }
 
     private static void StyleButton(Button button, Color back, Color fore)
