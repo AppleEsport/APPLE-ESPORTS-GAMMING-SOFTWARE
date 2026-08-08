@@ -3,10 +3,13 @@ namespace AppleEsports.Desktop;
 /// <summary>
 /// What staff see the first time Apple Esports runs on a new machine.
 ///
-/// Deliberately one screen rather than a multi-step wizard: there are only four decisions,
-/// and each one narrows the next, so showing them together makes the whole setup legible at
-/// a glance. Nothing is saved until Head Office has confirmed the claim, so a half-finished
+/// Deliberately one screen rather than a multi-step wizard: there are only a handful of
+/// decisions and each narrows the next, so showing them together makes the whole setup
+/// legible at a glance. Nothing is saved until Head Office has confirmed, so an abandoned
 /// setup leaves no misleading state behind.
+///
+/// Role is asked before the seat, because the answer decides whether a seat is even a
+/// question. A counter PC is not a gaming station and has no PC number.
 /// </summary>
 public sealed class SetupWizard : Form
 {
@@ -17,6 +20,8 @@ public sealed class SetupWizard : Form
     private static readonly Color Accent = Color.FromArgb(200, 30, 40);
     private static readonly Color Good = Color.FromArgb(60, 180, 110);
 
+    private const int Margin = 24;
+
     private readonly AppConfig _config;
 
     private readonly TextBox _serverBox = new();
@@ -24,12 +29,21 @@ public sealed class SetupWizard : Form
     private readonly Label _connectStatus = new();
 
     private readonly ComboBox _branchBox = new();
-    private readonly ComboBox _pcBox = new();
     private readonly RadioButton _operatorRadio = new();
     private readonly RadioButton _userRadio = new();
+
+    // The seat question lives in its own panel so it can disappear entirely for a counter
+    // PC, rather than sitting there greyed out inviting the question "why can't I fill this in".
+    private readonly Panel _seatPanel = new();
+    private readonly ComboBox _pcBox = new();
+    private readonly Label _seatHint = new();
+
     private readonly TextBox _pinBox = new();
-    private readonly Button _finishButton = new();
+    private readonly Label _pinHint = new();
     private readonly Label _finishStatus = new();
+    private readonly Button _finishButton = new();
+
+    private int _seatPanelTop;
 
     public SetupWizard(AppConfig config)
     {
@@ -43,7 +57,7 @@ public sealed class SetupWizard : Form
         StartPosition = FormStartPosition.CenterScreen;
         MaximizeBox = false;
         MinimizeBox = false;
-        ClientSize = new Size(560, 610);
+        ClientSize = new Size(560, 640);
 
         try
         {
@@ -52,40 +66,44 @@ public sealed class SetupWizard : Form
         catch { /* cosmetic only */ }
 
         Build();
+        ApplyRole();
     }
 
     private void Build()
     {
-        var y = 22;
+        var width = ClientSize.Width - (Margin * 2);
+        var y = 20;
 
         var title = new Label
         {
             Text = "APPLE ESPORTS",
             Font = new Font("Segoe UI", 18F, FontStyle.Bold),
             ForeColor = Accent,
-            Location = new Point(24, y),
+            Location = new Point(Margin, y),
             AutoSize = true,
         };
         Controls.Add(title);
-        y += 34;
+        // Measured rather than guessed — an 18pt line is taller than the 34px I first
+        // assumed, which is what made the subtitle overlap the heading.
+        y += title.PreferredHeight + 6;
 
         Controls.Add(new Label
         {
             Text = "This PC has not been set up yet. It cannot take customers until it has.",
             ForeColor = Muted,
-            Location = new Point(24, y),
-            Size = new Size(ClientSize.Width - 48, 20),
+            Location = new Point(Margin, y),
+            Size = new Size(width, 20),
         });
-        y += 40;
+        y += 34;
 
         // ── 1. Server ──
-        AddStep("1.  Where is the server?", ref y);
-        StyleField(_serverBox, y, ClientSize.Width - 48 - 130);
+        y = AddStep("1.  Where is the server?", y);
+        StyleField(_serverBox, y, width - 130);
         _serverBox.Text = _config.ServerUrl;
         Controls.Add(_serverBox);
 
         _connectButton.Text = "Connect";
-        _connectButton.Location = new Point(ClientSize.Width - 24 - 120, y);
+        _connectButton.Location = new Point(ClientSize.Width - Margin - 120, y);
         _connectButton.Size = new Size(120, 30);
         StyleButton(_connectButton, Accent, Color.White);
         _connectButton.Click += async (_, _) => await ConnectAsync();
@@ -93,65 +111,83 @@ public sealed class SetupWizard : Form
         y += 36;
 
         _connectStatus.ForeColor = Muted;
-        _connectStatus.Location = new Point(24, y);
-        _connectStatus.Size = new Size(ClientSize.Width - 48, 20);
+        _connectStatus.Location = new Point(Margin, y);
+        _connectStatus.Size = new Size(width, 20);
         Controls.Add(_connectStatus);
-        y += 34;
+        y += 32;
 
         // ── 2. Branch ──
-        AddStep("2.  Which branch is this PC in?", ref y);
-        StyleCombo(_branchBox, y);
+        y = AddStep("2.  Which branch is this PC in?", y);
+        StyleCombo(_branchBox, y, width);
         _branchBox.SelectedIndexChanged += async (_, _) => await LoadPcsAsync();
         Controls.Add(_branchBox);
-        y += 46;
+        y += 44;
 
-        // ── 3. Seat ──
-        AddStep("3.  Which PC is this machine?", ref y);
-        StyleCombo(_pcBox, y);
-        Controls.Add(_pcBox);
-        y += 46;
-
-        // ── 4. Role ──
-        AddStep("4.  What is this machine for?", ref y);
+        // ── 3. Role — asked before the seat, because it decides whether a seat applies ──
+        y = AddStep("3.  What is this machine for?", y);
 
         _operatorRadio.Text = "Operator counter PC  —  full dashboard, staff can close it";
-        _operatorRadio.Location = new Point(24, y);
-        _operatorRadio.Size = new Size(ClientSize.Width - 48, 24);
+        _operatorRadio.Location = new Point(Margin, y);
+        _operatorRadio.Size = new Size(width, 24);
         _operatorRadio.ForeColor = Foreground;
         _operatorRadio.Checked = true;
+        _operatorRadio.CheckedChanged += (_, _) => ApplyRole();
         Controls.Add(_operatorRadio);
         y += 26;
 
         _userRadio.Text = "Customer gaming PC  —  locked, no close button";
-        _userRadio.Location = new Point(24, y);
-        _userRadio.Size = new Size(ClientSize.Width - 48, 24);
+        _userRadio.Location = new Point(Margin, y);
+        _userRadio.Size = new Size(width, 24);
         _userRadio.ForeColor = Foreground;
         Controls.Add(_userRadio);
-        y += 38;
+        y += 36;
 
-        Controls.Add(new Label
+        // ── 4. Seat — customer PCs only ──
+        _seatPanelTop = y;
+        _seatPanel.Location = new Point(0, y);
+        _seatPanel.Size = new Size(ClientSize.Width, 76);
+        _seatPanel.BackColor = Backdrop;
+
+        _seatPanel.Controls.Add(new Label
         {
-            Text = "Admin PIN  (needed to change or undo this setup later)",
-            Font = new Font("Segoe UI", 9F, FontStyle.Bold),
-            Location = new Point(24, y),
+            Text = "4.  Which PC is this machine?",
+            Font = new Font("Segoe UI", 10F, FontStyle.Bold),
+            ForeColor = Foreground,
+            Location = new Point(Margin, 0),
             AutoSize = true,
         });
-        y += 22;
 
-        StyleField(_pinBox, y, 200);
+        StyleCombo(_pcBox, 24, width);
+        _seatPanel.Controls.Add(_pcBox);
+
+        _seatHint.ForeColor = Muted;
+        _seatHint.Location = new Point(Margin, 56);
+        _seatHint.Size = new Size(width, 18);
+        _seatPanel.Controls.Add(_seatHint);
+
+        Controls.Add(_seatPanel);
+
+        // Everything below shifts depending on whether the seat panel is showing.
+        var afterSeat = y + _seatPanel.Height + 8;
+
+        Controls.Add(_pinHint);
+        _pinHint.Text = "Admin PIN  (needed to change or undo this setup later)";
+        _pinHint.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+        _pinHint.Location = new Point(Margin, afterSeat);
+        _pinHint.AutoSize = true;
+
+        StyleField(_pinBox, afterSeat + 22, 200);
         _pinBox.UseSystemPasswordChar = true;
         _pinBox.Text = _config.AdminPin;
         Controls.Add(_pinBox);
-        y += 44;
 
         _finishStatus.ForeColor = Muted;
-        _finishStatus.Location = new Point(24, y);
-        _finishStatus.Size = new Size(ClientSize.Width - 48, 36);
+        _finishStatus.Location = new Point(Margin, afterSeat + 62);
+        _finishStatus.Size = new Size(width, 36);
         Controls.Add(_finishStatus);
-        y += 42;
 
         _finishButton.Text = "Finish setup";
-        _finishButton.Location = new Point(ClientSize.Width - 24 - 180, y);
+        _finishButton.Location = new Point(ClientSize.Width - Margin - 180, afterSeat + 104);
         _finishButton.Size = new Size(180, 40);
         StyleButton(_finishButton, Accent, Color.White);
         _finishButton.Enabled = false;
@@ -159,6 +195,27 @@ public sealed class SetupWizard : Form
         Controls.Add(_finishButton);
 
         SetStepsEnabled(false);
+    }
+
+    /// <summary>
+    /// Shows or hides the seat question and closes the gap behind it. A counter PC is not a
+    /// gaming station, so asking which PC number it is has no meaning — and leaving the
+    /// control visible but disabled just invites the question.
+    /// </summary>
+    private void ApplyRole()
+    {
+        var needsSeat = _userRadio.Checked;
+        _seatPanel.Visible = needsSeat;
+
+        var shift = needsSeat ? _seatPanel.Height + 8 : 0;
+        var top = _seatPanelTop + shift;
+
+        _pinHint.Top = top;
+        _pinBox.Top = top + 22;
+        _finishStatus.Top = top + 62;
+        _finishButton.Top = top + 104;
+
+        ClientSize = new Size(ClientSize.Width, _finishButton.Bottom + 24);
     }
 
     // ── Behaviour ──
@@ -224,7 +281,6 @@ public sealed class SetupWizard : Form
         if (_branchBox.SelectedItem is not HeadOfficeClient.BranchOption branch) return;
 
         _pcBox.Items.Clear();
-        _pcBox.Text = "";
         _finishButton.Enabled = false;
 
         try
@@ -235,14 +291,16 @@ public sealed class SetupWizard : Form
 
             foreach (var pc in provisioning.Pcs) _pcBox.Items.Add(pc);
 
-            // Land on the first free seat rather than a claimed one, so the obvious
-            // action is also the correct one.
+            // Land on the first free seat rather than a claimed one, so the obvious action
+            // is also the correct one.
             var firstFree = provisioning.Pcs.FindIndex(p => !p.IsProvisioned);
             if (firstFree >= 0) _pcBox.SelectedIndex = firstFree;
 
             var free = provisioning.Pcs.Count(p => !p.IsProvisioned);
+            _seatHint.Text = $"{free} of {provisioning.Pcs.Count} PCs at {branch.Name} still need setting up.";
+
             _finishStatus.ForeColor = Muted;
-            _finishStatus.Text = $"{branch.Name}: {free} of {provisioning.Pcs.Count} PCs still need setting up.";
+            _finishStatus.Text = "";
             _finishButton.Enabled = true;
         }
         catch (Exception ex)
@@ -255,12 +313,20 @@ public sealed class SetupWizard : Form
     private async Task FinishAsync()
     {
         if (_branchBox.SelectedItem is not HeadOfficeClient.BranchOption branch) return;
-        if (_pcBox.SelectedItem is not HeadOfficeClient.PcOption pc) return;
 
-        if (_userRadio.Checked && _pinBox.Text.Trim().Length == 0)
+        var isUserPc = _userRadio.Checked;
+
+        if (isUserPc && _pcBox.SelectedItem is not HeadOfficeClient.PcOption)
         {
-            // A customer PC with no PIN cannot be unlocked or undone from the machine
-            // itself, so refusing here saves a site visit later.
+            _finishStatus.ForeColor = Accent;
+            _finishStatus.Text = "Pick which PC this machine is.";
+            return;
+        }
+
+        if (isUserPc && _pinBox.Text.Trim().Length == 0)
+        {
+            // A customer PC with no PIN cannot be unlocked or undone from the machine itself,
+            // so refusing here saves a site visit later.
             _finishStatus.ForeColor = Accent;
             _finishStatus.Text = "A customer gaming PC needs an admin PIN, or it cannot be unlocked later.";
             return;
@@ -268,34 +334,50 @@ public sealed class SetupWizard : Form
 
         _finishButton.Enabled = false;
         _finishStatus.ForeColor = Muted;
-        _finishStatus.Text = $"Claiming {pc.PcNumber} at {branch.Name}…";
 
         try
         {
-            using var client = new HeadOfficeClient(_serverBox.Text.Trim(), _config.GateUsername, _config.GatePassword);
-            var (ok, message, _) = await client.ProvisionAsync(branch.Id, pc.PcNumber, MachineIdentity.Current());
+            var pcNumber = "";
 
-            if (!ok)
+            if (isUserPc)
             {
-                _finishStatus.ForeColor = Accent;
+                var pc = (HeadOfficeClient.PcOption)_pcBox.SelectedItem!;
+                pcNumber = pc.PcNumber;
+                _finishStatus.Text = $"Claiming {pcNumber} at {branch.Name}…";
+
+                using var client = new HeadOfficeClient(_serverBox.Text.Trim(), _config.GateUsername, _config.GatePassword);
+                var (ok, message, _) = await client.ProvisionAsync(branch.Id, pcNumber, MachineIdentity.Current());
+
+                if (!ok)
+                {
+                    _finishStatus.ForeColor = Accent;
+                    _finishStatus.Text = message;
+                    _finishButton.Enabled = true;
+                    return;
+                }
+
+                _finishStatus.ForeColor = Good;
                 _finishStatus.Text = message;
-                _finishButton.Enabled = true;
-                return;
+            }
+            else
+            {
+                // A counter PC claims no seat. The pcs table holds gaming stations, and
+                // registering the counter as one would leave a phantom seat an operator
+                // could try to sell.
+                _finishStatus.ForeColor = Good;
+                _finishStatus.Text = $"Set up as the operator counter PC for {branch.Name}.";
             }
 
-            // Only now is anything written locally — a failed claim leaves no misleading
-            // configuration on the machine.
+            // Only written once the claim (if any) succeeded, so a failed setup leaves no
+            // misleading configuration on the machine.
             _config.ServerUrl = _serverBox.Text.Trim();
             _config.BranchId = branch.Id.ToString();
             _config.BranchName = branch.Name;
-            _config.PcNumber = pc.PcNumber;
-            _config.Role = _userRadio.Checked ? "user" : "operator";
+            _config.PcNumber = pcNumber;
+            _config.Role = isUserPc ? "user" : "operator";
             _config.AdminPin = _pinBox.Text.Trim();
             _config.IsSetUp = true;
             _config.Save();
-
-            _finishStatus.ForeColor = Good;
-            _finishStatus.Text = message;
 
             DialogResult = DialogResult.OK;
             Close();
@@ -320,22 +402,23 @@ public sealed class SetupWizard : Form
 
     // ── Styling ──
 
-    private void AddStep(string text, ref int y)
+    private int AddStep(string text, int y)
     {
-        Controls.Add(new Label
+        var label = new Label
         {
             Text = text,
             Font = new Font("Segoe UI", 10F, FontStyle.Bold),
             ForeColor = Foreground,
-            Location = new Point(24, y),
+            Location = new Point(Margin, y),
             AutoSize = true,
-        });
-        y += 24;
+        };
+        Controls.Add(label);
+        return y + label.PreferredHeight + 6;
     }
 
     private void StyleField(TextBox box, int y, int width)
     {
-        box.Location = new Point(24, y);
+        box.Location = new Point(Margin, y);
         box.Size = new Size(width, 30);
         box.BackColor = Field;
         box.ForeColor = Foreground;
@@ -343,10 +426,10 @@ public sealed class SetupWizard : Form
         box.Font = new Font("Segoe UI", 10F);
     }
 
-    private void StyleCombo(ComboBox box, int y)
+    private void StyleCombo(ComboBox box, int y, int width)
     {
-        box.Location = new Point(24, y);
-        box.Size = new Size(ClientSize.Width - 48, 30);
+        box.Location = new Point(Margin, y);
+        box.Size = new Size(width, 30);
         box.BackColor = Field;
         box.ForeColor = Foreground;
         box.FlatStyle = FlatStyle.Flat;
