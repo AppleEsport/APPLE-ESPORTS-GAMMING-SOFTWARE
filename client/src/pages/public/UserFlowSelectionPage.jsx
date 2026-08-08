@@ -11,6 +11,14 @@ export default function UserFlowSelectionPage() {
       {/* Background glow effects - matching LandingGatewayPage */}
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-accent/20 rounded-full blur-[120px] pointer-events-none" />
 
+      {/* Background logo watermark */}
+      <img
+        src="/logo.png"
+        alt=""
+        aria-hidden="true"
+        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[450px] h-[450px] object-contain opacity-20 pointer-events-none select-none z-0"
+      />
+
       <div className="relative z-10 max-w-4xl w-full">
         <button 
           onClick={() => navigate('/')}

@@ -45,6 +45,10 @@ public class Employee
     public string? RefPhone { get; set; }
     public string? RefAddress { get; set; }
 
+    // Documents (stored as data: URLs — small compressed images, no file storage infra)
+    public string? PhotoDataUrl { get; set; }
+    public string? AadharDataUrl { get; set; }
+
     // System Fields
     public string Status { get; set; } = "Active";
     public Guid? SubmittedBy { get; set; }
