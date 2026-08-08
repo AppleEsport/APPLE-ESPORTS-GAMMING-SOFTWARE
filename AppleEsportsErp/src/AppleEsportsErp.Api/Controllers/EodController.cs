@@ -186,7 +186,11 @@ public class EodController : ControllerBase
                 CreditAmount = 0m,
                 CreditStatus = (string?)null,
                 SessionNotes = t.Reason ?? $"{t.TargetWallet} wallet top-up",
-                SessionStartTime = (DateTimeOffset?)null,
+                // A top-up is an instant, not a session, so it has a time but no duration.
+                // Both were left null, which rendered as "-" and made it impossible to tell
+                // from the day's audit log when money had actually gone into a wallet —
+                // the one thing you need when a customer disputes a top-up.
+                SessionStartTime = (DateTimeOffset?)t.CreatedAt,
                 SessionEndTime = (DateTimeOffset?)null,
                 SessionDurationMinutes = 0d,
                 PcId = (Guid?)null,
@@ -215,12 +219,46 @@ public class EodController : ControllerBase
         .OrderByDescending(c => c.CreatedAt)
         .ToList();
 
+        // Power cuts and lost connections for this trading day.
+        //
+        // Reported alongside the money because they explain it. An evening that looks thin
+        // is a very different conversation once you can see the branch was dark for forty
+        // minutes, and an operator should not have to remember and argue the point.
+        var downtime = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.DowntimeEvent>()
+            .Query()
+            .Where(d => d.BranchId == targetBranchId && d.StartedAt >= startUtc && d.StartedAt <= endUtc)
+            .OrderBy(d => d.StartedAt)
+            .ToListAsync();
+
+        var downtimeRows = downtime.Select(d => new
+        {
+            d.Id,
+            Kind = d.Kind == AppleEsportsErp.Domain.Enums.DowntimeKind.PowerOrRestart
+                ? "Power cut / restart"
+                : "Internet offline",
+            // Formatted in IST here rather than left to the browser, because this is also
+            // what goes onto the printed report.
+            From = AppleEsportsErp.Application.Services.IndiaTime.FormatTime(d.StartedAt),
+            To = AppleEsportsErp.Application.Services.IndiaTime.FormatTime(d.EndedAt),
+            Minutes = Math.Round(d.DurationSeconds / 60.0, 0),
+            d.SessionsAffected,
+            // A power cut stops play and customers get their time back; losing the link to
+            // Head Office does not interrupt anybody's game. Saying so on the report stops
+            // the two being read as the same event.
+            Impact = d.Kind == AppleEsportsErp.Domain.Enums.DowntimeKind.PowerOrRestart
+                ? "Play stopped — affected sessions had their time credited back"
+                : "Play unaffected — only the link to Head Office was down",
+            d.Notes,
+        }).ToList();
+
         return Ok(ApiResponse<object>.Ok(new {
             Daily = dailyReport,
             Monthly = monthlyReport,
             Discounts = discountAudit,
             AllBills = combinedBills,
-            AllCredits = allCredits
+            AllCredits = allCredits,
+            Downtime = downtimeRows,
+            DowntimeTotalMinutes = Math.Round(downtime.Sum(d => d.DurationSeconds) / 60.0, 0),
         }));
     }
 
