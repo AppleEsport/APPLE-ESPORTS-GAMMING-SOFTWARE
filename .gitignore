@@ -59,3 +59,7 @@ docker-compose.override.yml
 
 # Installer output — a release artefact, not source
 dist/
+
+# Branch installer working files — 120MB of PostgreSQL and build output
+installer/branch/staging/
+installer/branch/.cache/
