@@ -8,7 +8,9 @@ using Microsoft.AspNetCore.SignalR;
 using AppleEsportsErp.Application.DTOs.Common;
 using AppleEsportsErp.Application.DTOs.Sessions;
 using AppleEsportsErp.Application.Interfaces;
+using AppleEsportsErp.Domain.Enums;
 using AppleEsportsErp.Infrastructure.Services;
+using Microsoft.EntityFrameworkCore;
 
 namespace AppleEsportsErp.Api.Controllers;
 
@@ -22,17 +24,20 @@ public class SessionsController : ControllerBase
     private readonly Microsoft.AspNetCore.SignalR.IHubContext<AppleEsportsErp.Api.Hubs.PcOverlayHub> _pcOverlayHub;
     private readonly AppleEsportsErp.Application.Interfaces.IBillingService _billingService;
     private readonly ISessionActivityService _activityService;
+    private readonly AppleEsportsErp.Infrastructure.Data.AppDbContext _db;
 
     public SessionsController(
         ISessionService sessionService,
         Microsoft.AspNetCore.SignalR.IHubContext<AppleEsportsErp.Api.Hubs.PcOverlayHub> pcOverlayHub,
         AppleEsportsErp.Application.Interfaces.IBillingService billingService,
-        ISessionActivityService activityService)
+        ISessionActivityService activityService,
+        AppleEsportsErp.Infrastructure.Data.AppDbContext db)
     {
         _sessionService = sessionService;
         _pcOverlayHub = pcOverlayHub;
         _billingService = billingService;
         _activityService = activityService;
+        _db = db;
     }
     private Guid GetBranchId() => Guid.Parse(HttpContext.Items["BranchId"]!.ToString()!);
 
@@ -51,6 +56,56 @@ public class SessionsController : ControllerBase
         PcOverlayHub.PendingWalkinRequests.TryRemove(dto.PcId.ToString(), out _);
         PcOverlayHub.PendingWalkinRequests.TryRemove(result.PcName, out _);
         return Ok(ApiResponse<SessionDto>.Ok(result));
+    }
+
+    /// <summary>
+    /// Sessions held after an outage, waiting for someone to say whether the customer is
+    /// still in the building.
+    ///
+    /// Returned as its own list rather than mixed into the active sessions, because these
+    /// need a decision. After a power cut an operator opens the dashboard to several PCs
+    /// that look busy but whose clocks are stopped, and nothing else on screen would tell
+    /// them that or what to do about it.
+    /// </summary>
+    [HttpGet("interrupted")]
+    public async Task<IActionResult> GetInterruptedSessions()
+    {
+        var branchId = GetBranchId();
+        var now = DateTimeOffset.UtcNow;
+
+        var sessions = await _db.Sessions
+            .AsNoTracking()
+            .Include(s => s.Pc)
+            .Include(s => s.Member)
+            .Where(s => s.BranchId == branchId && s.State == SessionState.Interrupted)
+            .OrderBy(s => s.InterruptedAt)
+            .ToListAsync();
+
+        var rows = sessions.Select(s =>
+        {
+            var playedMinutes = (int)AppleEsportsErp.Application.Services.SessionTimeCalculator
+                .ElapsedMinutes(s.StartTime, s.PausedSeconds, s.InterruptedAt ?? now);
+
+            return new
+            {
+                sessionId = s.Id,
+                pcName = s.Pc?.PcNumber ?? "—",
+                customerName = s.CustomerName ?? s.Member?.Username ?? "Walk-in",
+                playedMinutes,
+                // What they still have coming, which is the whole question the operator is
+                // being asked. Null for pay-as-you-go, where there is no purchased block.
+                remainingMinutes = s.PlannedDurationMin.HasValue
+                    ? Math.Max(0, s.PlannedDurationMin.Value - playedMinutes)
+                    : (int?)null,
+                outageMinutes = (int)Math.Round(s.PausedSeconds / 60.0),
+                heldSince = AppleEsportsErp.Application.Services.IndiaTime.FormatTime(s.InterruptedAt ?? now),
+                // Flagged when the gap ran through closed hours — far more likely a session
+                // nobody stopped than a power cut with a customer waiting.
+                needsReview = s.NeedsTimeReview,
+            };
+        }).ToList();
+
+        return Ok(ApiResponse<object>.Ok(rows));
     }
 
     /// <summary>
