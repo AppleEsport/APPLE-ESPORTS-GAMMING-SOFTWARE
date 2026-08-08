@@ -99,7 +99,9 @@ public class PcConfiguration : IEntityTypeConfiguration<Pc>
         // Setup / provisioning
         builder.Ignore(e => e.IsProvisioned);   // derived from MachineId, not a column
         builder.Property(e => e.MachineId).HasMaxLength(128);
-        builder.Property(e => e.MachineToken).HasMaxLength(128);
+        // A JWT, not a short key — around 1,200 characters, and it grows with the claims it
+        // carries. Capping it truncated the token and the insert failed outright.
+        builder.Property(e => e.MachineToken).HasColumnType("text");
 
         // One machine, one PC. Without this a single machine could claim several PC numbers
         // and receive unlock commands meant for other seats. Filtered so the many unclaimed
