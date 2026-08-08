@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Shield, User, MapPin, Loader2, KeyRound, WifiOff, Eye, EyeOff } from 'lucide-react';
+import { Shield, User, MapPin, Loader2, KeyRound, WifiOff, Eye, EyeOff, ChevronDown } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import api from '../../config/api';
 
@@ -224,14 +224,13 @@ export default function LoginPage() {
                         <option key={b.id} value={b.id}>{b.name}</option>
                       ))}
                     </select>
+                    {/* Caret, not an arrow. This was a download arrow, which reads as "save
+                        this" rather than "open the list" — and no other select in the app
+                        uses one, so it looked like a different kind of control entirely. */}
                     {loadingBranches ? (
                       <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-3 animate-spin pointer-events-none z-10" />
                     ) : (
-                      <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none z-10 text-text-3">
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-                        </svg>
-                      </div>
+                      <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-3 pointer-events-none z-10" />
                     )}
                   </div>
                 </div>

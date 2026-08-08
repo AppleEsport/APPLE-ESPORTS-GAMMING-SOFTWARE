@@ -95,14 +95,15 @@ public sealed class SetupWizard : Form
         _serverBox.ForeColor = Foreground;
         _serverBox.FlatStyle = FlatStyle.Flat;
         _serverBox.Font = new Font("Segoe UI", 10F);
-        // Editable, not a fixed list: the known addresses are a convenience, but the owner's
-        // own server will eventually be one nobody has typed here before.
+        // Editable, not a fixed list: the owner's own server will eventually be an address
+        // nobody has typed here before.
+        //
+        // Only real Head Office addresses are offered. "localhost" was in this list and it
+        // does not belong — it is this machine, not a server. A branch that picked it would
+        // appear to set up correctly and then quietly never sync anything to Head Office,
+        // which is the worst kind of wrong: invisible until the figures do not add up.
         _serverBox.DropDownStyle = ComboBoxStyle.DropDown;
-        _serverBox.Items.AddRange(new object[]
-        {
-            "http://140.245.195.222:8081",
-            "http://localhost:8081",
-        });
+        _serverBox.Items.Add("http://140.245.195.222:8081");
         _serverBox.Text = string.IsNullOrWhiteSpace(_config.ServerUrl)
             ? "http://140.245.195.222:8081"
             : _config.ServerUrl;
@@ -185,6 +186,23 @@ public sealed class SetupWizard : Form
         return url.TrimEnd('/');
     }
 
+    /// <summary>True when the address resolves to this machine rather than a real server.</summary>
+    private static bool PointsAtThisMachine(string url)
+    {
+        try
+        {
+            var host = new Uri(url).Host;
+            return host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+                || host.Equals("127.0.0.1", StringComparison.Ordinal)
+                || host.Equals("::1", StringComparison.Ordinal)
+                || host.Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private async Task<bool> TestServerAsync()
     {
         var url = NormalisedServer();
@@ -204,10 +222,22 @@ public sealed class SetupWizard : Form
             using var client = new HeadOfficeClient(url, _config.GateUsername, _config.GatePassword);
             var (reachable, message) = await client.PingAsync();
 
-            _serverStatus.ForeColor = reachable ? Good : Accent;
-            _serverStatus.Text = message;
             _serverConfirmed = reachable;
             if (reachable) _serverBox.Text = url;
+
+            // Reachable is not the same as correct. A local address answers perfectly well
+            // and is exactly what someone testing on their own machine wants — but on a
+            // branch PC it means the shop is talking to itself and Head Office will never
+            // hear from it. Allowed, but never silently.
+            if (reachable && PointsAtThisMachine(url))
+            {
+                _serverStatus.ForeColor = Accent;
+                _serverStatus.Text = "Connected — but this is this PC, not Head Office. Fine for testing; wrong for a branch.";
+                return true;
+            }
+
+            _serverStatus.ForeColor = reachable ? Good : Accent;
+            _serverStatus.Text = message;
             return reachable;
         }
         catch (Exception ex)
