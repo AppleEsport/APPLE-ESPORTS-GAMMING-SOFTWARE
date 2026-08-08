@@ -85,6 +85,19 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             {
                 context.Token = accessToken;
             }
+
+            // Tokens live in an HttpOnly cookie so page scripts cannot read them, which
+            // also means the browser never sends an Authorization header. Fall back to the
+            // cookie whenever no bearer token was supplied. Without this every request
+            // after login is a 401 and the user is bounced straight back to the portal.
+            if (string.IsNullOrEmpty(context.Token)
+                && string.IsNullOrEmpty(context.Request.Headers.Authorization))
+            {
+                var cookieToken = context.Request.Cookies["accessToken"];
+                if (!string.IsNullOrEmpty(cookieToken))
+                    context.Token = cookieToken;
+            }
+
             return Task.CompletedTask;
         },
         OnTokenValidated = async context =>

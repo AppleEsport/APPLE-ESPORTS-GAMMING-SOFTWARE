@@ -66,15 +66,29 @@ public class AuthController : ControllerBase
         var shiftId = string.IsNullOrEmpty(shiftIdClaim) ? (Guid?)null : Guid.Parse(shiftIdClaim);
 
         await _authService.LogoutAsync(userId, role, shiftId);
+
+        // The client cannot clear an HttpOnly cookie itself, so without this the browser
+        // keeps presenting a valid token and the next visit silently logs straight back in.
+        ClearAuthCookies();
+
         return Ok(ApiResponse.Ok());
     }
 
     /// <summary>Refresh token — POST /api/auth/refresh</summary>
     [HttpPost("refresh")]
     [AllowAnonymous]
-    public async Task<IActionResult> Refresh([FromBody] RefreshTokenDto dto)
+    public async Task<IActionResult> Refresh([FromBody] RefreshTokenDto? dto = null)
     {
-        var result = await _authService.RefreshAccessTokenAsync(dto.RefreshToken);
+        // The browser client keeps its refresh token in an HttpOnly cookie and so cannot put
+        // it in the body — it posts an empty object. Non-browser callers may still send one.
+        var refreshToken = !string.IsNullOrWhiteSpace(dto?.RefreshToken)
+            ? dto!.RefreshToken
+            : Request.Cookies["refreshToken"];
+
+        if (string.IsNullOrWhiteSpace(refreshToken))
+            return Unauthorized(ApiResponse.Fail("No refresh token supplied.", "NO_REFRESH_TOKEN"));
+
+        var result = await _authService.RefreshAccessTokenAsync(refreshToken);
         SetAuthCookies(result.AccessToken);
         return Ok(ApiResponse<TokenResponseDto>.Ok(result));
     }
@@ -244,6 +258,22 @@ public class AuthController : ControllerBase
         }
 
         return Ok(ApiResponse.Ok());
+    }
+
+    private void ClearAuthCookies()
+    {
+        // Must match the attributes the cookies were written with, or the browser treats
+        // them as different cookies and quietly keeps the originals.
+        var expired = new Microsoft.AspNetCore.Http.CookieOptions
+        {
+            HttpOnly = true,
+            Secure = Request.IsHttps,
+            SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Strict,
+            Expires = DateTimeOffset.UnixEpoch,
+        };
+
+        Response.Cookies.Append("accessToken", string.Empty, expired);
+        Response.Cookies.Append("refreshToken", string.Empty, expired);
     }
 
     private void SetAuthCookies(string accessToken, string? refreshToken = null)
