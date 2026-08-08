@@ -3,6 +3,7 @@ using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Cash;
 using AppleEsportsErp.Application.Exceptions;
 using AppleEsportsErp.Application.Interfaces;
+using AppleEsportsErp.Application.Services;
 using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
 
@@ -27,7 +28,7 @@ public class CashDeskService : ICashDeskService
     public async Task StartVerificationAsync(Guid branchId, Guid operatorId, Guid shiftId)
     {
         var register = await _unitOfWork.Repository<CashRegister>().Query()
-            .FirstOrDefaultAsync(r => r.BranchId == branchId && r.ShiftId == shiftId && r.Status == CashRegisterStatus.Open)
+            .FirstOrDefaultAsync(r => r.BranchId == branchId && r.BusinessDay == IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow) && r.Status == CashRegisterStatus.Open)
             ?? throw new NotFoundException("No open cash register found to verify.");
 
         register.Status = CashRegisterStatus.Verifying;
@@ -55,7 +56,7 @@ public class CashDeskService : ICashDeskService
         try
         {
             var register = await _unitOfWork.Repository<CashRegister>().Query()
-                .FirstOrDefaultAsync(r => r.BranchId == branchId && r.ShiftId == shiftId && r.Status == CashRegisterStatus.Verifying)
+                .FirstOrDefaultAsync(r => r.BranchId == branchId && r.BusinessDay == IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow) && r.Status == CashRegisterStatus.Verifying)
                 ?? throw new NotFoundException("No verifying cash register found. Must start verification first.");
 
             decimal countedTotal = 
@@ -137,7 +138,7 @@ public class CashDeskService : ICashDeskService
     public async Task CloseRegisterAsync(Guid branchId, Guid operatorId, Guid shiftId, Guid cashRegisterId)
     {
         var register = await _unitOfWork.Repository<CashRegister>().Query()
-            .FirstOrDefaultAsync(r => r.Id == cashRegisterId && r.BranchId == branchId && r.ShiftId == shiftId)
+            .FirstOrDefaultAsync(r => r.Id == cashRegisterId && r.BranchId == branchId)
             ?? throw new NotFoundException("Cash register not found.");
 
         if (register.Status != CashRegisterStatus.Verified)
@@ -166,7 +167,7 @@ public class CashDeskService : ICashDeskService
     public async Task CancelVerificationAsync(Guid branchId, Guid operatorId, Guid shiftId, Guid cashRegisterId)
     {
         var register = await _unitOfWork.Repository<CashRegister>().Query()
-            .FirstOrDefaultAsync(r => r.Id == cashRegisterId && r.BranchId == branchId && r.ShiftId == shiftId)
+            .FirstOrDefaultAsync(r => r.Id == cashRegisterId && r.BranchId == branchId)
             ?? throw new NotFoundException("Cash register not found.");
 
         // Already unlocked — nothing to cancel, treat as a no-op success.
