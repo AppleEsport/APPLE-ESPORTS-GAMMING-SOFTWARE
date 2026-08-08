@@ -191,6 +191,7 @@ public sealed class SetupWizard : Form
         _finishButton.Size = new Size(180, 40);
         StyleButton(_finishButton, Accent, Color.White);
         _finishButton.Enabled = false;
+        TrackEnabledLook(_finishButton, Accent, Color.White);
         _finishButton.Click += async (_, _) => await FinishAsync();
         Controls.Add(_finishButton);
 
@@ -390,14 +391,36 @@ public sealed class SetupWizard : Form
         }
     }
 
-    private void SetStepsEnabled(bool enabled)
+    /// <summary>
+    /// Only the choices that genuinely need Head Office are gated on the connection.
+    ///
+    /// Role and the admin PIN are local decisions — whether this is a counter PC or a gaming
+    /// seat has nothing to do with whether the server answers — so disabling them was simply
+    /// wrong. It also made them unreadable: WinForms paints disabled text in a grey chosen
+    /// for light backgrounds, which all but vanishes against this one.
+    /// </summary>
+    private void SetStepsEnabled(bool connected)
     {
-        _branchBox.Enabled = enabled;
-        _pcBox.Enabled = enabled;
-        _operatorRadio.Enabled = enabled;
-        _userRadio.Enabled = enabled;
-        _pinBox.Enabled = enabled;
-        if (!enabled) _finishButton.Enabled = false;
+        _branchBox.Enabled = connected;
+        _pcBox.Enabled = connected;
+        if (!connected) _finishButton.Enabled = false;
+    }
+
+    /// <summary>
+    /// Repaints a button for its enabled state by hand. A flat button greys its own text
+    /// when disabled, which is invisible here, so the whole button is dimmed instead and
+    /// stays legible either way.
+    /// </summary>
+    private static void TrackEnabledLook(Button button, Color activeBack, Color activeFore)
+    {
+        void Apply()
+        {
+            button.BackColor = button.Enabled ? activeBack : Color.FromArgb(46, 46, 58);
+            button.ForeColor = button.Enabled ? activeFore : Color.FromArgb(120, 120, 134);
+        }
+
+        button.EnabledChanged += (_, _) => Apply();
+        Apply();
     }
 
     // ── Styling ──
