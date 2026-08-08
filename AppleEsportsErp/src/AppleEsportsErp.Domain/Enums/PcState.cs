@@ -9,5 +9,13 @@ public enum PcState
     AwaitingBilling,
     Offline,
     UnderMaintenance,
-    CloudMode        // Agent connected via internet, Operator PC unreachable
+    CloudMode,       // Agent connected via internet, Operator PC unreachable
+
+    /// <summary>
+    /// The PC record exists but no physical machine has claimed it yet. It is deliberately
+    /// NOT Idle: an unconfigured PC must never appear bookable, or an operator will seat a
+    /// customer at a machine that cannot be unlocked. Becomes Idle the moment an agent
+    /// completes setup. Stored as "awaitingsetup".
+    /// </summary>
+    AwaitingSetup
 }

@@ -8,7 +8,13 @@ public class Pc
     public Guid Id { get; set; }
     public string PcNumber { get; set; } = null!;
     public Guid BranchId { get; set; }
-    public PcState State { get; set; } = PcState.Idle;
+
+    /// <summary>
+    /// Starts as <see cref="PcState.AwaitingSetup"/>, not Idle. A PC record with no physical
+    /// machine behind it must not look bookable — seating a customer at one would leave them
+    /// staring at a locked screen. Setup flips it to Idle.
+    /// </summary>
+    public PcState State { get; set; } = PcState.AwaitingSetup;
     public Guid? CurrentSessionId { get; set; }
     public Guid? CurrentReservationId { get; set; }
     public DateTimeOffset? LastActiveAt { get; set; }
@@ -23,6 +29,25 @@ public class Pc
     public bool IsActive { get; set; } = true;
     public bool IsDeleted { get; set; } = false;
     
+    // ── Setup / provisioning ──
+    // A PC record is claimed by exactly one physical machine, once. Re-running setup on the
+    // same machine is fine (a reinstall or repair), but a second machine cannot take a PC
+    // number that is already in use — two machines answering as "PC-1" would mean unlock
+    // commands going to the wrong screen.
+
+    /// <summary>
+    /// Hardware fingerprint of the machine that claimed this PC. Null means not set up yet.
+    /// </summary>
+    public string? MachineId { get; set; }
+
+    /// <summary>Secret issued at setup; the agent presents it on every later call.</summary>
+    public string? MachineToken { get; set; }
+
+    public DateTimeOffset? ProvisionedAt { get; set; }
+
+    /// <summary>True once a physical machine has completed setup against this record.</summary>
+    public bool IsProvisioned => MachineId != null;
+
     // Agent connection tracking
     public bool IsAgentOnline { get; set; } = false;
     public string ConnectionMode { get; set; } = "None";  // "LAN", "Cloud", "None"

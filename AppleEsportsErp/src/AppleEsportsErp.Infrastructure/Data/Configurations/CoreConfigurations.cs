@@ -95,6 +95,19 @@ public class PcConfiguration : IEntityTypeConfiguration<Pc>
                            v => Enum.Parse<PcState>(v.Replace("awaiting_billing", "AwaitingBilling"), true));
         builder.Property(e => e.IpAddress).HasMaxLength(45);
         builder.Property(e => e.Specs).HasColumnType("jsonb");
+
+        // Setup / provisioning
+        builder.Ignore(e => e.IsProvisioned);   // derived from MachineId, not a column
+        builder.Property(e => e.MachineId).HasMaxLength(128);
+        builder.Property(e => e.MachineToken).HasMaxLength(128);
+
+        // One machine, one PC. Without this a single machine could claim several PC numbers
+        // and receive unlock commands meant for other seats. Filtered so the many unclaimed
+        // PCs (MachineId null) do not collide with each other.
+        builder.HasIndex(e => e.MachineId)
+            .IsUnique()
+            .HasFilter("\"MachineId\" IS NOT NULL")
+            .HasDatabaseName("idx_pcs_machine_unique");
         builder.Property(e => e.CreatedAt).HasDefaultValueSql("NOW()");
         builder.Property(e => e.UpdatedAt).HasDefaultValueSql("NOW()");
 
