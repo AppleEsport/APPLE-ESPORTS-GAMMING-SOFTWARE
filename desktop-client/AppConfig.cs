@@ -28,8 +28,28 @@ public sealed class AppConfig
 
     public bool StartMaximized { get; set; } = true;
 
-    /// <summary>Hide the window chrome entirely — for gaming PCs running as a kiosk.</summary>
-    public bool Kiosk { get; set; } = false;
+    /// <summary>
+    /// "operator" for the counter PC, "user" for a customer-facing gaming PC.
+    ///
+    /// A user PC is locked down: no close button, no minimise, no Alt+F4, no full-screen
+    /// toggle. A customer must not be able to shut the app and reach the Windows desktop,
+    /// which is the whole point of a kiosk. Everything that could let them out is behind
+    /// <see cref="AdminPin"/>.
+    /// </summary>
+    public string Role { get; set; } = "operator";
+
+    /// <summary>
+    /// PIN that unlocks the protected shortcuts — change server, reconfigure the PC,
+    /// un-configure it, or exit a locked kiosk. Without this the shortcuts are inert on a
+    /// user PC, because a customer discovering a key combination must not be able to
+    /// unbind the machine or escape to the desktop.
+    /// </summary>
+    public string AdminPin { get; set; } = "";
+
+    /// <summary>Which PC this machine is set up as, e.g. "PC-1". Empty until setup is done.</summary>
+    public string PcNumber { get; set; } = "";
+
+    public bool IsUserPc => string.Equals(Role, "user", StringComparison.OrdinalIgnoreCase);
 
     // ── Paths ─────────────────────────────────────────────────────────────
 
@@ -79,7 +99,9 @@ public sealed class AppConfig
             if (loaded.GateUsername is not null) target.GateUsername = loaded.GateUsername;
             if (loaded.GatePassword is not null) target.GatePassword = loaded.GatePassword;
             target.StartMaximized = loaded.StartMaximized;
-            target.Kiosk = loaded.Kiosk;
+            if (!string.IsNullOrWhiteSpace(loaded.Role)) target.Role = loaded.Role.Trim();
+            if (loaded.AdminPin is not null) target.AdminPin = loaded.AdminPin;
+            if (loaded.PcNumber is not null) target.PcNumber = loaded.PcNumber;
         }
         catch
         {

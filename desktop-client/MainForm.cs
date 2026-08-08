@@ -24,6 +24,9 @@ public sealed class MainForm : Form
     private FormBorderStyle _borderBeforeFullScreen;
     private FormWindowState _stateBeforeFullScreen;
 
+    /// <summary>Set only by the PIN-protected exit path, so a locked PC can still be closed.</summary>
+    private bool _allowClose;
+
     public MainForm(AppConfig config)
     {
         _config = config;
@@ -46,9 +49,16 @@ public sealed class MainForm : Form
             // Cosmetic only — a missing icon must not stop the app.
         }
 
-        if (_config.Kiosk)
+        // A customer-facing PC is sealed: no close button, no minimise, no border to drag.
+        // If a customer can shut this window they are looking at the Windows desktop, and
+        // the kiosk is worthless. Getting out requires the admin PIN (Ctrl+Alt+Q).
+        if (_config.IsUserPc)
         {
             FormBorderStyle = FormBorderStyle.None;
+            ControlBox = false;
+            MinimizeBox = false;
+            MaximizeBox = false;
+            ShowInTaskbar = !_config.IsUserPc;
             WindowState = FormWindowState.Maximized;
         }
         else if (_config.StartMaximized)
@@ -305,6 +315,7 @@ public sealed class MainForm : Form
 
     // ── Keyboard ──────────────────────────────────────────────────────────
 
+    // Keep this in step with SHORTCUT_KEYS.md — that file is what the branch staff are given.
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
         switch (keyData)
@@ -317,20 +328,139 @@ public sealed class MainForm : Form
                 ToggleFullScreen();
                 return true;
 
-            case Keys.Control | Keys.Shift | Keys.S:
-                OpenSettings();
-                return true;
-
             case Keys.Escape when _isFullScreen:
                 ToggleFullScreen();
+                return true;
+
+            // ── Protected: each needs the admin PIN on a customer-facing PC ──
+
+            case Keys.Control | Keys.Shift | Keys.S:
+                if (Unlocked("change the server address")) OpenSettings();
+                return true;
+
+            case Keys.Control | Keys.Shift | Keys.P:
+                if (Unlocked("change which PC this machine is set up as")) ChangePcSetup();
+                return true;
+
+            case Keys.Control | Keys.Shift | Keys.U:
+                if (Unlocked("un-configure this machine")) Unconfigure();
+                return true;
+
+            case Keys.Control | Keys.Alt | Keys.Q:
+                if (Unlocked("close Apple Esports")) ForceExit();
+                return true;
+
+            // Swallow Alt+F4 on a locked PC so a customer cannot reach the desktop.
+            case Keys.Alt | Keys.F4 when _config.IsUserPc:
                 return true;
         }
         return base.ProcessCmdKey(ref msg, keyData);
     }
 
+    /// <summary>
+    /// Gate for anything that could unbind this machine or let a customer out to Windows.
+    /// On an operator PC with no PIN set there is nothing to protect against, so it passes
+    /// straight through. On a customer PC with no PIN set it refuses outright — an
+    /// unprotected escape hatch on a public machine is worse than no shortcut at all.
+    /// </summary>
+    private bool Unlocked(string action)
+    {
+        if (string.IsNullOrEmpty(_config.AdminPin))
+        {
+            if (!_config.IsUserPc) return true;
+
+            MessageBox.Show(this,
+                $"No admin PIN is set on this PC, so it cannot be unlocked here.\n\n" +
+                "Set one in AppleEsports.config.json, or ask a Super Admin.",
+                "Apple Esports", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
+        }
+
+        using var prompt = new PinPromptDialog(action);
+        if (prompt.ShowDialog(this) != DialogResult.OK) return false;
+
+        if (prompt.Pin == _config.AdminPin) return true;
+
+        MessageBox.Show(this, "Incorrect PIN.", "Apple Esports",
+            MessageBoxButtons.OK, MessageBoxIcon.Error);
+        return false;
+    }
+
+    private void ChangePcSetup()
+    {
+        using var dialog = new PcSetupDialog(_config);
+        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+
+        _config.PcNumber = dialog.PcNumber;
+        _config.Role = dialog.Role;
+        SaveConfig();
+
+        MessageBox.Show(this,
+            $"This machine is now set up as {_config.PcNumber} ({_config.Role}).\n\n" +
+            "Apple Esports will restart to apply it.",
+            "Apple Esports", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+        Restart();
+    }
+
+    private void Unconfigure()
+    {
+        var confirm = MessageBox.Show(this,
+            "Remove this machine's setup?\n\n" +
+            "It will stop being assigned to a PC number and will ask to be set up again " +
+            "next time it starts. Any session running here should be stopped first.",
+            "Apple Esports", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+
+        if (confirm != DialogResult.Yes) return;
+
+        _config.PcNumber = "";
+        _config.Role = "operator";
+        SaveConfig();
+
+        Restart();
+    }
+
+    private void SaveConfig()
+    {
+        try
+        {
+            _config.Save();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Couldn't save settings.\n\n{ex.Message}", "Apple Esports",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private void Restart()
+    {
+        if (Environment.ProcessPath is { } exe)
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe) { UseShellExecute = true });
+
+        ForceExit();
+    }
+
+    private void ForceExit()
+    {
+        _allowClose = true;
+        Application.Exit();
+    }
+
+    // Blocks the window's own close path (Alt+F4, taskbar, task switcher) on a locked PC.
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        if (_config.IsUserPc && !_allowClose && e.CloseReason is CloseReason.UserClosing)
+        {
+            e.Cancel = true;
+            return;
+        }
+        base.OnFormClosing(e);
+    }
+
     private void ToggleFullScreen()
     {
-        if (_config.Kiosk) return;   // already borderless by design
+        if (_config.IsUserPc) return;   // already borderless and locked by design
 
         if (_isFullScreen)
         {
