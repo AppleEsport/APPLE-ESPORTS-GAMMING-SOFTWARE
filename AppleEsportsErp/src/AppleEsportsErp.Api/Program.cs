@@ -87,15 +87,26 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             }
 
             // Tokens live in an HttpOnly cookie so page scripts cannot read them, which
-            // also means the browser never sends an Authorization header. Fall back to the
-            // cookie whenever no bearer token was supplied. Without this every request
-            // after login is a 401 and the user is bounced straight back to the portal.
-            if (string.IsNullOrEmpty(context.Token)
-                && string.IsNullOrEmpty(context.Request.Headers.Authorization))
+            // also means the browser sends no *Bearer* header. Fall back to the cookie.
+            //
+            // The test is specifically for a Bearer scheme, not merely for the presence of
+            // an Authorization header. The dashboard sits behind an nginx Basic Auth gate,
+            // and once the browser has authenticated to that realm it attaches
+            // "Authorization: Basic ..." to every request on the origin — including these
+            // API calls. Treating any Authorization header as "a token was supplied" means
+            // the cookie is never read and the gate's own credential gets handed to the JWT
+            // parser, which rejects it: login succeeds, every call afterwards is a 401.
+            if (string.IsNullOrEmpty(context.Token))
             {
-                var cookieToken = context.Request.Cookies["accessToken"];
-                if (!string.IsNullOrEmpty(cookieToken))
-                    context.Token = cookieToken;
+                var authHeader = context.Request.Headers.Authorization.ToString();
+                var hasBearer = authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase);
+
+                if (!hasBearer)
+                {
+                    var cookieToken = context.Request.Cookies["accessToken"];
+                    if (!string.IsNullOrEmpty(cookieToken))
+                        context.Token = cookieToken;
+                }
             }
 
             return Task.CompletedTask;
