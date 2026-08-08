@@ -3,10 +3,11 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Shield, User, MapPin, Loader2, KeyRound, WifiOff, Eye, EyeOff, ChevronDown } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
+import { sessionBelongsOnPortal } from '../../config/portalAccess';
 import api from '../../config/api';
 
 export default function LoginPage() {
-  const { loginAdmin, loginOperator, isAuthenticated, isSuperAdmin } = useAuth();
+  const { loginAdmin, loginOperator, isAuthenticated, isSuperAdmin, user, clearSession } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const reason = searchParams.get('reason');
@@ -28,18 +29,20 @@ export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
-  // Redirect if already authenticated (page refresh / revisit)
+  // A session already in place is only honoured if it belongs on THIS portal. Anything else
+  // is signed out, so the person choosing "Operator" gets an operator login rather than
+  // inheriting whoever used this PC last — which on a shared counter machine could hand a
+  // customer a Super Admin dashboard without them typing a password.
   useEffect(() => {
-    if (isAuthenticated && !isOffline) {
-      const role = (typeof window !== 'undefined' && JSON.parse(localStorage.getItem('user') || '{}'))?.role || '';
-      if (role === 'super_admin') {
-        navigate('/app/sessions', { replace: true });
-      } else {
-        navigate('/app/sessions', { replace: true });
-      }
+    if (!isAuthenticated || isOffline) return;
+
+    if (sessionBelongsOnPortal(user, 'operator')) {
+      navigate('/app/sessions', { replace: true });
+    } else {
+      clearSession();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAuthenticated, isOffline]);
+  }, [isAuthenticated, isOffline, user]);
 
   // Fetch active branches for Operator dropdown
   useEffect(() => {

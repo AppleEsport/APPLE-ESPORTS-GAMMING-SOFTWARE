@@ -151,6 +151,24 @@ export function AuthProvider({ children }) {
     }
   }, [user]);
 
+  /// Ends the session without navigating anywhere.
+  ///
+  /// `logout` sends the browser to a login portal, which is right for a person clicking
+  /// "log out" but useless when a login page needs to discard a stale session it is already
+  /// showing — that would bounce the page away and, on a portal that redirects authenticated
+  /// users, loop. The server call matters: the token lives in an HttpOnly cookie the page
+  /// cannot clear itself, so skipping it would leave the old session usable.
+  const clearSession = useCallback(async () => {
+    try {
+      await api.post('/auth/logout', {}).catch(() => {});
+    } finally {
+      localStorage.removeItem('user');
+      localStorage.removeItem('activeBranchId');
+      setUser(null);
+      setAdminSwitchUser(null);
+    }
+  }, []);
+
   // ── Role checks ──
   const activeUser = adminSwitchUser || user;
   const userRole = activeUser?.role || activeUser?.Role;
@@ -190,6 +208,7 @@ export function AuthProvider({ children }) {
     loginAdmin,
     loginOperator,
     logout,
+    clearSession,
     adminSwitchIn,
     exitAdminSwitch,
     fetchAvailableAdminsForSwitch,
