@@ -20,7 +20,7 @@ public sealed class SetupWizard : Form
     private static readonly Color Accent = Color.FromArgb(200, 30, 40);
     private static readonly Color Good = Color.FromArgb(60, 180, 110);
 
-    private const int Margin = 24;
+    private const int Pad = 24;
 
     private readonly AppConfig _config;
 
@@ -71,7 +71,7 @@ public sealed class SetupWizard : Form
 
     private void Build()
     {
-        var width = ClientSize.Width - (Margin * 2);
+        var width = ClientSize.Width - (Pad * 2);
         var y = 20;
 
         var title = new Label
@@ -79,7 +79,7 @@ public sealed class SetupWizard : Form
             Text = "APPLE ESPORTS",
             Font = new Font("Segoe UI", 18F, FontStyle.Bold),
             ForeColor = Accent,
-            Location = new Point(Margin, y),
+            Location = new Point(Pad, y),
             AutoSize = true,
         };
         Controls.Add(title);
@@ -91,7 +91,7 @@ public sealed class SetupWizard : Form
         {
             Text = "This PC has not been set up yet. It cannot take customers until it has.",
             ForeColor = Muted,
-            Location = new Point(Margin, y),
+            Location = new Point(Pad, y),
             Size = new Size(width, 20),
         });
         y += 34;
@@ -103,7 +103,7 @@ public sealed class SetupWizard : Form
         Controls.Add(_serverBox);
 
         _connectButton.Text = "Connect";
-        _connectButton.Location = new Point(ClientSize.Width - Margin - 120, y);
+        _connectButton.Location = new Point(ClientSize.Width - Pad - 120, y);
         _connectButton.Size = new Size(120, 30);
         StyleButton(_connectButton, Accent, Color.White);
         _connectButton.Click += async (_, _) => await ConnectAsync();
@@ -111,7 +111,7 @@ public sealed class SetupWizard : Form
         y += 36;
 
         _connectStatus.ForeColor = Muted;
-        _connectStatus.Location = new Point(Margin, y);
+        _connectStatus.Location = new Point(Pad, y);
         _connectStatus.Size = new Size(width, 20);
         Controls.Add(_connectStatus);
         y += 32;
@@ -127,7 +127,7 @@ public sealed class SetupWizard : Form
         y = AddStep("3.  What is this machine for?", y);
 
         _operatorRadio.Text = "Operator counter PC  —  full dashboard, staff can close it";
-        _operatorRadio.Location = new Point(Margin, y);
+        _operatorRadio.Location = new Point(Pad, y);
         _operatorRadio.Size = new Size(width, 24);
         _operatorRadio.ForeColor = Foreground;
         _operatorRadio.Checked = true;
@@ -136,7 +136,7 @@ public sealed class SetupWizard : Form
         y += 26;
 
         _userRadio.Text = "Customer gaming PC  —  locked, no close button";
-        _userRadio.Location = new Point(Margin, y);
+        _userRadio.Location = new Point(Pad, y);
         _userRadio.Size = new Size(width, 24);
         _userRadio.ForeColor = Foreground;
         Controls.Add(_userRadio);
@@ -153,7 +153,7 @@ public sealed class SetupWizard : Form
             Text = "4.  Which PC is this machine?",
             Font = new Font("Segoe UI", 10F, FontStyle.Bold),
             ForeColor = Foreground,
-            Location = new Point(Margin, 0),
+            Location = new Point(Pad, 0),
             AutoSize = true,
         });
 
@@ -161,7 +161,7 @@ public sealed class SetupWizard : Form
         _seatPanel.Controls.Add(_pcBox);
 
         _seatHint.ForeColor = Muted;
-        _seatHint.Location = new Point(Margin, 56);
+        _seatHint.Location = new Point(Pad, 56);
         _seatHint.Size = new Size(width, 18);
         _seatPanel.Controls.Add(_seatHint);
 
@@ -173,7 +173,7 @@ public sealed class SetupWizard : Form
         Controls.Add(_pinHint);
         _pinHint.Text = "Admin PIN  (needed to change or undo this setup later)";
         _pinHint.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
-        _pinHint.Location = new Point(Margin, afterSeat);
+        _pinHint.Location = new Point(Pad, afterSeat);
         _pinHint.AutoSize = true;
 
         StyleField(_pinBox, afterSeat + 22, 200);
@@ -182,12 +182,12 @@ public sealed class SetupWizard : Form
         Controls.Add(_pinBox);
 
         _finishStatus.ForeColor = Muted;
-        _finishStatus.Location = new Point(Margin, afterSeat + 62);
+        _finishStatus.Location = new Point(Pad, afterSeat + 62);
         _finishStatus.Size = new Size(width, 36);
         Controls.Add(_finishStatus);
 
         _finishButton.Text = "Finish setup";
-        _finishButton.Location = new Point(ClientSize.Width - Margin - 180, afterSeat + 104);
+        _finishButton.Location = new Point(ClientSize.Width - Pad - 180, afterSeat + 104);
         _finishButton.Size = new Size(180, 40);
         StyleButton(_finishButton, Accent, Color.White);
         _finishButton.Enabled = false;
@@ -409,7 +409,7 @@ public sealed class SetupWizard : Form
             Text = text,
             Font = new Font("Segoe UI", 10F, FontStyle.Bold),
             ForeColor = Foreground,
-            Location = new Point(Margin, y),
+            Location = new Point(Pad, y),
             AutoSize = true,
         };
         Controls.Add(label);
@@ -418,7 +418,7 @@ public sealed class SetupWizard : Form
 
     private void StyleField(TextBox box, int y, int width)
     {
-        box.Location = new Point(Margin, y);
+        box.Location = new Point(Pad, y);
         box.Size = new Size(width, 30);
         box.BackColor = Field;
         box.ForeColor = Foreground;
@@ -428,7 +428,7 @@ public sealed class SetupWizard : Form
 
     private void StyleCombo(ComboBox box, int y, int width)
     {
-        box.Location = new Point(Margin, y);
+        box.Location = new Point(Pad, y);
         box.Size = new Size(width, 30);
         box.BackColor = Field;
         box.ForeColor = Foreground;
