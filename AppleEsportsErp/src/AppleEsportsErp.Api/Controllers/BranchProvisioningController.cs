@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using AppleEsportsErp.Api.Services;
 using AppleEsportsErp.Application.DTOs.Common;
 using AppleEsportsErp.Infrastructure.Data;
 
@@ -139,4 +140,82 @@ public class BranchProvisioningController : ControllerBase
         service = "Apple Esports Head Office",
         time = DateTimeOffset.UtcNow,
     }));
+
+    // ── The branch side ───────────────────────────────────────────────────────
+    //
+    // Everything above is answered BY Head Office. Everything below runs ON a branch and
+    // calls Head Office. Same code either way — a branch and Head Office run the same
+    // build, and which role a machine plays is a matter of configuration, not of binary.
+
+    /// <summary>What this machine currently believes itself to be.</summary>
+    [HttpGet("identity")]
+    [AllowAnonymous]
+    public async Task<IActionResult> Identity(
+        [FromServices] BranchAdoptionService adoption, CancellationToken ct)
+        => Ok(ApiResponse<object>.Ok(await adoption.DescribeIdentityAsync(ct)));
+
+    /// <summary>
+    /// Head Office's branch list, fetched by this machine on the caller's behalf.
+    ///
+    /// Proxied rather than called from the dashboard directly so that Head Office's address
+    /// stays in one place — the branch's own configuration — instead of being duplicated
+    /// into every client that needs it and drifting when the owner's server arrives.
+    /// </summary>
+    [HttpGet("head-office/branches")]
+    [AllowAnonymous]
+    public async Task<IActionResult> HeadOfficeBranches(
+        [FromServices] BranchAdoptionService adoption, CancellationToken ct)
+    {
+        var (ok, error, payload) = await adoption.ListHeadOfficeBranchesAsync(ct);
+        if (!ok) return StatusCode(502, ApiResponse<object>.Fail(error!, "HEAD_OFFICE_UNREACHABLE"));
+
+        return Content(payload!, "application/json");
+    }
+
+    /// <summary>
+    /// Sets this machine up as a particular branch, taking Head Office's identifiers for the
+    /// branch, its PCs, its pricing and its operators.
+    ///
+    /// Anonymous of necessity: a branch has no credentials until it has been set up, and this
+    /// is the call that sets it up. It is not a way in — it only replaces local identifiers
+    /// with Head Office's, refuses outright once the machine has taken money, and grants no
+    /// access to anything.
+    /// </summary>
+    [HttpPost("adopt")]
+    [AllowAnonymous]
+    public async Task<IActionResult> Adopt(
+        [FromBody] AdoptRequest request,
+        [FromServices] BranchAdoptionService adoption,
+        CancellationToken ct)
+    {
+        if (request is null || request.BranchId == Guid.Empty)
+            return BadRequest(ApiResponse<object>.Fail("Choose which branch this PC is.", "BRANCH_REQUIRED"));
+
+        var result = await adoption.AdoptAsync(request.BranchId, request.Force, ct);
+
+        if (!result.Success)
+            return BadRequest(ApiResponse<object>.Fail(result.Error!, "ADOPTION_FAILED"));
+
+        return Ok(ApiResponse<object>.Ok(new
+        {
+            branchId = result.BranchId,
+            branchName = result.BranchName,
+            pcs = result.Pcs,
+            operators = result.Operators,
+            pricingProfiles = result.PricingProfiles,
+            operatorsNeedingPassword = result.OperatorsNeedingPassword,
+        }));
+    }
+
+    public sealed class AdoptRequest
+    {
+        public Guid BranchId { get; set; }
+
+        /// <summary>
+        /// Re-adopt a machine that has already traded. Deliberately not offered in the
+        /// wizard: it orphans existing sessions and takings, so it should take a deliberate
+        /// act by someone who knows that.
+        /// </summary>
+        public bool Force { get; set; }
+    }
 }

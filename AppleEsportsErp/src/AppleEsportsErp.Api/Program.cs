@@ -303,6 +303,12 @@ builder.Services.AddHostedService<AppleEsportsErp.Api.Services.SessionActivityCl
 // Marks live sessions as still running, so a power cut can be told apart from play time.
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.SessionHeartbeatService>();
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.SyncCourierService>();
+
+// Lets a fresh branch take Head Office's identifiers instead of inventing its own, which is
+// what makes anything it later reports recognisable at Head Office.
+builder.Services.AddHttpClient();
+builder.Services.AddScoped<AppleEsportsErp.Api.Services.BranchAdoptionService>();
+
 builder.Services.AddScoped<IOfflineSyncService, OfflineSyncService>();
 builder.Services.AddScoped<IEmployeeService, EmployeeService>();
 builder.Services.AddScoped<IPricingProfileService, PricingProfileService>();

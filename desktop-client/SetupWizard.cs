@@ -1,4 +1,7 @@
-﻿namespace AppleEsports.Desktop;
+﻿using System.Text;
+using System.Text.Json;
+
+namespace AppleEsports.Desktop;
 
 /// <summary>
 /// What staff see the first time Apple Esports runs on a new machine.
@@ -32,11 +35,24 @@ public sealed class SetupWizard : Form
     private readonly Button _testButton = new();
     private readonly Label _serverStatus = new();
 
+    private readonly ComboBox _branchBox = new();
+    private readonly Label _branchStatus = new();
+    private readonly Label _branchPrompt = new();
+
     private readonly TextBox _pinBox = new();
     private readonly Label _finishStatus = new();
     private readonly Button _finishButton = new();
 
     private bool _serverConfirmed;
+    private bool _isCounterPc;
+
+    /// <summary>
+    /// True once this machine has been told which branch it is, and holds only that one.
+    /// A fresh database seeds all four, which means it has not been told yet.
+    /// </summary>
+    private bool _alreadyAdopted;
+
+    private readonly List<(Guid Id, string Name)> _headOfficeBranches = new();
 
     public SetupWizard(AppConfig config)
     {
@@ -91,7 +107,8 @@ public sealed class SetupWizard : Form
         // same question. The counter PC runs the branch itself; a gaming PC is a screen onto
         // the counter PC across the shop LAN. Neither one talks to Head Office to do its
         // work - that is the branch's background sync, and the shop trades without it.
-        var isCounterPc = !_config.Role.Equals("user", StringComparison.OrdinalIgnoreCase);
+        _isCounterPc = !_config.Role.Equals("user", StringComparison.OrdinalIgnoreCase);
+        var isCounterPc = _isCounterPc;
 
         y = AddStep(isCounterPc
             ? "1.  This PC runs the branch"
@@ -145,8 +162,48 @@ public sealed class SetupWizard : Form
         Controls.Add(_serverStatus);
         y += 40;
 
-        // ── 2. PIN ──
-        y = AddStep("2.  Choose an admin PIN", y);
+        // ── 2. Which branch (counter PC only) ──
+        //
+        // The one question a counter PC genuinely cannot answer for itself. Both databases
+        // seed independently, so each invents its own identifier for the same shop - and a
+        // branch that never asks ends up with a private "Adajan" that Head Office has never
+        // heard of, reporting sessions on PCs that, as far as Head Office is concerned, do
+        // not exist. Asking here is what makes the two sides talk about the same things.
+        if (isCounterPc)
+        {
+            y = AddStep("2.  Which branch is this?", y);
+
+            _branchPrompt.Text = "Taken from Head Office, so this shop's records match theirs.";
+            _branchPrompt.ForeColor = Muted;
+            _branchPrompt.Location = new Point(Pad, y);
+            _branchPrompt.Size = new Size(width, 20);
+            Controls.Add(_branchPrompt);
+            y += 26;
+
+            _branchBox.Location = new Point(Pad, y);
+            _branchBox.Size = new Size(width, 30);
+            _branchBox.BackColor = Field;
+            _branchBox.ForeColor = Foreground;
+            _branchBox.FlatStyle = FlatStyle.Flat;
+            _branchBox.Font = new Font("Segoe UI", 10F);
+            // Fixed list, unlike the server box: these are real branches at Head Office and
+            // a typed one would be a branch that does not exist.
+            _branchBox.DropDownStyle = ComboBoxStyle.DropDownList;
+            _branchBox.Enabled = false;
+            _branchBox.Items.Add("Press Test above first");
+            _branchBox.SelectedIndex = 0;
+            Controls.Add(_branchBox);
+            y += 36;
+
+            _branchStatus.ForeColor = Muted;
+            _branchStatus.Location = new Point(Pad, y);
+            _branchStatus.Size = new Size(width, 34);
+            Controls.Add(_branchStatus);
+            y += 40;
+        }
+
+        // ── 3. PIN ──
+        y = AddStep(isCounterPc ? "3.  Choose an admin PIN" : "2.  Choose an admin PIN", y);
 
         Controls.Add(new Label
         {
@@ -258,6 +315,9 @@ public sealed class SetupWizard : Form
                 {
                     _serverStatus.ForeColor = Good;
                     _serverStatus.Text = "Connected. The branch runs on this PC, so the shop works with no internet.";
+
+                    // Only now can the branch be asked what it is - it has to be answering first.
+                    await LoadBranchesAsync();
                     return true;
                 }
             }
@@ -277,6 +337,117 @@ public sealed class SetupWizard : Form
         {
             _testButton.Enabled = true;
         }
+    }
+
+    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(30) };
+
+    /// <summary>
+    /// Asks the branch on this machine what it is, and — if it has not been told yet — asks it
+    /// for Head Office's list of real branches.
+    ///
+    /// Routed through the branch rather than straight to Head Office so that Head Office's
+    /// address stays in one place. The branch already has it, for sync.
+    /// </summary>
+    private async Task LoadBranchesAsync()
+    {
+        if (!_isCounterPc) return;
+
+        _branchBox.Items.Clear();
+        _branchBox.Enabled = false;
+        _headOfficeBranches.Clear();
+        _branchStatus.ForeColor = Muted;
+        _branchStatus.Text = "Asking Head Office which branches exist…";
+
+        var baseUrl = NormalisedServer();
+
+        try
+        {
+            using var identity = JsonDocument.Parse(
+                await Http.GetStringAsync($"{baseUrl}/api/provisioning/identity"));
+            var data = identity.RootElement.GetProperty("data");
+            _alreadyAdopted = data.GetProperty("adopted").GetBoolean();
+
+            if (_alreadyAdopted)
+            {
+                var name = data.GetProperty("branches")[0].GetProperty("name").GetString() ?? "(already set)";
+                _branchBox.Items.Add(name);
+                _branchBox.SelectedIndex = 0;
+                _branchStatus.ForeColor = Good;
+                _branchStatus.Text = $"Already set up as {name}. This cannot be changed once the shop has traded.";
+                return;
+            }
+
+            using var branches = JsonDocument.Parse(
+                await Http.GetStringAsync($"{baseUrl}/api/provisioning/head-office/branches"));
+
+            foreach (var b in branches.RootElement.GetProperty("data").EnumerateArray())
+            {
+                _headOfficeBranches.Add((
+                    b.GetProperty("id").GetGuid(),
+                    b.GetProperty("name").GetString() ?? "(unnamed)"));
+            }
+
+            if (_headOfficeBranches.Count == 0)
+            {
+                _branchStatus.ForeColor = Accent;
+                _branchStatus.Text = "Head Office has no branches recorded. Add them there first.";
+                return;
+            }
+
+            foreach (var (_, name) in _headOfficeBranches) _branchBox.Items.Add(name);
+            _branchBox.SelectedIndex = 0;
+            _branchBox.Enabled = true;
+            _branchStatus.ForeColor = Muted;
+            _branchStatus.Text = "Pick the shop this PC sits in.";
+        }
+        catch (Exception ex)
+        {
+            // Not fatal, and deliberately so. The whole point of the branch running locally is
+            // that the shop can open without the internet — refusing to finish setup because
+            // Head Office is unreachable would defeat that on the one day it matters most.
+            // It is said plainly instead, because an unadopted branch trades perfectly and
+            // reports nothing, which is the failure that hides.
+            _branchStatus.ForeColor = Accent;
+            _branchStatus.Text =
+                "Could not reach Head Office, so this PC cannot be linked to a branch yet. " +
+                "The shop will work, but nothing will reach Head Office until this is done.";
+            _ = ex;
+        }
+    }
+
+    /// <summary>
+    /// Takes Head Office's identifiers for this branch, its PCs, pricing and operators.
+    /// Returns null on success, or why it could not be done.
+    /// </summary>
+    private async Task<string?> AdoptChosenBranchAsync()
+    {
+        if (!_isCounterPc || _alreadyAdopted) return null;
+        if (_headOfficeBranches.Count == 0 || _branchBox.SelectedIndex < 0) return null;
+
+        var chosen = _headOfficeBranches[_branchBox.SelectedIndex];
+
+        _finishStatus.ForeColor = Muted;
+        _finishStatus.Text = $"Setting this PC up as {chosen.Name}…";
+
+        var body = new StringContent(
+            JsonSerializer.Serialize(new { branchId = chosen.Id }),
+            Encoding.UTF8);
+        body.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+
+        var response = await Http.PostAsync($"{NormalisedServer()}/api/provisioning/adopt", body);
+        var text = await response.Content.ReadAsStringAsync();
+
+        if (response.IsSuccessStatusCode) return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(text);
+            if (doc.RootElement.TryGetProperty("message", out var message))
+                return message.GetString();
+        }
+        catch { /* fall through to the raw body */ }
+
+        return $"Head Office link failed ({(int)response.StatusCode}).";
     }
 
     private async Task FinishAsync()
@@ -299,6 +470,16 @@ public sealed class SetupWizard : Form
             {
                 _finishStatus.ForeColor = Accent;
                 _finishStatus.Text = "That server could not be reached. Fix the address, or check the network.";
+                return;
+            }
+
+            // Before anything is saved: if this fails the machine should stay unset up, not
+            // end up half configured and looking finished.
+            var adoptionError = await AdoptChosenBranchAsync();
+            if (adoptionError is not null)
+            {
+                _finishStatus.ForeColor = Accent;
+                _finishStatus.Text = adoptionError;
                 return;
             }
 
