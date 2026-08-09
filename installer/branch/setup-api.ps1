@@ -2,7 +2,7 @@
     Registers the branch API as a Windows service and waits until it is actually serving.
 
     Runs after setup-database.ps1, which writes the connection string this depends on.
-    Safe to run again — an existing service is reconfigured rather than duplicated.
+    Safe to run again - an existing service is reconfigured rather than duplicated.
 #>
 param(
     [Parameter(Mandatory = $true)][string]$InstallDir,
@@ -20,10 +20,10 @@ Add-Content $setupLog ("`n=== API setup started {0:yyyy-MM-dd HH:mm:ss} ===" -f 
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
            ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
-    throw "This must run as Administrator — it registers a Windows service. The installer does this for you."
+    throw "This must run as Administrator - it registers a Windows service. The installer does this for you."
 }
 
-# Published assembly name, not a friendly one — renaming it would break the Docker image,
+# Published assembly name, not a friendly one - renaming it would break the Docker image,
 # which launches AppleEsportsErp.Api.dll by name.
 $apiExe = Join-Path $InstallDir 'api\AppleEsportsErp.Api.exe'
 if (-not (Test-Path $apiExe)) { throw "The API is missing at $apiExe" }
@@ -32,10 +32,10 @@ function Write-Step($text) { Write-Host "  $text" }
 
 $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($existing) {
-    Write-Step 'API service already registered — stopping it to update.'
+    Write-Step 'API service already registered - stopping it to update.'
     if ($existing.Status -ne 'Stopped') { Stop-Service $ServiceName -Force }
 } else {
-    Write-Step 'Registering the API as a Windows service…'
+    Write-Step 'Registering the API as a Windows service...'
     # binPath quoting matters: the path contains spaces ("Program Files"), and without
     # the inner quotes Windows tries to run "C:\Program" and the service never starts.
     sc.exe create $ServiceName binPath= "\"$apiExe\"" start= auto DisplayName= "Apple Esports API" | Out-Null
@@ -55,11 +55,11 @@ sc.exe description $ServiceName "Runs the Apple Esports branch system. Stopping 
 [Environment]::SetEnvironmentVariable('ASPNETCORE_URLS', "http://0.0.0.0:$ApiPort", 'Machine')
 [Environment]::SetEnvironmentVariable('ASPNETCORE_ENVIRONMENT', 'Production', 'Machine')
 
-Write-Step 'Starting the API…'
+Write-Step 'Starting the API...'
 Start-Service $ServiceName
 
 # Wait for it to actually answer rather than assume. The service reporting "Running"
-# only means the process launched — migrations still have to apply on first start,
+# only means the process launched - migrations still have to apply on first start,
 # and that is exactly when a fresh install is most likely to fail.
 $deadline = (Get-Date).AddSeconds(120)
 $ready = $false

@@ -22,7 +22,7 @@ $ErrorActionPreference = 'Stop'
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
            ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
-    throw "This must run as Administrator — it registers Windows services. The installer does this for you; if you are running it by hand, use an elevated PowerShell."
+    throw "This must run as Administrator - it registers Windows services. The installer does this for you; if you are running it by hand, use an elevated PowerShell."
 }
 
 $pgRoot  = Join-Path $InstallDir 'pgsql'
@@ -42,10 +42,10 @@ function Write-Step($text) {
 }
 Add-Content $setupLog ("`n=== Database setup started {0:yyyy-MM-dd HH:mm:ss} ===" -f (Get-Date))
 
-# ── Pick a port that is actually free ───────────────────────────────────────
+# -- Pick a port that is actually free ---------------------------------------
 # A fixed port is a trap. On a machine running Docker Desktop, 5433 is already
 # forwarded by wslrelay, and initdb would succeed while the service could never
-# bind — leaving an install that reports success and a branch that never starts.
+# bind - leaving an install that reports success and a branch that never starts.
 # An existing install keeps whatever port it already uses, or its connection string
 # would stop matching the running database.
 $existingPortFile = Join-Path $InstallDir 'db.port'
@@ -63,13 +63,13 @@ if (Test-Path $existingPortFile) {
     if ($candidate -ge ($DbPort + 40)) { throw "Could not find a free port near $DbPort for the database." }
 
     if ($candidate -ne $DbPort) {
-        Write-Step "Port $DbPort is already in use on this PC — using $candidate instead."
+        Write-Step "Port $DbPort is already in use on this PC - using $candidate instead."
     }
     $DbPort = $candidate
     Set-Content $existingPortFile $DbPort -NoNewline
 }
 
-# ── 1. Password ─────────────────────────────────────────────────────────────
+# -- 1. Password -------------------------------------------------------------
 # Generated per machine and never shipped in the installer. A password baked into a
 # build would be identical at all four branches and public the moment one person
 # opened the file.
@@ -85,17 +85,17 @@ if (Test-Path $secretFile) {
     $dbPassword = [Convert]::ToBase64String($bytes) -replace '[^A-Za-z0-9]', ''
     Set-Content $secretFile $dbPassword -NoNewline
 
-    # Readable only by SYSTEM and Administrators — the app runs as a service, and no
+    # Readable only by SYSTEM and Administrators - the app runs as a service, and no
     # customer-facing account has any reason to see this.
     icacls $secretFile /inheritance:r /grant:r "SYSTEM:(R)" "Administrators:(R)" | Out-Null
     Write-Step 'Generated a database password for this machine.'
 }
 
-# ── 2. Initialise the data directory ────────────────────────────────────────
+# -- 2. Initialise the data directory ----------------------------------------
 if (Test-Path (Join-Path $dataDir 'PG_VERSION')) {
-    Write-Step 'Database already initialised — leaving existing data alone.'
+    Write-Step 'Database already initialised - leaving existing data alone.'
 } else {
-    Write-Step 'Initialising the database…'
+    Write-Step 'Initialising the database...'
     New-Item -ItemType Directory -Force $dataDir | Out-Null
 
     $pwFile = Join-Path $env:TEMP 'ae_pw.txt'
@@ -112,24 +112,24 @@ if (Test-Path (Join-Path $dataDir 'PG_VERSION')) {
     }
 }
 
-# ── 3. Local only ───────────────────────────────────────────────────────────
+# -- 3. Local only -----------------------------------------------------------
 # The API is the only thing that should ever talk to this database, and it runs on
 # this same machine. Leaving the port open to the LAN would expose every branch's
-# takings to anything on the café network.
+# takings to anything on the cafe network.
 $conf = Join-Path $dataDir 'postgresql.conf'
 $confText = Get-Content $conf -Raw
 $confText = $confText -replace "(?m)^#?listen_addresses\s*=.*", "listen_addresses = 'localhost'"
 $confText = $confText -replace "(?m)^#?port\s*=.*", "port = $DbPort"
 Set-Content $conf $confText -NoNewline
 
-# ── 4. Windows service ──────────────────────────────────────────────────────
+# -- 4. Windows service ------------------------------------------------------
 # So the shop is ready when the PC boots, rather than when somebody remembers to
 # start something.
 $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($existing) {
     Write-Step 'Database service already registered.'
 } else {
-    Write-Step 'Registering the database as a Windows service…'
+    Write-Step 'Registering the database as a Windows service...'
     & "$pgBin\pg_ctl.exe" register -N $ServiceName -D $dataDir -o "-p $DbPort" -S auto | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Could not register the database service (exit $LASTEXITCODE)" }
 }
@@ -137,7 +137,7 @@ if ($existing) {
 # Recover by itself after a power cut instead of waiting for someone to notice.
 sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/10000/restart/30000 | Out-Null
 
-Write-Step 'Starting the database…'
+Write-Step 'Starting the database...'
 Start-Service $ServiceName
 $deadline = (Get-Date).AddSeconds(60)
 do {
@@ -148,15 +148,15 @@ do {
 
 if (-not $ready) { throw "The database did not come up within 60 seconds. See $logFile" }
 
-# ── 5. Create the database ──────────────────────────────────────────────────
+# -- 5. Create the database --------------------------------------------------
 $env:PGPASSWORD = $dbPassword
 $exists = & "$pgBin\psql.exe" -h localhost -p $DbPort -U $DbUser -d postgres -tAc `
     "SELECT 1 FROM pg_database WHERE datname='$DbName'"
 
 if ($exists -eq '1') {
-    Write-Step "Database '$DbName' already exists — keeping it."
+    Write-Step "Database '$DbName' already exists - keeping it."
 } else {
-    Write-Step "Creating database '$DbName'…"
+    Write-Step "Creating database '$DbName'..."
     & "$pgBin\createdb.exe" -h localhost -p $DbPort -U $DbUser $DbName
     if ($LASTEXITCODE -ne 0) { throw "Could not create the database (exit $LASTEXITCODE)" }
 }
@@ -167,7 +167,7 @@ if ($exists -eq '1') {
     'CREATE EXTENSION IF NOT EXISTS "uuid-ossp";'
 $env:PGPASSWORD = ''
 
-# ── 6. Write the API's configuration ────────────────────────────────────────
+# -- 6. Write the API's configuration ----------------------------------------
 # Written here rather than shipped, because it carries secrets generated on this machine.
 $apiSettings = Join-Path $InstallDir 'api\appsettings.Production.json'
 New-Item -ItemType Directory -Force (Split-Path $apiSettings) | Out-Null
