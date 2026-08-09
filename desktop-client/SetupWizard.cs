@@ -1,4 +1,4 @@
-namespace AppleEsports.Desktop;
+﻿namespace AppleEsports.Desktop;
 
 /// <summary>
 /// What staff see the first time Apple Esports runs on a new machine.
@@ -87,7 +87,15 @@ public sealed class SetupWizard : Form
         y += 38;
 
         // ── 1. Server ──
-        y = AddStep("1.  Where is the server?", y);
+        // Which server this is depends on what kind of PC this is, and the two are not the
+        // same question. The counter PC runs the branch itself; a gaming PC is a screen onto
+        // the counter PC across the shop LAN. Neither one talks to Head Office to do its
+        // work - that is the branch's background sync, and the shop trades without it.
+        var isCounterPc = !_config.Role.Equals("user", StringComparison.OrdinalIgnoreCase);
+
+        y = AddStep(isCounterPc
+            ? "1.  This PC runs the branch"
+            : "1.  Which PC at this branch is the counter?", y);
 
         _serverBox.Location = new Point(Pad, y);
         _serverBox.Size = new Size(width - 110, 30);
@@ -95,18 +103,25 @@ public sealed class SetupWizard : Form
         _serverBox.ForeColor = Foreground;
         _serverBox.FlatStyle = FlatStyle.Flat;
         _serverBox.Font = new Font("Segoe UI", 10F);
-        // Editable, not a fixed list: the owner's own server will eventually be an address
-        // nobody has typed here before.
-        //
-        // Only real Head Office addresses are offered. "localhost" was in this list and it
-        // does not belong — it is this machine, not a server. A branch that picked it would
-        // appear to set up correctly and then quietly never sync anything to Head Office,
-        // which is the worst kind of wrong: invisible until the figures do not add up.
+        // Editable, not a fixed list: a counter PC's address on the shop network is
+        // different at every branch and nobody has typed it here before.
         _serverBox.DropDownStyle = ComboBoxStyle.DropDown;
-        _serverBox.Items.Add("http://140.245.195.222:8081");
-        _serverBox.Text = string.IsNullOrWhiteSpace(_config.ServerUrl)
-            ? "http://140.245.195.222:8081"
-            : _config.ServerUrl;
+
+        if (isCounterPc)
+        {
+            // The branch database and API are installed on this machine, so the answer is
+            // already known and there is nothing to ask. An earlier build offered only a
+            // public server address here, which is what made every click travel to the
+            // cloud and the shop stop working the moment the internet did.
+            _serverBox.Items.Add(AppConfig.LocalBranchUrl);
+            _serverBox.Text = string.IsNullOrWhiteSpace(_config.ServerUrl) ? AppConfig.LocalBranchUrl : _config.ServerUrl;
+        }
+        else
+        {
+            // A gaming PC has no database of its own. It needs the counter PC's address on
+            // the shop network - not localhost, and not Head Office.
+            _serverBox.Text = PointsAtThisMachine(_config.ServerUrl) ? "" : _config.ServerUrl;
+        }
         _serverBox.TextChanged += (_, _) =>
         {
             // Any edit invalidates a previous successful test, so the tick cannot linger
@@ -225,15 +240,26 @@ public sealed class SetupWizard : Form
             _serverConfirmed = reachable;
             if (reachable) _serverBox.Text = url;
 
-            // Reachable is not the same as correct. A local address answers perfectly well
-            // and is exactly what someone testing on their own machine wants — but on a
-            // branch PC it means the shop is talking to itself and Head Office will never
-            // hear from it. Allowed, but never silently.
-            if (reachable && PointsAtThisMachine(url))
+            // Whether a local address is right depends entirely on which kind of PC this is,
+            // so the same answer is confirmed on one and refused on the other.
+            if (PointsAtThisMachine(url))
             {
-                _serverStatus.ForeColor = Accent;
-                _serverStatus.Text = "Connected — but this is this PC, not Head Office. Fine for testing; wrong for a branch.";
-                return true;
+                if (_config.Role.Equals("user", StringComparison.OrdinalIgnoreCase))
+                {
+                    // A gaming PC pointed at itself has no database behind it. It would set
+                    // up cleanly and then fail the first time anyone seated a customer.
+                    _serverConfirmed = false;
+                    _serverStatus.ForeColor = Accent;
+                    _serverStatus.Text = "That is this PC. Enter the counter PC's address on the shop network.";
+                    return false;
+                }
+
+                if (reachable)
+                {
+                    _serverStatus.ForeColor = Good;
+                    _serverStatus.Text = "Connected. The branch runs on this PC, so the shop works with no internet.";
+                    return true;
+                }
             }
 
             _serverStatus.ForeColor = reachable ? Good : Accent;

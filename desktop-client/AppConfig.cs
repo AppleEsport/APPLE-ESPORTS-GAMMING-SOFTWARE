@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace AppleEsports.Desktop;
@@ -15,8 +15,24 @@ namespace AppleEsports.Desktop;
 /// </summary>
 public sealed class AppConfig
 {
-    /// <summary>Head Office / branch server the client talks to.</summary>
-    public string ServerUrl { get; set; } = "http://140.245.195.222:8081";
+    /// <summary>
+    /// The branch API on this machine. Must match the port setup-api.ps1 binds the service
+    /// to; they are the two ends of the same wire.
+    /// </summary>
+    public const string LocalBranchUrl = "http://localhost:5016";
+
+    /// <summary>
+    /// The server this client talks to for everything it does — sessions, billing, members.
+    ///
+    /// This is the BRANCH, never Head Office. On the counter PC that is this machine; on a
+    /// gaming PC it is the counter PC across the shop LAN. Head Office is reached only by
+    /// the branch's own background sync, so the shop keeps trading with the internet down.
+    ///
+    /// Defaulting this to a public server address was the bug behind "it stops working when
+    /// I turn the internet off": every click travelled to the cloud and back, so the shop
+    /// depended on the internet for work happening entirely inside one building.
+    /// </summary>
+    public string ServerUrl { get; set; } = LocalBranchUrl;
 
     /// <summary>
     /// Credentials for the nginx Basic Auth gate in front of the dashboard.
@@ -97,7 +113,55 @@ public sealed class AppConfig
         var config = new AppConfig();
         Merge(config, DeploymentConfigPath);
         Merge(config, UserConfigPath);
+        MigrateToLocalBranch(config);
         return config;
+    }
+
+    /// <summary>
+    /// True when the branch API is installed alongside this client — which is only the case
+    /// on the counter PC, because that is the only machine the installer puts it on.
+    /// </summary>
+    private static bool BranchApiInstalledHere() =>
+        File.Exists(Path.Combine(ExeDirectory, "api", "AppleEsportsErp.Api.exe"));
+
+    private static bool IsLocalAddress(string url)
+    {
+        try
+        {
+            var host = new Uri(new AppConfig { ServerUrl = url }.NormalisedUrl()).Host;
+            return host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+                || host.Equals("127.0.0.1", StringComparison.Ordinal)
+                || host.Equals("::1", StringComparison.Ordinal)
+                || host.Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Repoints a counter PC at its own branch API.
+    ///
+    /// Settings written before the branch ran locally name a public server, so every click
+    /// travelled to the cloud and the shop stopped working the moment the internet did. That
+    /// file lives in the user profile and survives an upgrade untouched, so correcting the
+    /// default alone would never have reached a machine that had already been set up.
+    /// </summary>
+    private static void MigrateToLocalBranch(AppConfig config)
+    {
+        if (!BranchApiInstalledHere()) return;      // a gaming PC keeps its counter's address
+        if (IsLocalAddress(config.ServerUrl)) return;
+
+        config.ServerUrl = LocalBranchUrl;
+
+        // These belong to the reverse proxy in front of the cloud dashboard. The branch API
+        // is not behind one, and leaving credentials in a file on a shop PC serves nothing.
+        config.GateUsername = "";
+        config.GatePassword = "";
+
+        try { config.Save(); }
+        catch { /* running from a read-only location must not stop the app starting */ }
     }
 
     private static void Merge(AppConfig target, string path)
@@ -136,7 +200,7 @@ public sealed class AppConfig
     public string NormalisedUrl()
     {
         var url = (ServerUrl ?? "").Trim();
-        if (url.Length == 0) return "http://140.245.195.222:8081";
+        if (url.Length == 0) return LocalBranchUrl;
         if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
             !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
         {

@@ -31,7 +31,11 @@ public sealed class MainForm : Form
     {
         _config = config;
 
-        Text = "Apple Esports ERP";
+        // Says where this window is pointed from the moment it opens. Previously this was
+        // only filled in once a page finished loading, so a PC that could not reach its
+        // branch — exactly when someone needs to know what it is trying to talk to — showed
+        // a bare title and gave them nothing to go on.
+        Text = $"Apple Esports ERP  —  {HostLabel()}";
         BackColor = Backdrop;
         MinimumSize = new Size(1024, 640);
         StartPosition = FormStartPosition.CenterScreen;
@@ -322,16 +326,47 @@ public sealed class MainForm : Form
         }
     }
 
+    /// <summary>
+    /// What the title bar says about where this window is pointed.
+    ///
+    /// Deliberately says whether the branch is being run locally rather than just printing
+    /// an address: a bare public IP in the title was what made it look — correctly, at the
+    /// time — as though the shop were being run out of the cloud.
+    /// </summary>
     private string HostLabel()
     {
         try
         {
-            return new Uri(_config.NormalisedUrl()).Authority;
+            var uri = new Uri(_config.NormalisedUrl());
+            var host = uri.Host;
+
+            if (host is "localhost" or "127.0.0.1" or "::1")
+                return "This PC";
+
+            return IsShopNetwork(host)
+                ? $"Counter PC · {uri.Authority}"
+                : $"Head Office · {uri.Authority}";
         }
         catch
         {
             return _config.ServerUrl;
         }
+    }
+
+    /// <summary>
+    /// True for the private address ranges a shop LAN uses. Anything else is out on the
+    /// internet, which for day-to-day work means something is misconfigured.
+    /// </summary>
+    private static bool IsShopNetwork(string host)
+    {
+        if (!System.Net.IPAddress.TryParse(host, out var ip)) return false;
+
+        var b = ip.GetAddressBytes();
+        if (b.Length != 4) return false;
+
+        return b[0] == 10
+            || (b[0] == 192 && b[1] == 168)
+            || (b[0] == 172 && b[1] >= 16 && b[1] <= 31);
     }
 
     private string DescribeError(CoreWebView2WebErrorStatus status) => status switch

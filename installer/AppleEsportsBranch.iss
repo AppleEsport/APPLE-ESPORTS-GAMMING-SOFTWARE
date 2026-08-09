@@ -63,7 +63,10 @@ Name: "agent";  Description: "Gaming PC screen lock";        Types: gaming
 ; -- Always --
 Source: "..\desktop-client\publish\AppleEsports.exe"; DestDir: "{app}"; Components: core; Flags: ignoreversion
 Source: "..\SHORTCUT_KEYS.md";                        DestDir: "{app}"; Components: core; Flags: ignoreversion
-Source: "..\desktop-client\AppleEsports.config.json"; DestDir: "{app}"; Components: core; Flags: onlyifdoesntexist
+; NOTE: AppleEsports.config.json is deliberately NOT shipped. It is written by
+; WriteClientConfig below, per machine, because what belongs in it depends on which kind
+; of PC this is. The version in the repo is a developer's, pointed at a public server and
+; carrying the dashboard gate password in plain text - it must never reach a branch.
 
 ; -- Operator counter PC: the whole branch --
 Source: "{#Staging}\api\*";   DestDir: "{app}\api";   Components: server; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -155,9 +158,58 @@ begin
     Result := False;
 end;
 
+{ Writes the client's settings so the app knows, before anyone opens it, what kind of PC
+  this is and where its branch server is.
+
+  This is what makes the shop work with the internet off. The address below is the BRANCH -
+  this machine on the counter PC, the counter PC on a gaming PC - never Head Office. Head
+  Office is reached only by the branch's own background sync. }
+procedure WriteClientConfig();
+var
+  Path, Server, Role: String;
+  Lines: TArrayOfString;
+begin
+  Path := ExpandConstant('{app}\AppleEsports.config.json');
+
+  { Never overwritten on an upgrade or repair: it carries the admin PIN and the seat this
+    machine was claimed as, and losing those would un-configure a working PC. }
+  if FileExists(Path) then
+    Exit;
+
+  if IsComponentSelected('server') then
+  begin
+    { The branch database and API are installed on this machine, so there is nothing to
+      ask - the answer cannot be anything else. }
+    Server := 'http://localhost:5016';
+    Role := 'operator';
+  end
+  else
+  begin
+    { Only someone standing in the shop knows the counter PC's address, so it is left empty
+      and the first-run wizard asks. A guess here would be wrong at three branches in four. }
+    Server := '';
+    Role := 'user';
+  end;
+
+  SetArrayLength(Lines, 5);
+  Lines[0] := '{';
+  Lines[1] := '  "ServerUrl": "' + Server + '",';
+  Lines[2] := '  "Role": "' + Role + '",';
+  Lines[3] := '  "StartMaximized": true';
+  Lines[4] := '}';
+
+  SaveStringsToFile(Path, Lines, False);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
-  if (CurStep <> ssPostInstall) or (not IsComponentSelected('server')) then
+  if CurStep <> ssPostInstall then
+    Exit;
+
+  { Both kinds of PC need this, so it runs before the operator-only work below. }
+  WriteClientConfig();
+
+  if not IsComponentSelected('server') then
     Exit;
 
   if not RunSetupScript('setup-database.ps1', 'Setting up the branch database (this takes a minute)...') then

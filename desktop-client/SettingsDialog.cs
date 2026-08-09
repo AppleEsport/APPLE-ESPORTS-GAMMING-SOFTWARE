@@ -42,7 +42,11 @@ public sealed class SettingsDialog : Form
         var y = 24;
 
         AddLabel("Server address", ref y);
-        AddHint("The Apple Esports server this PC connects to, for example  140.245.195.222:8081", ref y);
+        // The branch, not Head Office. On the counter PC that is this machine; on a gaming
+        // PC it is the counter PC across the shop network. An example public address here
+        // invited people to point branch PCs at the cloud, which is what stopped the shop
+        // working whenever the internet did.
+        AddHint("The branch server this PC uses:  localhost:5016 on the counter PC, or the counter PC's address", ref y);
         StyleField(_serverBox, y);
         _serverBox.Text = config.ServerUrl;
         Controls.Add(_serverBox);

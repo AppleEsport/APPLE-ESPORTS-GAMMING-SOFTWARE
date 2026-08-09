@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Shield, User, MapPin, Loader2, KeyRound, WifiOff, Eye, EyeOff, ChevronDown } from 'lucide-react';
@@ -16,10 +16,11 @@ export default function LoginPage() {
   const [branches, setBranches] = useState([]);
   const [loadingBranches, setLoadingBranches] = useState(true);
   
-  // Offline State
-  const [isOffline, setIsOffline] = useState(false);
-  const [offlinePin, setOfflinePin] = useState('');
-  
+  // Set when the branch system itself cannot be reached. This is a fault to report, not a
+  // mode to log in through: the dashboard is served BY the branch server, so if it is
+  // unreachable there is nothing behind this screen to let anyone into.
+  const [branchUnreachable, setBranchUnreachable] = useState(false);
+
   // Form State
   const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
@@ -34,7 +35,7 @@ export default function LoginPage() {
   // inheriting whoever used this PC last — which on a shared counter machine could hand a
   // customer a Super Admin dashboard without them typing a password.
   useEffect(() => {
-    if (!isAuthenticated || isOffline) return;
+    if (!isAuthenticated) return;
 
     if (sessionBelongsOnPortal(user, 'operator')) {
       navigate('/app/sessions', { replace: true });
@@ -42,31 +43,31 @@ export default function LoginPage() {
       clearSession();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAuthenticated, isOffline, user]);
+  }, [isAuthenticated, user]);
 
   // Fetch active branches for Operator dropdown
-  useEffect(() => {
-    const fetchBranches = async () => {
-      try {
-        setLoadingBranches(true);
-        setIsOffline(false);
-        setSelectedBranch(''); // Reset branch selection on mount
-        setUsername(''); // Reset username
-        setPassword(''); // Reset password
-        const res = await api.get('/auth/branches');
-        setBranches(res.data?.data || []);
-      } catch (err) {
-        console.warn('Could not fetch branches, falling back to manual or retry logic.');
-        // Detect offline mode if network error
-        if (err.message === 'Network Error' || !err.response) {
-          setIsOffline(true);
-        }
-      } finally {
-        setLoadingBranches(false);
+  const fetchBranches = useCallback(async () => {
+    try {
+      setLoadingBranches(true);
+      setBranchUnreachable(false);
+      setSelectedBranch(''); // Reset branch selection on mount
+      setUsername(''); // Reset username
+      setPassword(''); // Reset password
+      const res = await api.get('/auth/branches');
+      setBranches(res.data?.data || []);
+    } catch (err) {
+      // No response at all means the branch server is not answering - it is stopped, or
+      // this PC cannot reach it over the shop's network. Either way it is the same fault,
+      // and the operator needs to be told which, not shown a way around it.
+      if (err.message === 'Network Error' || !err.response) {
+        setBranchUnreachable(true);
       }
-    };
-    fetchBranches();
+    } finally {
+      setLoadingBranches(false);
+    }
   }, []);
+
+  useEffect(() => { fetchBranches(); }, [fetchBranches]);
 
   const handleAdminSubmit = async (e) => {
     e.preventDefault();
@@ -97,22 +98,6 @@ export default function LoginPage() {
   const handleOperatorSubmit = async (e) => {
     e.preventDefault();
     
-    // OFFLINE LOGIN
-    if (isOffline) {
-      if (!offlinePin || offlinePin.length !== 4) {
-        setError('Please enter your 4-digit Emergency PIN.');
-        return;
-      }
-      setIsLoading(true);
-      setTimeout(() => {
-        setIsLoading(false);
-        // Simulate Offline Auth Success
-        navigate('/app/sessions', { replace: true });
-      }, 1000);
-      return;
-    }
-
-    // NORMAL LOGIN
     if (!username || !password || !selectedBranch) {
       setError('Please select a branch and enter credentials.');
       return;
@@ -131,78 +116,78 @@ export default function LoginPage() {
   };
 
   return (
-    <div className={`min-h-screen flex items-center justify-center p-4 overflow-hidden relative ${isOffline ? 'bg-black' : 'bg-bg'}`}>
+    <div className="min-h-screen flex items-center justify-center p-4 overflow-hidden relative bg-bg">
       {/* Background glow effects */}
-      <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] rounded-full blur-[120px] pointer-events-none ${isOffline ? 'bg-red-600/20' : 'bg-accent/20'}`} />
-      
-      <motion.div 
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] rounded-full blur-[120px] pointer-events-none bg-accent/20" />
+
+      <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5, ease: "easeOut" }}
-        className={`card w-full max-w-md relative z-10 shadow-2xl shadow-black/50 border-border/60 backdrop-blur-xl p-8 ${isOffline ? 'bg-red-950/40 border-red-500/30' : 'bg-bg-2/80'}`}
+        className="card w-full max-w-md relative z-10 shadow-2xl shadow-black/50 border-border/60 backdrop-blur-xl p-8 bg-bg-2/80"
       >
         <div className="text-center mb-8">
-          <motion.img 
+          <motion.img
             initial={{ scale: 0.9 }}
             animate={{ scale: 1 }}
             transition={{ duration: 0.5 }}
-            src="/logo.png" 
-            alt="Apple Esports" 
-            className={`h-20 w-auto mx-auto mb-4 ${isOffline ? 'drop-shadow-[0_0_15px_rgba(255,0,0,0.8)] filter grayscale sepia hue-rotate-[-50deg] saturate-200' : 'drop-shadow-[0_0_15px_rgba(220,38,38,0.5)]'}`}
+            src="/logo.png"
+            alt="Apple Esports"
+            className="h-20 w-auto mx-auto mb-4 drop-shadow-[0_0_15px_rgba(220,38,38,0.5)]"
           />
-          <h1 className={`font-heading text-3xl font-bold mb-1 tracking-wide ${isOffline ? 'text-red-500' : 'text-text'}`}>APPLE ESPORTS</h1>
-          <p className={`${isOffline ? 'text-red-400' : 'text-accent'} text-[11px] font-mono tracking-[0.2em] uppercase`}>
-            {isOffline ? 'Emergency Offline Mode' : 'Enterprise ERP System'}
+          <h1 className="font-heading text-3xl font-bold mb-1 tracking-wide text-text">APPLE ESPORTS</h1>
+          <p className="text-accent text-[11px] font-mono tracking-[0.2em] uppercase">
+            Enterprise ERP System
           </p>
         </div>
 
-        {reason === 'forced_logout' && !isOffline && (
+        {reason === 'forced_logout' && (
           <div className="mb-6 p-3 bg-neon-red/10 border border-neon-red/30 rounded text-neon-red text-xs text-center">
             Your session was terminated by an administrator.
           </div>
         )}
 
         <AnimatePresence mode="wait">
-          {isOffline ? (
+          {branchUnreachable ? (
             <motion.div
-              key="offline"
+              key="unreachable"
               initial={{ opacity: 0, x: -20 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 20 }}
               className="space-y-6"
             >
-              <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg flex items-start gap-3">
-                <WifiOff className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
-                <div className="text-xs text-red-200/80 leading-relaxed">
-                  AWS connection lost. The system has automatically fallen back to the local Tri-State Network Engine. Enter your 4-digit Emergency PIN to manage the LAN.
+              {/* No login is offered here on purpose. The dashboard is served by the branch
+                  server, so if it cannot be reached there is nothing to log in to - and a
+                  PIN box that let someone "in" anyway would be telling the operator the
+                  shop is working when it is not. */}
+              <div className="p-4 bg-neon-red/10 border border-neon-red/30 rounded-lg flex items-start gap-3">
+                <WifiOff className="w-5 h-5 text-neon-red flex-shrink-0 mt-0.5" />
+                <div className="text-xs text-text-2 leading-relaxed">
+                  <p className="text-neon-red font-semibold mb-1">Cannot reach the branch system</p>
+                  <p>
+                    This is the counter PC in your shop, not the internet - losing internet
+                    does not cause this, and the shop can trade without it.
+                  </p>
                 </div>
               </div>
 
-              <form onSubmit={handleOperatorSubmit} className="space-y-4">
-                <div>
-                  <label className="block text-xs text-red-400/80 mb-1.5 ml-1 text-center">EMERGENCY OFFLINE PIN</label>
-                  <div className="relative">
-                    <input 
-                      type="password" 
-                      maxLength="4"
-                      value={offlinePin}
-                      onChange={(e) => setOfflinePin(e.target.value.replace(/\D/g, ''))}
-                      className="w-full bg-black/50 border-2 border-red-500/30 rounded-lg py-4 text-center text-3xl font-mono text-red-500 tracking-[1em] focus:border-red-500 focus:outline-none transition-colors"
-                      placeholder="••••"
-                    />
-                  </div>
-                </div>
+              <div className="text-xs text-text-2 leading-relaxed space-y-2">
+                <p className="text-text font-semibold">What to check</p>
+                <ul className="list-disc list-inside space-y-1 text-text-3">
+                  <li>On the counter PC: is <span className="font-mono text-text-2">Apple Esports</span> running?</li>
+                  <li>On a gaming PC: is it still connected to the shop network?</li>
+                  <li>If the counter PC was just switched on, give it a minute to start.</li>
+                </ul>
+              </div>
 
-                {error && <p className="text-red-500 text-xs mt-2 text-center">{error}</p>}
-
-                <button 
-                  type="submit" 
-                  disabled={isLoading}
-                  className="w-full mt-6 relative overflow-hidden group flex items-center justify-center gap-2 bg-red-600 hover:bg-red-500 text-white py-3 rounded-lg font-bold tracking-widest text-sm transition-all shadow-[0_0_20px_rgba(220,38,38,0.3)] hover:shadow-[0_0_30px_rgba(220,38,38,0.5)] disabled:opacity-50"
-                >
-                  {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'DECRYPT LAN TOKEN'}
-                </button>
-              </form>
+              <button
+                type="button"
+                onClick={fetchBranches}
+                disabled={loadingBranches}
+                className="btn-primary w-full flex items-center justify-center gap-2"
+              >
+                {loadingBranches ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Try again'}
+              </button>
             </motion.div>
           ) : (
             <motion.div
@@ -298,28 +283,16 @@ export default function LoginPage() {
         </AnimatePresence>
 
         <div className="mt-8 text-center text-[10px] text-text-3 font-mono">
-          <p>{isOffline ? 'LAN God-Mode Active' : 'Branch-specific Access Only'}</p>
+          <p>Branch-specific Access Only</p>
           <p className="mt-1">Activity is monitored per SOP guidelines</p>
-          {!isOffline && (
-            <div className="mt-4 pt-4 border-t border-border/30">
-              <button 
-                onClick={() => navigate('/')} 
-                className="text-accent hover:text-white transition-colors uppercase tracking-widest text-[10px]"
-              >
-                ← Change Role
-              </button>
-            </div>
-          )}
-          {isOffline && (
-            <div className="mt-4 pt-4 border-t border-red-500/30">
-              <button 
-                onClick={() => setIsOffline(false)} 
-                className="text-red-500 hover:text-red-400 transition-colors uppercase tracking-widest text-[10px]"
-              >
-                RETRY AWS CONNECTION
-              </button>
-            </div>
-          )}
+          <div className="mt-4 pt-4 border-t border-border/30">
+            <button
+              onClick={() => navigate('/')}
+              className="text-accent hover:text-white transition-colors uppercase tracking-widest text-[10px]"
+            >
+              ← Change Role
+            </button>
+          </div>
         </div>
       </motion.div>
     </div>
