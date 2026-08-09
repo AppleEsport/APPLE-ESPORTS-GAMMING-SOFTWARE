@@ -107,7 +107,7 @@ try {
 
         # Readable only by SYSTEM and Administrators - the app runs as a service, and no
         # customer-facing account has any reason to see this.
-        icacls $secretFile /inheritance:r /grant:r "SYSTEM:(R)" "Administrators:(R)" | Out-Null
+        icacls $secretFile /inheritance:r /grant:r "SYSTEM:(R)" "Administrators:(F)" | Out-Null
         Write-Step 'Generated a database password for this machine.'
     }
 
@@ -227,7 +227,7 @@ try {
 
     # Per machine, never shipped. A key baked into the installer would be identical at all
     # four branches, so a token minted at one would be accepted by the others.
-    @{
+    $apiConfigJson = @{
         ConnectionStrings = @{
             DefaultConnection = "Host=localhost;Port=$DbPort;Database=$DbName;Username=$DbUser;Password=$dbPassword"
         }
@@ -239,9 +239,17 @@ try {
             AccessExpiry  = '24h'
             RefreshExpiry = '7d'
         }
-    } | ConvertTo-Json -Depth 5 | Set-Content $apiSettings -NoNewline
+    } | ConvertTo-Json -Depth 5 | Out-String
 
-    icacls $apiSettings /inheritance:r /grant:r "SYSTEM:(R)" "Administrators:(R)" | Out-Null
+    # An install from an older build left this file readable-only, even to
+    # Administrators. Take ownership back before writing rather than failing.
+    if (Test-Path $apiSettings) {
+        icacls $apiSettings /grant "Administrators:(F)" 2>&1 | Out-Null
+        Remove-Item $apiSettings -Force -ErrorAction SilentlyContinue
+    }
+    Set-Content $apiSettings $apiConfigJson -NoNewline
+
+    icacls $apiSettings /inheritance:r /grant:r "SYSTEM:(R)" "Administrators:(F)" | Out-Null
 
     Write-Host ""
     Write-Host "  Database ready on localhost:$DbPort" -ForegroundColor Green
