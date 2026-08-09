@@ -27,15 +27,32 @@ if (-not $isAdmin) {
 
 $pgRoot  = Join-Path $InstallDir 'pgsql'
 $pgBin   = Join-Path $pgRoot 'bin'
-$dataDir = Join-Path $InstallDir 'data'
-$logFile = Join-Path $InstallDir 'logs\postgres.log'
 
-New-Item -ItemType Directory -Force (Split-Path $logFile) | Out-Null
+# The database lives in ProgramData, not in Program Files.
+#
+# Not a preference - PostgreSQL will not run under an administrator account, so initdb
+# de-elevates itself by re-executing with a restricted token. That token has the
+# Administrators group stripped, and a folder under Program Files is writable only by
+# Administrators. initdb therefore dropped its own privileges and could no longer write
+# to the directory it had just been told to use, and died there.
+#
+# ProgramData is also simply where this belongs: Program Files holds binaries and is
+# meant to be read-only once installed, while the branch's takings are living data.
+$dataRoot = Join-Path $env:ProgramData 'Apple Esports'
+$dataDir  = Join-Path $dataRoot 'data'
+$logFile  = Join-Path $dataRoot 'logs\postgres.log'
+
+New-Item -ItemType Directory -Force $dataRoot, (Join-Path $dataRoot 'logs'), (Join-Path $dataRoot 'backups') | Out-Null
+
+# The database service and the restricted initdb process both need to write here.
+# Users is deliberately included: the restricted token keeps that membership when it
+# strips Administrators, and it is what makes initdb able to work at all.
+icacls $dataRoot /grant "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" "Users:(OI)(CI)M" /T /Q 2>&1 | Out-Null
 
 # Everything this script prints is also written to a file. When a branch install goes
 # wrong the installer window has already closed, and "it didn't work" with nothing to
 # read is the worst place to be standing.
-$setupLog = Join-Path $InstallDir 'logs\setup-database.log'
+$setupLog = Join-Path $dataRoot 'logs\setup-database.log'
 function Write-Step($text) {
     Write-Host "  $text"
     Add-Content $setupLog ("[{0:yyyy-MM-dd HH:mm:ss}] {1}" -f (Get-Date), $text)
@@ -48,7 +65,7 @@ Add-Content $setupLog ("`n=== Database setup started {0:yyyy-MM-dd HH:mm:ss} ===
 # bind - leaving an install that reports success and a branch that never starts.
 # An existing install keeps whatever port it already uses, or its connection string
 # would stop matching the running database.
-$existingPortFile = Join-Path $InstallDir 'db.port'
+$existingPortFile = Join-Path $dataRoot 'db.port'
 
 if (Test-Path $existingPortFile) {
     $DbPort = [int](Get-Content $existingPortFile -Raw).Trim()
@@ -73,7 +90,7 @@ if (Test-Path $existingPortFile) {
 # Generated per machine and never shipped in the installer. A password baked into a
 # build would be identical at all four branches and public the moment one person
 # opened the file.
-$secretFile = Join-Path $InstallDir 'db.secret'
+$secretFile = Join-Path $dataRoot 'db.secret'
 
 if (Test-Path $secretFile) {
     $dbPassword = (Get-Content $secretFile -Raw).Trim()
@@ -96,16 +113,34 @@ if (Test-Path (Join-Path $dataDir 'PG_VERSION')) {
     Write-Step 'Database already initialised - leaving existing data alone.'
 } else {
     Write-Step 'Initialising the database...'
-    New-Item -ItemType Directory -Force $dataDir | Out-Null
 
-    $pwFile = Join-Path $env:TEMP 'ae_pw.txt'
-    Set-Content $pwFile $dbPassword -NoNewline
+    # initdb wants to create this itself. An empty folder pre-made by the installer under
+    # Program Files inherits ACLs that PostgreSQL refuses to accept for a data directory.
+    if (Test-Path $dataDir) { Remove-Item $dataDir -Recurse -Force -ErrorAction SilentlyContinue }
+
+    # Somewhere without spaces or Program Files permissions. The password file is read by
+    # initdb and deleted immediately afterwards.
+    $pwFile = Join-Path $env:SystemDrive 'ae_pw_tmp.txt'
+    Set-Content $pwFile $dbPassword -NoNewline -Encoding ASCII
+
     try {
         # scram-sha-256 rather than trust: the branch PC sits on the same network as
         # every gaming machine, and "no password needed" would apply to all of them.
-        & "$pgBin\initdb.exe" -D $dataDir -U $DbUser --auth=scram-sha-256 `
-            --pwfile=$pwFile -E UTF8 --no-locale | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "initdb failed with exit code $LASTEXITCODE" }
+        #
+        # Output is captured, not discarded. It was piped to Out-Null, which threw away
+        # the only explanation of a failure and left "Initialising the database..." as
+        # the last thing anyone could see.
+        $output = & "$pgBin\initdb.exe" -D "$dataDir" -U $DbUser --auth=scram-sha-256 `
+            --pwfile="$pwFile" -E UTF8 --no-locale 2>&1
+        $code = $LASTEXITCODE
+
+        foreach ($line in $output) {
+            Add-Content $setupLog ("    initdb: {0}" -f $line)
+        }
+
+        if ($code -ne 0) {
+            throw "initdb failed (exit $code). Its output is in this log, just above."
+        }
     }
     finally {
         Remove-Item $pwFile -Force -ErrorAction SilentlyContinue

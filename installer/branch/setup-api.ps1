@@ -13,7 +13,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$setupLog = Join-Path $InstallDir 'logs\setup-api.log'
+$dataRoot = Join-Path $env:ProgramData 'Apple Esports'
+$setupLog = Join-Path $dataRoot 'logs\setup-api.log'
 New-Item -ItemType Directory -Force (Split-Path $setupLog) | Out-Null
 Add-Content $setupLog ("`n=== API setup started {0:yyyy-MM-dd HH:mm:ss} ===" -f (Get-Date))
 

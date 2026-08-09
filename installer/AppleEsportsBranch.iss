@@ -1,11 +1,11 @@
 ; ============================================================================
-;  Apple Esports ERP — branch installer
+;  Apple Esports ERP - branch installer
 ;
 ;  One file, two kinds of machine:
 ;
-;    Operator counter PC  — database, API and dashboard, all local. The branch
+;    Operator counter PC  - database, API and dashboard, all local. The branch
 ;                           trades with no internet at all.
-;    Customer gaming PC   — the agent that locks and unlocks the screen.
+;    Customer gaming PC   - the agent that locks and unlocks the screen.
 ;
 ;  Build:  pwsh installer\build-branch-installer.ps1
 ;  (stages everything first, then compiles this)
@@ -51,8 +51,8 @@ ArchitecturesAllowed=x64compatible
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Types]
-Name: "operator"; Description: "Operator counter PC  —  runs the branch (database + dashboard)"
-Name: "gaming";   Description: "Customer gaming PC  —  locked screen only"
+Name: "operator"; Description: "Operator counter PC  -  runs the branch (database + dashboard)"
+Name: "gaming";   Description: "Customer gaming PC  -  locked screen only"
 
 [Components]
 Name: "core";   Description: "Apple Esports dashboard";     Types: operator gaming; Flags: fixed
@@ -60,24 +60,22 @@ Name: "server"; Description: "Branch database and services"; Types: operator
 Name: "agent";  Description: "Gaming PC screen lock";        Types: gaming
 
 [Files]
-; ── Always ──
+; -- Always --
 Source: "..\desktop-client\publish\AppleEsports.exe"; DestDir: "{app}"; Components: core; Flags: ignoreversion
 Source: "..\SHORTCUT_KEYS.md";                        DestDir: "{app}"; Components: core; Flags: ignoreversion
 Source: "..\desktop-client\AppleEsports.config.json"; DestDir: "{app}"; Components: core; Flags: onlyifdoesntexist
 
-; ── Operator counter PC: the whole branch ──
+; -- Operator counter PC: the whole branch --
 Source: "{#Staging}\api\*";   DestDir: "{app}\api";   Components: server; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#Staging}\pgsql\*"; DestDir: "{app}\pgsql"; Components: server; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "branch\setup-database.ps1"; DestDir: "{app}"; Components: server; Flags: ignoreversion
 Source: "branch\setup-api.ps1";      DestDir: "{app}"; Components: server; Flags: ignoreversion
 
-; ── Customer gaming PC ──
+; -- Customer gaming PC --
 Source: "..\AppleEsportsErp\src\AppleEsportsErp.ClientAgent\publish\AppleEsportsAgent.exe"; DestDir: "{app}"; Components: agent; Flags: ignoreversion
 
 [Dirs]
 ; Created up front so the setup scripts are never the first thing to touch them.
-Name: "{app}\data";   Components: server
-Name: "{app}\logs";   Components: server
 Name: "{app}\backups"; Components: server
 
 [Icons]
@@ -88,7 +86,7 @@ Name: "{autodesktop}\{#AppName}";        Filename: "{app}\AppleEsports.exe"
 
 [Run]
 ; The branch setup is NOT run from here. A [Run] step that fails is ignored, and the
-; wizard still reports success — which is exactly how an install ends up looking fine
+; wizard still reports success - which is exactly how an install ends up looking fine
 ; while the branch has no database and can never start. It runs from CurStepChanged
 ; instead, where the exit code can be checked and a failure actually reported.
 Filename: "{app}\AppleEsports.exe"; Description: "Set up this PC now"; Flags: nowait postinstall skipifsilent
@@ -104,9 +102,11 @@ Filename: "sc.exe"; Parameters: "delete AppleEsportsDb";  Flags: runhidden; RunO
 [UninstallDelete]
 Type: filesandordirs; Name: "{localappdata}\AppleEsports"
 Type: filesandordirs; Name: "{userappdata}\AppleEsports"
-; NOTE: {app}\data is deliberately NOT listed. That folder is the branch's takings,
-; sessions and members. Uninstalling the software must never destroy the business
-; records — if the machine is genuinely being retired, someone deletes it knowingly.
+; NOTE: {commonappdata}\Apple Esports is deliberately NOT listed. That folder now holds
+; the branch's database - its takings, sessions and members. Uninstalling the software
+; must never destroy the business records. Retiring a machine for good is a decision
+; someone makes deliberately, not a side effect of clicking Uninstall.
+; UNINSTALL-EVERYTHING.ps1 removes it when a genuinely clean slate is wanted.
 
 [Code]
 function WebView2Installed(): Boolean;
@@ -167,7 +167,7 @@ begin
       'The rest of the software installed, but this PC cannot run the branch until the '
       + 'database is working.' + #13#10#13#10 +
       'What went wrong was written to:' + #13#10 +
-      ExpandConstant('{app}\logs\setup-database.log'),
+      ExpandConstant('{commonappdata}\Apple Esports\logs\setup-database.log'),
       mbCriticalError, MB_OK);
     Exit;
   end;
@@ -177,7 +177,7 @@ begin
     MsgBox(
       'The database is ready, but the branch system did not start.' + #13#10#13#10 +
       'What went wrong was written to:' + #13#10 +
-      ExpandConstant('{app}\logs\setup-api.log'),
+      ExpandConstant('{commonappdata}\Apple Esports\logs\setup-api.log'),
       mbCriticalError, MB_OK);
     Exit;
   end;
