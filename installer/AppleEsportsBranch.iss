@@ -72,6 +72,7 @@ Source: "..\SHORTCUT_KEYS.md";                        DestDir: "{app}"; Componen
 Source: "{#Staging}\api\*";   DestDir: "{app}\api";   Components: server; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#Staging}\pgsql\*"; DestDir: "{app}\pgsql"; Components: server; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "branch\setup-database.ps1"; DestDir: "{app}"; Components: server; Flags: ignoreversion
+Source: "branch\stop-services.ps1"; Flags: dontcopy
 Source: "branch\setup-api.ps1";      DestDir: "{app}"; Components: server; Flags: ignoreversion
 
 ; -- Customer gaming PC --
@@ -119,6 +120,31 @@ begin
   Result :=
     RegQueryStringValue(HKLM, 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', Version) or
     RegQueryStringValue(HKLM, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', Version);
+end;
+
+{ Runs before a single file is copied.
+
+  On an upgrade the API is running as a service with its own DLLs open, so the copy fails
+  with "DeleteFile failed; code 5" partway through and leaves the install half replaced.
+  Stopping first is the difference between an upgrade over a working branch succeeding and
+  needing a full uninstall. setup-api.ps1 starts everything again at the end. }
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+begin
+  Result := '';
+
+  if not IsComponentSelected('server') then
+    Exit;
+
+  ExtractTemporaryFile('stop-services.ps1');
+
+  { Deliberately not treated as fatal. If something cannot be stopped, the copy hits the
+    same lock and Inno offers Retry/Skip/Cancel - a better place to decide than here, with
+    the file that is actually stuck named on screen. }
+  Exec('powershell.exe',
+    '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{tmp}\stop-services.ps1') + '"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
 function InitializeSetup(): Boolean;
