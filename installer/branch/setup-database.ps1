@@ -32,7 +32,42 @@ $logFile = Join-Path $InstallDir 'logs\postgres.log'
 
 New-Item -ItemType Directory -Force (Split-Path $logFile) | Out-Null
 
-function Write-Step($text) { Write-Host "  $text" }
+# Everything this script prints is also written to a file. When a branch install goes
+# wrong the installer window has already closed, and "it didn't work" with nothing to
+# read is the worst place to be standing.
+$setupLog = Join-Path $InstallDir 'logs\setup-database.log'
+function Write-Step($text) {
+    Write-Host "  $text"
+    Add-Content $setupLog ("[{0:yyyy-MM-dd HH:mm:ss}] {1}" -f (Get-Date), $text)
+}
+Add-Content $setupLog ("`n=== Database setup started {0:yyyy-MM-dd HH:mm:ss} ===" -f (Get-Date))
+
+# ── Pick a port that is actually free ───────────────────────────────────────
+# A fixed port is a trap. On a machine running Docker Desktop, 5433 is already
+# forwarded by wslrelay, and initdb would succeed while the service could never
+# bind — leaving an install that reports success and a branch that never starts.
+# An existing install keeps whatever port it already uses, or its connection string
+# would stop matching the running database.
+$existingPortFile = Join-Path $InstallDir 'db.port'
+
+if (Test-Path $existingPortFile) {
+    $DbPort = [int](Get-Content $existingPortFile -Raw).Trim()
+    Write-Step "Reusing the port this install already uses ($DbPort)."
+} else {
+    $candidate = $DbPort
+    while ($candidate -lt ($DbPort + 40)) {
+        $inUse = Get-NetTCPConnection -LocalPort $candidate -State Listen -ErrorAction SilentlyContinue
+        if (-not $inUse) { break }
+        $candidate++
+    }
+    if ($candidate -ge ($DbPort + 40)) { throw "Could not find a free port near $DbPort for the database." }
+
+    if ($candidate -ne $DbPort) {
+        Write-Step "Port $DbPort is already in use on this PC — using $candidate instead."
+    }
+    $DbPort = $candidate
+    Set-Content $existingPortFile $DbPort -NoNewline
+}
 
 # ── 1. Password ─────────────────────────────────────────────────────────────
 # Generated per machine and never shipped in the installer. A password baked into a

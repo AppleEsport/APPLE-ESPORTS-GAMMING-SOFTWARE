@@ -87,17 +87,10 @@ Name: "{group}\Uninstall {#AppName}";    Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}";        Filename: "{app}\AppleEsports.exe"
 
 [Run]
-; Database first — setup-api.ps1 depends on the connection string it writes.
-Filename: "powershell.exe"; \
-  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\setup-database.ps1"" -InstallDir ""{app}"""; \
-  StatusMsg: "Setting up the branch database (this takes a minute)…"; \
-  Components: server; Flags: runhidden waituntilterminated
-
-Filename: "powershell.exe"; \
-  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\setup-api.ps1"" -InstallDir ""{app}"""; \
-  StatusMsg: "Starting the branch system…"; \
-  Components: server; Flags: runhidden waituntilterminated
-
+; The branch setup is NOT run from here. A [Run] step that fails is ignored, and the
+; wizard still reports success — which is exactly how an install ends up looking fine
+; while the branch has no database and can never start. It runs from CurStepChanged
+; instead, where the exit code can be checked and a failure actually reported.
 Filename: "{app}\AppleEsports.exe"; Description: "Set up this PC now"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
@@ -145,16 +138,55 @@ begin
   end;
 end;
 
+{ Runs a setup script and returns its exit code, so a failure can be reported rather
+  than swallowed. }
+function RunSetupScript(const ScriptName, Description: String): Boolean;
+var
+  ResultCode: Integer;
+begin
+  WizardForm.StatusLabel.Caption := Description;
+
+  Result := Exec('powershell.exe',
+    '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\') + ScriptName + '"' +
+    ' -InstallDir "' + ExpandConstant('{app}') + '"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  if Result and (ResultCode <> 0) then
+    Result := False;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
-  if (CurStep = ssPostInstall) and IsComponentSelected('server') then
+  if (CurStep <> ssPostInstall) or (not IsComponentSelected('server')) then
+    Exit;
+
+  if not RunSetupScript('setup-database.ps1', 'Setting up the branch database (this takes a minute)...') then
   begin
     MsgBox(
-      'This PC now runs the branch itself.' + #13#10#13#10 +
-      'The database and dashboard start automatically with Windows, so the shop works ' +
-      'even with no internet. The internet is only used to report to Head Office and to ' +
-      'receive updates.' + #13#10#13#10 +
-      'Point the gaming PCs at this machine when you set them up.',
-      mbInformation, MB_OK);
+      'The branch database could not be set up.' + #13#10#13#10 +
+      'The rest of the software installed, but this PC cannot run the branch until the '
+      + 'database is working.' + #13#10#13#10 +
+      'What went wrong was written to:' + #13#10 +
+      ExpandConstant('{app}\logs\setup-database.log'),
+      mbCriticalError, MB_OK);
+    Exit;
   end;
+
+  if not RunSetupScript('setup-api.ps1', 'Starting the branch system...') then
+  begin
+    MsgBox(
+      'The database is ready, but the branch system did not start.' + #13#10#13#10 +
+      'What went wrong was written to:' + #13#10 +
+      ExpandConstant('{app}\logs\setup-api.log'),
+      mbCriticalError, MB_OK);
+    Exit;
+  end;
+
+  MsgBox(
+    'This PC now runs the branch itself.' + #13#10#13#10 +
+    'The database and dashboard start automatically with Windows, so the shop works ' +
+    'even with no internet at all. The internet is only used to report to Head Office ' +
+    'and to receive updates.' + #13#10#13#10 +
+    'Point the gaming PCs at this machine when you set them up.',
+    mbInformation, MB_OK);
 end;

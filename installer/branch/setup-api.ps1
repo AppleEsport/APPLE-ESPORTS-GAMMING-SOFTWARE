@@ -13,6 +13,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+$setupLog = Join-Path $InstallDir 'logs\setup-api.log'
+New-Item -ItemType Directory -Force (Split-Path $setupLog) | Out-Null
+Add-Content $setupLog ("`n=== API setup started {0:yyyy-MM-dd HH:mm:ss} ===" -f (Get-Date))
+
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
            ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
