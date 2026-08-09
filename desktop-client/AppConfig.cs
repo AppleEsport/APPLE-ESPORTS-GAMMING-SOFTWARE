@@ -18,8 +18,15 @@ public sealed class AppConfig
     /// <summary>
     /// The branch API on this machine. Must match the port setup-api.ps1 binds the service
     /// to; they are the two ends of the same wire.
+    ///
+    /// 127.0.0.1 rather than "localhost", deliberately. "localhost" resolves to both ::1 and
+    /// 127.0.0.1, and the embedded browser tries ::1 first. The API binds 0.0.0.0 — IPv4
+    /// only — so anything else holding the IPv6 loopback on this port answers instead of it.
+    /// A machine running Docker or WSL does exactly that, and because the wrong server
+    /// *accepts* the connection there is no failure to fall back from: the dashboard just
+    /// refuses to load while every check against 127.0.0.1 says the branch is perfectly fine.
     /// </summary>
-    public const string LocalBranchUrl = "http://localhost:5016";
+    public const string LocalBranchUrl = "http://127.0.0.1:5016";
 
     /// <summary>
     /// The server this client talks to for everything it does — sessions, billing, members.
@@ -124,34 +131,26 @@ public sealed class AppConfig
     private static bool BranchApiInstalledHere() =>
         File.Exists(Path.Combine(ExeDirectory, "api", "AppleEsportsErp.Api.exe"));
 
-    private static bool IsLocalAddress(string url)
-    {
-        try
-        {
-            var host = new Uri(new AppConfig { ServerUrl = url }.NormalisedUrl()).Host;
-            return host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
-                || host.Equals("127.0.0.1", StringComparison.Ordinal)
-                || host.Equals("::1", StringComparison.Ordinal)
-                || host.Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase);
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
     /// <summary>
-    /// Repoints a counter PC at its own branch API.
+    /// Points a counter PC at its own branch API.
     ///
-    /// Settings written before the branch ran locally name a public server, so every click
-    /// travelled to the cloud and the shop stopped working the moment the internet did. That
-    /// file lives in the user profile and survives an upgrade untouched, so correcting the
-    /// default alone would never have reached a machine that had already been set up.
+    /// The branch API is installed on this machine, so there is exactly one correct answer
+    /// and it is not worth being clever about preserving a different one. Two separate faults
+    /// are corrected by the same rule:
+    ///
+    ///   • a public server address, left over from when the branch ran in the cloud — every
+    ///     click went out to the internet and back, so the shop stopped when the line did;
+    ///   • "localhost", which resolves to IPv6 first and can reach an entirely different
+    ///     server than the branch, as it does on any machine running Docker or WSL.
+    ///
+    /// Both live in the user profile, which survives an upgrade untouched — so correcting the
+    /// default alone would never have reached a machine that was already set up.
     /// </summary>
     private static void MigrateToLocalBranch(AppConfig config)
     {
         if (!BranchApiInstalledHere()) return;      // a gaming PC keeps its counter's address
-        if (IsLocalAddress(config.ServerUrl)) return;
+        if (string.Equals(config.ServerUrl?.TrimEnd('/'), LocalBranchUrl, StringComparison.OrdinalIgnoreCase))
+            return;
 
         config.ServerUrl = LocalBranchUrl;
 

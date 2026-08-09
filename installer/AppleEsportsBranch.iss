@@ -180,7 +180,9 @@ begin
   begin
     { The branch database and API are installed on this machine, so there is nothing to
       ask - the answer cannot be anything else. }
-    Server := 'http://localhost:5016';
+    { 127.0.0.1, not localhost: localhost resolves to IPv6 first and anything else
+      holding that port answers instead of the branch. }
+    Server := 'http://127.0.0.1:5016';
     Role := 'operator';
   end
   else

@@ -27,6 +27,21 @@ public sealed class MainForm : Form
     /// <summary>Set only by the PIN-protected exit path, so a locked PC can still be closed.</summary>
     private bool _allowClose;
 
+    /// <summary>
+    /// How long a failure to reach the branch is treated as "still starting" rather than
+    /// reported as a fault.
+    ///
+    /// On the counter PC the branch API is a Windows service on this same machine, and at
+    /// boot Windows starts it and this app at once — the service has a database to bring up
+    /// and migrations to apply, so the dashboard reliably gets there first. Without this the
+    /// shop would meet an error screen every single morning and learn to click through it,
+    /// which is exactly how a real fault later goes unnoticed.
+    /// </summary>
+    private static readonly TimeSpan StartupGrace = TimeSpan.FromMinutes(2);
+
+    private readonly System.Windows.Forms.Timer _retryTimer = new() { Interval = 3000 };
+    private DateTime? _firstFailureAt;
+
     public MainForm(AppConfig config)
     {
         _config = config;
@@ -215,12 +230,25 @@ public sealed class MainForm : Form
         {
             if (args.IsSuccess)
             {
+                _firstFailureAt = null;
                 HideOverlay();
+                return;
             }
-            else
+
+            _firstFailureAt ??= DateTime.UtcNow;
+            var remaining = StartupGrace - (DateTime.UtcNow - _firstFailureAt.Value);
+
+            if (remaining > TimeSpan.Zero)
             {
-                ShowOverlay(DescribeError(args.WebErrorStatus), showActions: true);
+                // No buttons while this is running: there is nothing for anyone to do, and
+                // offering "Change server..." to an operator whose branch is merely still
+                // booting invites them to break a correct setting.
+                ShowOverlay($"Starting the branch system…  ({(int)remaining.TotalSeconds}s)", showActions: false);
+                _retryTimer.Start();
+                return;
             }
+
+            ShowOverlay(DescribeError(args.WebErrorStatus), showActions: true);
         };
 
         core.DocumentTitleChanged += (_, _) =>
@@ -233,6 +261,12 @@ public sealed class MainForm : Form
 
         core.ProcessFailed += (_, _) =>
             ShowOverlay("The embedded browser stopped responding.", showActions: true);
+
+        _retryTimer.Tick += (_, _) =>
+        {
+            _retryTimer.Stop();
+            Connect();
+        };
 
         Connect();
 

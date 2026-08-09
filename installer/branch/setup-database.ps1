@@ -12,7 +12,12 @@ param(
     [string]$DbName     = 'gamecafe_erp',
     [string]$DbUser     = 'appleesports',
     [int]   $DbPort     = 5433,
-    [string]$ServiceName = 'AppleEsportsDb'
+    [string]$ServiceName = 'AppleEsportsDb',
+
+    # Where this branch reports to. The shop does not need it to trade - it is used only by
+    # the background courier, so Head Office can see what happened here. Overridable so the
+    # move to the owner's own server is a parameter, not a rebuild.
+    [string]$HeadOfficeUrl = 'http://140.245.195.222:8081'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -240,6 +245,9 @@ try {
     $jwtSecret  = $existingConfig.Jwt.Secret
     $jwtRefresh = $existingConfig.Jwt.RefreshSecret
 
+    $syncUrl = $existingConfig.Sync.HeadOfficeUrl
+    if (-not $syncUrl) { $syncUrl = $HeadOfficeUrl }
+
     if (-not $jwtSecret)  { $jwtSecret  = New-Secret; Write-Step 'Generated a signing key for this branch.' }
     if (-not $jwtRefresh) { $jwtRefresh = New-Secret }
 
@@ -256,6 +264,16 @@ try {
             Audience      = 'AppleEsportsErpClient'
             AccessExpiry  = '24h'
             RefreshExpiry = '7d'
+        }
+        # Without this the courier logs "Sync:HeadOfficeUrl not configured, skipping sync"
+        # once per cycle and the branch silently never reports anything - the shop works
+        # perfectly while Head Office sees an empty branch, which is the worst way for this
+        # to fail because nothing anywhere looks broken.
+        Sync = @{
+            HeadOfficeUrl       = $syncUrl
+            PollIntervalSeconds = 30
+            MaxRetryAttempts    = 5
+            BatchSize           = 100
         }
     } | ConvertTo-Json -Depth 5 | Out-String
 

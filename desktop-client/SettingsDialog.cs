@@ -1,4 +1,4 @@
-namespace AppleEsports.Desktop;
+﻿namespace AppleEsports.Desktop;
 
 /// <summary>
 /// Lets an operator re-point this PC at a different server without editing JSON by hand.
@@ -46,7 +46,7 @@ public sealed class SettingsDialog : Form
         // PC it is the counter PC across the shop network. An example public address here
         // invited people to point branch PCs at the cloud, which is what stopped the shop
         // working whenever the internet did.
-        AddHint("The branch server this PC uses:  localhost:5016 on the counter PC, or the counter PC's address", ref y);
+        AddHint("The branch server this PC uses:  127.0.0.1:5016 on the counter PC, or the counter PC's address", ref y);
         StyleField(_serverBox, y);
         _serverBox.Text = config.ServerUrl;
         Controls.Add(_serverBox);
