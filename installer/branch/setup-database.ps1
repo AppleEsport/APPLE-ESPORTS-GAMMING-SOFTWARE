@@ -95,14 +95,24 @@ try {
     # opened the file.
     $secretFile = Join-Path $dataRoot 'db.secret'
 
-    if (Test-Path $secretFile) {
-        $dbPassword = (Get-Content $secretFile -Raw).Trim()
+    $dbPassword = "$(if (Test-Path $secretFile) { Get-Content $secretFile -Raw })".Trim()
+
+    if ($dbPassword) {
         Write-Step 'Using the existing database password.'
     } else {
+        # Either no previous install, or one that was interrupted while writing this
+        # file and left it empty. Treat both the same and generate a fresh password -
+        # an empty one would be carried into the connection string and fail later,
+        # somewhere far less obvious than here.
         Add-Type -AssemblyName System.Security
         $bytes = New-Object byte[] 24
         [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
         $dbPassword = [Convert]::ToBase64String($bytes) -replace '[^A-Za-z0-9]', ''
+
+        if (Test-Path $secretFile) {
+            icacls $secretFile /reset 2>&1 | Out-Null
+            Remove-Item $secretFile -Force -ErrorAction SilentlyContinue
+        }
         Set-Content $secretFile $dbPassword -NoNewline
 
         # Readable only by SYSTEM and Administrators - the app runs as a service, and no
@@ -218,7 +228,15 @@ try {
 
     # Reuse existing signing keys on a repair or upgrade. Regenerating them would invalidate
     # every token in circulation and sign out the operator mid-shift for no reason.
-    $existingConfig = if (Test-Path $apiSettings) { Get-Content $apiSettings -Raw | ConvertFrom-Json } else { $null }
+    # Wrapped because an install interrupted midway through writing this file leaves
+    # invalid JSON behind, and ConvertFrom-Json throwing under ErrorActionPreference
+    # 'Stop' would make every later install fail here for good. Unreadable is not
+    # worth failing over - it only means there are no keys to carry forward.
+    $existingConfig = $null
+    if (Test-Path $apiSettings) {
+        try { $existingConfig = Get-Content $apiSettings -Raw | ConvertFrom-Json }
+        catch { Write-Step 'The existing configuration is unreadable; writing a fresh one.' }
+    }
     $jwtSecret  = $existingConfig.Jwt.Secret
     $jwtRefresh = $existingConfig.Jwt.RefreshSecret
 
@@ -241,10 +259,11 @@ try {
         }
     } | ConvertTo-Json -Depth 5 | Out-String
 
-    # An install from an older build left this file readable-only, even to
-    # Administrators. Take ownership back before writing rather than failing.
+    # An install from an older build left this file readable to Administrators and
+    # nothing more, so setup could not overwrite what it had itself written. Put the
+    # inherited permissions back before writing rather than failing on our own file.
     if (Test-Path $apiSettings) {
-        icacls $apiSettings /grant "Administrators:(F)" 2>&1 | Out-Null
+        icacls $apiSettings /reset 2>&1 | Out-Null
         Remove-Item $apiSettings -Force -ErrorAction SilentlyContinue
     }
     Set-Content $apiSettings $apiConfigJson -NoNewline
