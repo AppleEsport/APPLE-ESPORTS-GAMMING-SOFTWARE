@@ -147,6 +147,55 @@ public class BranchProvisioningController : ControllerBase
     // calls Head Office. Same code either way — a branch and Head Office run the same
     // build, and which role a machine plays is a matter of configuration, not of binary.
 
+    /// <summary>
+    /// Whether this branch is actually reaching Head Office, and what is still waiting.
+    ///
+    /// Exists because there was no way to answer "is my branch reporting?" short of reading
+    /// the service log — and a branch whose sync is broken looks exactly like one whose sync
+    /// is fine, from behind the counter. Anything queued and not delivered is money and
+    /// sessions Head Office cannot see.
+    /// </summary>
+    [HttpGet("sync-status")]
+    [AllowAnonymous]
+    public async Task<IActionResult> SyncStatus(
+        [FromServices] BranchAdoptionService adoption, CancellationToken ct)
+    {
+        var pending = await _db.SyncOutboxEntries.CountAsync(e => e.SyncedAt == null, ct);
+        var delivered = await _db.SyncOutboxEntries.CountAsync(e => e.SyncedAt != null, ct);
+
+        var lastDelivered = await _db.SyncOutboxEntries
+            .Where(e => e.SyncedAt != null)
+            .OrderByDescending(e => e.SyncedAt)
+            .Select(e => e.SyncedAt)
+            .FirstOrDefaultAsync(ct);
+
+        // The oldest thing still waiting says how far behind Head Office is, which matters
+        // more than how many are queued: one entry stuck since yesterday is worse news than
+        // fifty from the last minute.
+        var oldestPending = await _db.SyncOutboxEntries
+            .Where(e => e.SyncedAt == null)
+            .OrderBy(e => e.CreatedAt)
+            .Select(e => (DateTimeOffset?)e.CreatedAt)
+            .FirstOrDefaultAsync(ct);
+
+        var lastError = await _db.SyncOutboxEntries
+            .Where(e => e.SyncedAt == null && e.LastError != null)
+            .OrderByDescending(e => e.CreatedAt)
+            .Select(e => e.LastError)
+            .FirstOrDefaultAsync(ct);
+
+        return Ok(ApiResponse<object>.Ok(new
+        {
+            headOfficeUrl = adoption.HeadOfficeUrl,
+            configured = !string.IsNullOrWhiteSpace(adoption.HeadOfficeUrl),
+            pending,
+            delivered,
+            lastDeliveredAt = lastDelivered,
+            oldestPendingAt = oldestPending,
+            lastError,
+        }));
+    }
+
     /// <summary>What this machine currently believes itself to be.</summary>
     [HttpGet("identity")]
     [AllowAnonymous]

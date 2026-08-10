@@ -45,16 +45,45 @@ builder.Host.UseDefaultServiceProvider((context, options) => {
 });
 
 // ── Serilog ──
+//
+// The path is absolute, and deliberately so. "logs/appleesports-.log" is relative to the
+// process working directory, which for a Windows service is C:\Windows\System32 — so a
+// branch quietly wrote its log there, where nobody would ever look for it and where it has
+// no business being. Setting ContentRootPath does not help; Serilog resolves against the
+// working directory, not the content root.
+//
+// In a container this is a path inside it, which is where the logs were expected anyway.
+var logDirectory = OperatingSystem.IsWindows()
+    ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                   "Apple Esports", "logs")
+    : Path.Combine(AppContext.BaseDirectory, "logs");
+
+Directory.CreateDirectory(logDirectory);
+
 Log.Logger = new LoggerConfiguration()
     .ReadFrom.Configuration(builder.Configuration)
     .Enrich.FromLogContext()
+    // Every request logged six lines and every query its full SQL, which on the sessions
+    // screen — polled continuously — came to roughly 3 MB a minute, or 4 GB a day on a till
+    // that is meant to run unattended for months. The framework's own chatter is dropped;
+    // anything the application logs itself still comes through at Information.
+    .MinimumLevel.Override("Microsoft.AspNetCore", Serilog.Events.LogEventLevel.Warning)
+    .MinimumLevel.Override("Microsoft.EntityFrameworkCore.Database.Command", Serilog.Events.LogEventLevel.Warning)
+    .MinimumLevel.Override("Microsoft.EntityFrameworkCore.Infrastructure", Serilog.Events.LogEventLevel.Warning)
+    .MinimumLevel.Override("Microsoft.Hosting.Lifetime", Serilog.Events.LogEventLevel.Information)
     .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] [req:{RequestId}] [op:{OperatorId}] [br:{BranchId}] {Message:lj}{NewLine}{Exception}")
-    .WriteTo.File("logs/appleesports-.log", 
-        rollingInterval: RollingInterval.Day, 
-        retainedFileCountLimit: 30,
+    .WriteTo.File(Path.Combine(logDirectory, "appleesports-.log"),
+        rollingInterval: RollingInterval.Day,
+        retainedFileCountLimit: 14,
+        // A hard ceiling as well as a daily roll. The daily roll alone did not stop a single
+        // day's file reaching 612 MB, and a till that fills its own disk stops the shop.
+        fileSizeLimitBytes: 50L * 1024 * 1024,
+        rollOnFileSizeLimit: true,
         outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] [req:{RequestId}] [op:{OperatorId}] [br:{BranchId}] [sh:{ShiftId}] {Message:lj}{NewLine}{Exception}")
     .CreateLogger();
 builder.Host.UseSerilog();
+
+Log.Information("Logging to {LogDirectory}", logDirectory);
 
 // ── Configuration sections ──
 var jwtConfig = builder.Configuration.GetSection("Jwt");
