@@ -16,7 +16,11 @@ public class Member
     // Password Reset fields
     public string? ResetToken { get; set; }
     public DateTimeOffset? ResetTokenExpiry { get; set; }
-    
+
+    // Brute-force lockout
+    public int FailedAttempts { get; set; }
+    public DateTimeOffset? LockedUntil { get; set; }
+
     public MemberStatus Status { get; set; } = MemberStatus.Active;
 
     // SOP §14.1: Wallet System - Separated per SOP §11.1

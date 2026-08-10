@@ -18,13 +18,42 @@ public class MemberService : IMemberService
     private readonly IAuditService _auditService;
     private readonly JwtTokenService _jwt;
     private readonly IEmailService _emailService;
+    private readonly IAppUrlProvider _appUrls;
 
-    public MemberService(IUnitOfWork unitOfWork, IAuditService auditService, JwtTokenService jwt, IEmailService emailService)
+    private const int MaxFailedAttempts = 5;
+    private static readonly TimeSpan LockoutDuration = TimeSpan.FromMinutes(15);
+
+    public MemberService(IUnitOfWork unitOfWork, IAuditService auditService, JwtTokenService jwt, IEmailService emailService, IAppUrlProvider appUrls)
     {
         _unitOfWork = unitOfWork;
         _auditService = auditService;
         _jwt = jwt;
         _emailService = emailService;
+        _appUrls = appUrls;
+    }
+
+    private static bool IsLocked(DateTimeOffset? lockedUntil) => lockedUntil.HasValue && lockedUntil.Value > DateTimeOffset.UtcNow;
+
+    private static string LockoutMessage(DateTimeOffset lockedUntil)
+    {
+        var minutes = Math.Max(1, (int)Math.Ceiling((lockedUntil - DateTimeOffset.UtcNow).TotalMinutes));
+        return $"Too many failed attempts. Try again in {minutes} minute(s), or use 'Forgot password' to reset it now.";
+    }
+
+    /// <summary>Never throws — a reset email that fails to send must not surface as a login-endpoint 500.</summary>
+    private async Task SendLockoutResetEmailAsync(string? email, string targetName, string token)
+    {
+        if (string.IsNullOrWhiteSpace(email)) return;
+        try
+        {
+            var resetLink = _appUrls.BuildResetPasswordLink(email, token);
+            var htmlBody = PasswordResetEmailTemplate.ComposeForLockout(targetName, resetLink);
+            await _emailService.SendEmailAsync(email, PasswordResetEmailTemplate.Subject, htmlBody);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[MemberService] Failed to send lockout reset email to {email}: {ex.Message}");
+        }
     }
 
     public async Task<PaginatedResult<MemberDto>> GetMembersAsync(Guid branchId, string? search, int page = 1, int pageSize = 50, bool includeDeleted = false)
@@ -421,11 +450,56 @@ public class MemberService : IMemberService
         var member = candidates.FirstOrDefault(m =>
             !string.IsNullOrEmpty(m.PasswordHash) && BCryptNet.Verify(dto.Password, m.PasswordHash));
 
+        if (member != null && IsLocked(member.LockedUntil))
+            throw new AuthorizationException(LockoutMessage(member.LockedUntil!.Value), "ACCOUNT_LOCKED");
+
         if (member == null)
+        {
+            // Identifier can be shared across members (e.g. household email) — since we can't
+            // tell which account the attempt was aimed at, count it against every candidate it
+            // could match rather than letting an attacker pick off a shared identifier for free.
+            foreach (var candidate in candidates)
+            {
+                if (IsLocked(candidate.LockedUntil)) continue;
+
+                candidate.FailedAttempts++;
+                if (candidate.FailedAttempts >= MaxFailedAttempts)
+                {
+                    candidate.LockedUntil = DateTimeOffset.UtcNow.Add(LockoutDuration);
+                    var resetToken = Guid.NewGuid().ToString("N");
+                    candidate.ResetToken = resetToken;
+                    candidate.ResetTokenExpiry = DateTimeOffset.UtcNow.AddHours(1);
+                    await SendLockoutResetEmailAsync(candidate.Email, candidate.FullName, resetToken);
+                    await _auditService.LogAsync(new AuditEntry
+                    {
+                        UserRole = "Member",
+                        UserName = candidate.FullName,
+                        Action = AuditActions.AccountLocked,
+                        TargetType = "member",
+                        TargetId = candidate.Id,
+                        Details = new { reason = "5 failed password attempts", lockedUntil = candidate.LockedUntil },
+                    });
+                }
+            }
+            await _unitOfWork.SaveChangesAsync();
+
+            await _auditService.LogAsync(new AuditEntry
+            {
+                UserRole = "Member",
+                UserName = identifier,
+                Action = AuditActions.FailedLogin,
+                Details = new { reason = "Invalid username or password" },
+            });
+
             throw new AuthenticationException("Invalid username or password.", "INVALID_CREDENTIALS");
+        }
 
         if (member.Status != MemberStatus.Active)
             throw new AuthorizationException("Member account is inactive.", "ACCOUNT_INACTIVE");
+
+        member.FailedAttempts = 0;
+        member.LockedUntil = null;
+        await _unitOfWork.SaveChangesAsync();
 
         var claims = new Dictionary<string, string>
         {

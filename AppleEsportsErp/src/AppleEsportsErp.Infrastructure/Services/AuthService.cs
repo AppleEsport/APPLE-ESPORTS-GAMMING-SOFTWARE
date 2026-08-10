@@ -34,6 +34,12 @@ public class AuthService : IAuthService
     private readonly IAppUrlProvider _appUrls;
     private const int SALT_ROUNDS = 12;
 
+    // Brute-force lockout — SOP-adjacent security hardening: 5 wrong passwords locks the
+    // account for 15 minutes and auto-emails a reset link so a legitimate user isn't stuck
+    // waiting out the clock.
+    private const int MaxFailedAttempts = 5;
+    private static readonly TimeSpan LockoutDuration = TimeSpan.FromMinutes(15);
+
     private readonly IAdminNotifier _adminNotifier;
 
     public AuthService(AppDbContext db, JwtTokenService jwt, IAuditService audit, ILogger<AuthService> logger, ITokenRevocationService tokenRevocation, IEmailService emailService, IConfiguration configuration, IAppUrlProvider appUrls, IAdminNotifier adminNotifier)
@@ -64,9 +70,38 @@ public class AuthService : IAuthService
             if (user.Status != UserStatus.Active)
                 throw new AuthorizationException($"Account is {user.Status}. Contact system administrator.", "ACCOUNT_INACTIVE");
 
+            // 2b. Brute-force lockout
+            if (IsLocked(user.LockedUntil))
+                throw new AuthorizationException(LockoutMessage(user.LockedUntil!.Value), "ACCOUNT_LOCKED");
+
             // 3. Verify password — SOP §21.1: Password Hashing = YES
             if (!BCryptNet.Verify(dto.Password, user.PasswordHash))
             {
+                user.FailedAttempts++;
+                if (user.FailedAttempts >= MaxFailedAttempts)
+                {
+                    user.LockedUntil = DateTimeOffset.UtcNow.Add(LockoutDuration);
+                    var resetToken = Guid.NewGuid().ToString("N");
+                    user.ResetToken = resetToken;
+                    user.ResetTokenExpiry = DateTimeOffset.UtcNow.AddHours(1);
+                    await _db.SaveChangesAsync();
+                    await SendPasswordResetEmailAsync(user.Email, user.FullName, resetToken, isLockout: true);
+                    await _audit.LogAsync(new AuditEntry
+                    {
+                        UserId = user.Id,
+                        UserRole = Roles.SuperAdmin,
+                        UserName = user.FullName,
+                        Action = AuditActions.AccountLocked,
+                        TargetType = "user",
+                        TargetId = user.Id,
+                        Details = new { reason = "5 failed password attempts", lockedUntil = user.LockedUntil },
+                    });
+                }
+                else
+                {
+                    await _db.SaveChangesAsync();
+                }
+
                 // Log failed attempt — SOP §22: Audit every critical action
                 await _audit.LogAsync(new AuditEntry
                 {
@@ -78,6 +113,10 @@ public class AuthService : IAuthService
                 });
                 throw new AuthenticationException("Invalid email/username or password", "INVALID_CREDENTIALS");
             }
+
+            // Successful login clears the lockout counter
+            user.FailedAttempts = 0;
+            user.LockedUntil = null;
 
             // 4. Generate tokens — Q1 Decision: full claims embedded in JWT
             var claims = new Dictionary<string, string>
@@ -139,8 +178,36 @@ public class AuthService : IAuthService
             if (op.Status != OperatorStatus.Active)
                 throw new AuthorizationException($"Account is {op.Status}. Contact system administrator.", "ACCOUNT_INACTIVE");
 
+            if (IsLocked(op.LockedUntil))
+                throw new AuthorizationException(LockoutMessage(op.LockedUntil!.Value), "ACCOUNT_LOCKED");
+
             if (!BCryptNet.Verify(dto.Password, op.PasswordHash))
             {
+                op.FailedAttempts++;
+                if (op.FailedAttempts >= MaxFailedAttempts)
+                {
+                    op.LockedUntil = DateTimeOffset.UtcNow.Add(LockoutDuration);
+                    var resetToken = Guid.NewGuid().ToString("N");
+                    op.ResetToken = resetToken;
+                    op.ResetTokenExpiry = DateTimeOffset.UtcNow.AddHours(1);
+                    await _db.SaveChangesAsync();
+                    await SendPasswordResetEmailAsync(op.Email, op.FullName, resetToken, isLockout: true);
+                    await _audit.LogAsync(new AuditEntry
+                    {
+                        OperatorId = op.Id,
+                        UserRole = Roles.Admin,
+                        UserName = op.FullName,
+                        Action = AuditActions.AccountLocked,
+                        TargetType = "operator",
+                        TargetId = op.Id,
+                        Details = new { reason = "5 failed password attempts", lockedUntil = op.LockedUntil },
+                    });
+                }
+                else
+                {
+                    await _db.SaveChangesAsync();
+                }
+
                 await _audit.LogAsync(new AuditEntry
                 {
                     OperatorId = op.Id,
@@ -151,6 +218,9 @@ public class AuthService : IAuthService
                 });
                 throw new AuthenticationException("Invalid email/username or password", "INVALID_CREDENTIALS");
             }
+
+            op.FailedAttempts = 0;
+            op.LockedUntil = null;
 
             var claims = new Dictionary<string, string>
             {
@@ -231,9 +301,40 @@ public class AuthService : IAuthService
         if (op.Status == OperatorStatus.Disabled)
             throw new AuthorizationException("Operator account is disabled. Contact Super Admin.", "OPERATOR_DISABLED");
 
+        // 3b. Brute-force lockout
+        if (IsLocked(op.LockedUntil))
+            throw new AuthorizationException(LockoutMessage(op.LockedUntil!.Value), "ACCOUNT_LOCKED");
+
         // 4. Verify password/PIN
         if (!BCryptNet.Verify(dto.Password, op.PasswordHash))
         {
+            op.FailedAttempts++;
+            if (op.FailedAttempts >= MaxFailedAttempts)
+            {
+                op.LockedUntil = DateTimeOffset.UtcNow.Add(LockoutDuration);
+                var resetToken = Guid.NewGuid().ToString("N");
+                op.ResetToken = resetToken;
+                op.ResetTokenExpiry = DateTimeOffset.UtcNow.AddHours(1);
+                await _db.SaveChangesAsync();
+                await SendPasswordResetEmailAsync(op.Email, op.FullName, resetToken, isLockout: true);
+                await _audit.LogAsync(new AuditEntry
+                {
+                    OperatorId = op.Id,
+                    UserRole = Roles.Operator,
+                    UserName = op.FullName,
+                    Action = AuditActions.AccountLocked,
+                    BranchId = dto.BranchId,
+                    BranchName = branch.Name,
+                    TargetType = "operator",
+                    TargetId = op.Id,
+                    Details = new { reason = "5 failed password attempts", lockedUntil = op.LockedUntil },
+                });
+            }
+            else
+            {
+                await _db.SaveChangesAsync();
+            }
+
             await _audit.LogAsync(new AuditEntry
             {
                 OperatorId = op.Id,
@@ -246,6 +347,9 @@ public class AuthService : IAuthService
             });
             throw new AuthenticationException("Invalid password or PIN", "INVALID_CREDENTIALS");
         }
+
+        op.FailedAttempts = 0;
+        op.LockedUntil = null;
 
         // 5. Resume this operator's open shift if they already have one, rather than opening a
         //    second. A shift only ends by being closed properly, with the cash counted - so an
@@ -386,8 +490,35 @@ public class AuthService : IAuthService
         if (member.Status != MemberStatus.Active)
             throw new AuthorizationException($"Account is {member.Status}. Please contact front desk.", "ACCOUNT_INACTIVE");
 
+        if (IsLocked(member.LockedUntil))
+            throw new AuthorizationException(LockoutMessage(member.LockedUntil!.Value), "ACCOUNT_LOCKED");
+
         if (string.IsNullOrEmpty(member.PasswordHash) || !BCryptNet.Verify(dto.Password, member.PasswordHash))
         {
+            member.FailedAttempts++;
+            if (member.FailedAttempts >= MaxFailedAttempts)
+            {
+                member.LockedUntil = DateTimeOffset.UtcNow.Add(LockoutDuration);
+                var resetToken = Guid.NewGuid().ToString("N");
+                member.ResetToken = resetToken;
+                member.ResetTokenExpiry = DateTimeOffset.UtcNow.AddHours(1);
+                await _db.SaveChangesAsync();
+                await SendPasswordResetEmailAsync(member.Email, member.FullName, resetToken, isLockout: true);
+                await _audit.LogAsync(new AuditEntry
+                {
+                    UserRole = "Member",
+                    UserName = member.FullName,
+                    Action = AuditActions.AccountLocked,
+                    TargetType = "member",
+                    TargetId = member.Id,
+                    Details = new { reason = "5 failed password attempts", lockedUntil = member.LockedUntil },
+                });
+            }
+            else
+            {
+                await _db.SaveChangesAsync();
+            }
+
             await _audit.LogAsync(new AuditEntry
             {
                 UserRole = "Member",
@@ -397,6 +528,9 @@ public class AuthService : IAuthService
             });
             throw new AuthenticationException("Invalid credentials", "INVALID_CREDENTIALS");
         }
+
+        member.FailedAttempts = 0;
+        member.LockedUntil = null;
 
         // Generate JWT
         var claims = new Dictionary<string, string>
@@ -900,6 +1034,32 @@ public class AuthService : IAuthService
         return await LoginOperatorAsync(new OperatorLoginDto { BranchId = dto.BranchId, Username = dto.Username, Password = dto.Password });
     }
 
+    private static bool IsLocked(DateTimeOffset? lockedUntil) => lockedUntil.HasValue && lockedUntil.Value > DateTimeOffset.UtcNow;
+
+    private static string LockoutMessage(DateTimeOffset lockedUntil)
+    {
+        var minutes = Math.Max(1, (int)Math.Ceiling((lockedUntil - DateTimeOffset.UtcNow).TotalMinutes));
+        return $"Too many failed attempts. Try again in {minutes} minute(s), or use 'Forgot password' to reset it now.";
+    }
+
+    /// <summary>Never throws — a reset email that fails to send must not surface as a login-endpoint 500.</summary>
+    private async Task SendPasswordResetEmailAsync(string? email, string targetName, string token, bool isLockout = false)
+    {
+        if (string.IsNullOrWhiteSpace(email)) return;
+        try
+        {
+            var resetLink = _appUrls.BuildResetPasswordLink(email, token);
+            var htmlBody = isLockout
+                ? PasswordResetEmailTemplate.ComposeForLockout(targetName, resetLink)
+                : PasswordResetEmailTemplate.Compose(targetName, resetLink);
+            await _emailService.SendEmailAsync(email, PasswordResetEmailTemplate.Subject, htmlBody);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Could not send the password-reset email to {Email}.", email);
+        }
+    }
+
     public async Task InitiatePasswordResetAsync(string email, string? accountType = null)
     {
         email = email.Trim().ToLowerInvariant();
@@ -944,33 +1104,7 @@ public class AuthService : IAuthService
 
         await _db.SaveChangesAsync();
 
-        string resetLink = _appUrls.BuildResetPasswordLink(email, token);
-        string subject = "Apple Esports - Password Reset";
-        string htmlBody = $@"
-        <div style='background-color:#050505; color:#ffffff; font-family:""Segoe UI"", Tahoma, Geneva, Verdana, sans-serif; padding:40px 20px; text-align:center;'>
-            <div style='max-width: 600px; margin: 0 auto; background-color: #111111; border: 1px solid #333333; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.5);'>
-                <div style='background: linear-gradient(135deg, #1a1a24 0%, #0d0d14 100%); padding: 30px 20px; border-bottom: 2px solid #dc2626;'>
-                    <h1 style='margin: 0; font-size: 28px; letter-spacing: 2px; color: #ffffff; text-transform: uppercase;'>
-                        <img src='https://appleesports.in/apple-touch-icon.png' alt='Logo' style='height: 40px; vertical-align: middle; margin-right: 15px;' /> APPLE ESPORTS
-                    </h1>
-                </div>
-                <div style='padding: 40px 30px; text-align: left;'>
-                    <h2 style='margin-top: 0; color: #f87171; font-size: 24px; border-bottom: 2px solid #333333; padding-bottom: 15px;'>Password Reset Request</h2>
-                    <p style='font-size: 16px; color: #d1d5db; line-height: 1.6;'>Hi <strong>{targetName}</strong>,</p>
-                    <p style='font-size: 16px; color: #d1d5db; line-height: 1.6;'>We received a request to reset the password for your Apple Esports account. Click the secure link below to choose a new password:</p>
-                    <div style='text-align:center; margin: 40px 0;'>
-                        <a href='{resetLink}' style='background: linear-gradient(to right, #dc2626, #ef4444); color: #ffffff; padding: 16px 32px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px; letter-spacing: 1px; display: inline-block; box-shadow: 0 4px 15px rgba(220, 38, 38, 0.4);'>RESET MY PASSWORD</a>
-                    </div>
-                    <p style='color: #6b7280; font-size: 13px; margin-top: 30px;'>If you did not request this password reset, please ignore this email. This link will expire in exactly 1 hour for your security.</p>
-                </div>
-                <div style='background-color: #080808; padding: 20px; border-top: 1px solid #222222; text-align: center;'>
-                    <p style='margin: 0; color: #6b7280; font-size: 12px;'>This is an automated security notification from Apple Esports ERP.</p>
-                    <p style='margin: 5px 0 0 0; color: #4b5563; font-size: 11px;'>© {DateTime.UtcNow.Year} Apple Esports. All rights reserved.</p>
-                </div>
-            </div>
-        </div>";
-
-        await _emailService.SendEmailAsync(email, subject, htmlBody);
+        await SendPasswordResetEmailAsync(email, targetName, token);
     }
 
     public async Task<IEnumerable<AvailableAdminDto>> GetAvailableAdminsForSwitchAsync()

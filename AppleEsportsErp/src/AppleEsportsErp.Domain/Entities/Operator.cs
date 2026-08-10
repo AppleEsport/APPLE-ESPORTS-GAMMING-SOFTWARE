@@ -39,6 +39,10 @@ public class Operator
     public string? ResetToken { get; set; }
     public DateTimeOffset? ResetTokenExpiry { get; set; }
 
+    // Brute-force lockout
+    public int FailedAttempts { get; set; }
+    public DateTimeOffset? LockedUntil { get; set; }
+
     public DateTimeOffset? LastLogin { get; set; }
     public string? DeviceInfo { get; set; } // JSONB
     
