@@ -716,11 +716,10 @@ public class OperatorsController : ControllerBase
         var op = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.Operator>().Query().FirstOrDefaultAsync(o => o.Id == id);
         if (op == null) return NotFound(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Fail("Operator not found"));
 
-        // Captured before the change so the alert can say what it was, not just what it is.
-        // What an operator may reach IS their role here - there is no separate role field -
-        // so a permissions or branch change is exactly the thing an owner needs telling about.
+        // Only the branch. Which screens an operator may open is a routine settings tweak and
+        // emailing the owner for each checkbox would bury the changes that matter - a first
+        // version of this alerted on those too, and it was noise.
         var previousBranchId = op.BranchId;
-        var previousPermissions = op.DashboardPermissions;
         var previousBranchName = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.Branch>()
             .Query().Where(b => b.Id == previousBranchId).Select(b => b.Name).FirstOrDefaultAsync();
 
@@ -744,35 +743,26 @@ public class OperatorsController : ControllerBase
 
         await _notificationHub.Clients.Group($"user:{op.Id}").SendAsync("PermissionsUpdated");
 
-        // Only when what they can reach actually changed. Correcting a spelling in someone's
-        // name should not email the owner; granting them the till should.
-        var branchChanged = previousBranchId != op.BranchId;
-        var permissionsChanged = !string.Equals(previousPermissions, op.DashboardPermissions, StringComparison.Ordinal);
-
-        if (branchChanged || permissionsChanged)
+        // Moving staff between branches is a real staffing change and worth telling the owner
+        // about. Correcting a spelling, or ticking a dashboard box, is not.
+        if (previousBranchId != op.BranchId)
         {
             var newBranchName = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.Branch>()
                 .Query().Where(b => b.Id == op.BranchId).Select(b => b.Name).FirstOrDefaultAsync();
 
-            var rows = new List<(string, string)>
-            {
-                ("Staff member", op.FullName),
-                ("Username", op.Username),
-                ("Changed at", AppleEsportsErp.Application.Services.IndiaTime.Now.ToString("dd MMM yyyy, hh:mm tt")),
-            };
-
-            if (branchChanged)
-                rows.Add(("Branch", $"{previousBranchName ?? "unknown"}  ->  {newBranchName ?? "unknown"}"));
-
-            if (permissionsChanged)
-                rows.Add(("Access", "the screens this person can open have changed"));
-
             await _adminNotifier.NotifyAsync(
-                $"Access changed: {op.FullName}",
+                $"Operator moved branch: {op.FullName}",
                 AppleEsportsErp.Infrastructure.Services.AdminEmailTemplate.Compose(
-                    "Staff access changed",
+                    "Operator moved to another branch",
                     AppleEsportsErp.Infrastructure.Services.AdminEmailTemplate.Amber,
-                    rows,
+                    new[]
+                    {
+                        ("Operator", op.FullName),
+                        ("Username", op.Username),
+                        ("Moved from", previousBranchName ?? "unknown"),
+                        ("Moved to", newBranchName ?? "unknown"),
+                        ("Changed at", AppleEsportsErp.Application.Services.IndiaTime.Now.ToString("dd MMM yyyy, hh:mm tt")),
+                    },
                     "If you did not make this change, review it in Settings straight away."));
         }
 
@@ -957,6 +947,10 @@ public class OperatorsController : ControllerBase
             op.AccessPin = null;
         }
 
+        // Captured before it changes, so the alert can say whether this was a promotion or a
+        // demotion rather than just stating the new value.
+        var wasAdmin = op.IsGlobalAdmin;
+
         op.IsGlobalAdmin = dto.IsGlobalAdmin;
         op.UpdatedAt = DateTimeOffset.UtcNow;
 
@@ -981,6 +975,39 @@ public class OperatorsController : ControllerBase
                 permissionsRestored = !dto.IsGlobalAdmin && op.PreAdminDashboardPermissions == null
             }
         });
+
+        // The real role change: an operator becoming an admin, or ceasing to be one. This is
+        // the biggest single change anyone's account can undergo - an admin sees every branch
+        // and every figure - so the owner is told even when they made the change themselves,
+        // because the value is in hearing about the one they did not.
+        if (wasAdmin != dto.IsGlobalAdmin)
+        {
+            var branchName = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.Branch>()
+                .Query().Where(b => b.Id == op.BranchId).Select(b => b.Name).FirstOrDefaultAsync();
+
+            await _adminNotifier.NotifyAsync(
+                dto.IsGlobalAdmin
+                    ? $"Promoted to Admin: {op.FullName}"
+                    : $"Admin rights removed: {op.FullName}",
+                AppleEsportsErp.Infrastructure.Services.AdminEmailTemplate.Compose(
+                    dto.IsGlobalAdmin ? "Operator promoted to Admin" : "Admin rights removed",
+                    dto.IsGlobalAdmin
+                        ? AppleEsportsErp.Infrastructure.Services.AdminEmailTemplate.Red
+                        : AppleEsportsErp.Infrastructure.Services.AdminEmailTemplate.Amber,
+                    new[]
+                    {
+                        ("Staff member", op.FullName),
+                        ("Username", op.Username),
+                        ("Home branch", branchName ?? "unknown"),
+                        ("Was", wasAdmin ? "Admin" : "Operator"),
+                        ("Now", dto.IsGlobalAdmin ? "Admin" : "Operator"),
+                        ("Changed by", adminName),
+                        ("Changed at", AppleEsportsErp.Application.Services.IndiaTime.Now.ToString("dd MMM yyyy, hh:mm tt")),
+                    },
+                    dto.IsGlobalAdmin
+                        ? "An Admin can see every branch and every figure. If you did not do this, remove it now."
+                        : "This account is back to operator access at its own branch only."));
+        }
 
         return Ok(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Ok(new { message = dto.IsGlobalAdmin ? "Operator promoted to Global Admin" : "Operator demoted — original permissions restored" }));
     }
