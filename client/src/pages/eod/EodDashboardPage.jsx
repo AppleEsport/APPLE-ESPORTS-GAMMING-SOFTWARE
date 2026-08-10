@@ -291,6 +291,24 @@ export default function EodDashboardPage() {
       });
     }
 
+    const downtimeRows = downtime || [];
+    if (downtimeRows.length) {
+      y = addTable(doc, y, {
+        title, subtitle,
+        heading: `Power Cut / Downtime Logs (${targetDate})`,
+        head: ['Kind', 'From', 'To', 'Minutes', 'Sessions Affected', 'Impact', 'Notes'],
+        body: downtimeRows.map(d => [
+          d.kind || '-',
+          d.from || '-',
+          d.to || '-',
+          String(d.minutes ?? '-'),
+          String(d.sessionsAffected ?? '-'),
+          d.impact || '-',
+          d.notes || '-'
+        ]),
+      });
+    }
+
     save(doc, `Apple_Esports_EOD_${targetDate}.pdf`);
   };
 
