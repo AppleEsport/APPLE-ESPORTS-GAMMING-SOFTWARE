@@ -252,20 +252,27 @@ public class SyncCourierService : BackgroundService
         using (var scope = _serviceProvider.CreateAsyncScope())
         {
             var notifier = scope.ServiceProvider.GetRequiredService<IAdminNotifier>();
+            var howLong = AdminEmailTemplate.Describe(TimeSpan.FromSeconds(seconds));
+
             await notifier.NotifyAsync(
-                $"Internet was down at {branchName} - {AdminEmailTemplate.Describe(TimeSpan.FromSeconds(seconds))}",
+                $"{branchName} had no internet for {howLong} - nothing was lost",
                 AdminEmailTemplate.Compose(
-                    "Branch could not reach Head Office",
+                    $"{branchName} lost its internet",
                     AdminEmailTemplate.Amber,
+                    $"{branchName} could not reach the main server for {howLong}. The shop carried on working normally the whole time - customers played, bills were taken, and nobody would have noticed. The internet is back and everything from those {howLong} has now come through.",
                     new[]
                     {
                         ("Branch", branchName),
-                        ("Lost connection", IndiaTime.Format(since)),
-                        ("Reconnected", IndiaTime.Format(now)),
-                        ("Offline for", AdminEmailTemplate.Describe(TimeSpan.FromSeconds(seconds))),
-                        ("Effect on the shop", "None - play and billing carried on as normal"),
+                        ("", ""),
+                        ("Internet went at", IndiaTime.Format(since)),
+                        ("Came back at", IndiaTime.Format(now)),
+                        ("Gone for", howLong),
+                        ("", ""),
+                        ("Did the shop stop?", "No - everything kept working"),
+                        ("Was anything lost?", "No - it has all arrived now"),
                     },
-                    "Everything recorded while offline has now been delivered. Nothing was lost."));
+                    headline: $"No internet for {howLong}",
+                    footnote: "You are told about this so you know why this branch's figures showed up late. Nothing needs doing."));
         }
     }
 

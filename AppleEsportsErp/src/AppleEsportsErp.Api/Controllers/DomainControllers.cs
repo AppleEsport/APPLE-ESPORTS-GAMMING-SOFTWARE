@@ -753,17 +753,19 @@ public class OperatorsController : ControllerBase
             await _adminNotifier.NotifyAsync(
                 $"Operator moved branch: {op.FullName}",
                 AppleEsportsErp.Infrastructure.Services.AdminEmailTemplate.Compose(
-                    "Operator moved to another branch",
+                    "A staff member was moved to another branch",
                     AppleEsportsErp.Infrastructure.Services.AdminEmailTemplate.Amber,
+                    $"{op.FullName} now works at {newBranchName ?? "a different branch"} instead of {previousBranchName ?? "their old branch"}. From now on they can only see and use that branch.",
                     new[]
                     {
-                        ("Operator", op.FullName),
-                        ("Username", op.Username),
-                        ("Moved from", previousBranchName ?? "unknown"),
-                        ("Moved to", newBranchName ?? "unknown"),
-                        ("Changed at", AppleEsportsErp.Application.Services.IndiaTime.Now.ToString("dd MMM yyyy, hh:mm tt")),
+                        ("Staff member", op.FullName),
+                        ("Login name", op.Username),
+                        ("", ""),
+                        ("Used to work at", previousBranchName ?? "unknown"),
+                        ("Now works at", newBranchName ?? "unknown"),
+                        ("When", AppleEsportsErp.Application.Services.IndiaTime.Now.ToString("dd MMM yyyy, hh:mm tt")),
                     },
-                    "If you did not make this change, review it in Settings straight away."));
+                    footnote: "If you did not do this, open Settings and change it back."));
         }
 
         return Ok(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Ok(new { op.Id, op.Username }));
@@ -990,23 +992,27 @@ public class OperatorsController : ControllerBase
                     ? $"Promoted to Admin: {op.FullName}"
                     : $"Admin rights removed: {op.FullName}",
                 AppleEsportsErp.Infrastructure.Services.AdminEmailTemplate.Compose(
-                    dto.IsGlobalAdmin ? "Operator promoted to Admin" : "Admin rights removed",
+                    dto.IsGlobalAdmin ? "A staff member was made an Admin" : "Admin access was taken away",
+                    dto.IsGlobalAdmin ? AppleEsportsErp.Infrastructure.Services.AdminEmailTemplate.Red : AppleEsportsErp.Infrastructure.Services.AdminEmailTemplate.Amber,
                     dto.IsGlobalAdmin
-                        ? AppleEsportsErp.Infrastructure.Services.AdminEmailTemplate.Red
-                        : AppleEsportsErp.Infrastructure.Services.AdminEmailTemplate.Amber,
+                        ? $"{op.FullName} used to be an operator at {branchName ?? "their branch"}. They are now an Admin, which means they can see all of your branches and all of the money figures."
+                        : $"{op.FullName} is no longer an Admin. They are back to being an operator at {branchName ?? "their branch"}, and can only see that one branch.",
                     new[]
                     {
                         ("Staff member", op.FullName),
-                        ("Username", op.Username),
-                        ("Home branch", branchName ?? "unknown"),
-                        ("Was", wasAdmin ? "Admin" : "Operator"),
-                        ("Now", dto.IsGlobalAdmin ? "Admin" : "Operator"),
+                        ("Login name", op.Username),
+                        ("Their branch", branchName ?? "unknown"),
+                        ("", ""),
+                        ("They were", wasAdmin ? "an Admin" : "an operator"),
+                        ("They are now", dto.IsGlobalAdmin ? "an Admin" : "an operator"),
+                        ("", ""),
                         ("Changed by", adminName),
-                        ("Changed at", AppleEsportsErp.Application.Services.IndiaTime.Now.ToString("dd MMM yyyy, hh:mm tt")),
+                        ("When", AppleEsportsErp.Application.Services.IndiaTime.Now.ToString("dd MMM yyyy, hh:mm tt")),
                     },
-                    dto.IsGlobalAdmin
-                        ? "An Admin can see every branch and every figure. If you did not do this, remove it now."
-                        : "This account is back to operator access at its own branch only."));
+                    headline: dto.IsGlobalAdmin ? "Now an Admin" : "Back to operator",
+                    footnote: dto.IsGlobalAdmin
+                        ? "An Admin sees every branch and every rupee. If you did not do this, open Settings and take it away now."
+                        : "This person can only see their own branch again."));
         }
 
         return Ok(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Ok(new { message = dto.IsGlobalAdmin ? "Operator promoted to Global Admin" : "Operator demoted — original permissions restored" }));

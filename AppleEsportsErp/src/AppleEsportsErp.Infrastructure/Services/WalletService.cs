@@ -336,19 +336,28 @@ public class WalletService : IWalletService
             // outside the till is exactly what someone paying the bills wants sight of, and
             // until now only the member was ever told.
             await _adminNotifier.NotifyAsync(
-                $"Wallet top-up: {member.FullName} - Rs {amount:0.00}",
+                $"Money added to a wallet - Rs {amount:0.00} - {member.FullName}",
                 AdminEmailTemplate.Compose(
-                    "Member wallet topped up",
+                    "Money added to a member's wallet",
                     AdminEmailTemplate.Green,
+                    bonusAmount > 0
+                        ? $"{member.FullName} paid Rs {amount:0.00} to top up their wallet. We added a Rs {bonusAmount:0.00} bonus on top, so Rs {totalCredit:0.00} went into the wallet altogether."
+                        : $"{member.FullName} paid Rs {amount:0.00} to top up their wallet. No bonus was added to this one.",
                     new[]
                     {
-                        ("Member", $"{member.FullName} ({member.MemberNumber})"),
-                        ("Top-up", $"Rs {amount:0.00}"),
-                        ("Bonus", $"Rs {bonusAmount:0.00}"),
-                        ("New gaming balance", $"Rs {member.GamingBalance:0.00}"),
-                        ("New food balance", $"Rs {member.FoodBalance:0.00}"),
-                        ("Taken at", AppleEsportsErp.Application.Services.IndiaTime.Now.ToString("dd MMM yyyy, hh:mm tt")),
-                    }));
+                        ("Member", member.FullName),
+                        ("Member number", string.IsNullOrWhiteSpace(member.MemberNumber) ? "-" : member.MemberNumber),
+                        ("", ""),
+                        ("Money they paid", $"Rs {amount:0.00}"),
+                        ("Bonus we added", $"Rs {bonusAmount:0.00}"),
+                        ("Total into wallet", $"Rs {totalCredit:0.00}"),
+                        ("", ""),
+                        ("Gaming balance now", $"Rs {member.GamingBalance:0.00}"),
+                        ("Food balance now", $"Rs {member.FoodBalance:0.00}"),
+                        ("When", AppleEsportsErp.Application.Services.IndiaTime.Now.ToString("dd MMM yyyy, hh:mm tt")),
+                    },
+                    headline: $"Rs {amount:0.00}",
+                    footnote: "The member has been sent their own receipt. This copy is for your records."));
 
             if (string.IsNullOrWhiteSpace(member.Username) || !string.IsNullOrWhiteSpace(member.PasswordHash))
                 return;

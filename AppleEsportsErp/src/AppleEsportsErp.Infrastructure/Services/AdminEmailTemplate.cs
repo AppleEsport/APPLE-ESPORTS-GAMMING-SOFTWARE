@@ -1,13 +1,18 @@
-﻿using System.Text;
+using System.Text;
+using System.Net;
 
 namespace AppleEsportsErp.Infrastructure.Services;
 
 /// <summary>
 /// The Apple Esports email shell, in one place.
 ///
-/// The existing alerts each carry their own copy of about twenty lines of inline HTML. That
-/// is fine for two and unmanageable for six, and they have already drifted apart from one
-/// another. New alerts build on this instead.
+/// Built with tables and inline styles throughout, deliberately. Outlook renders none of
+/// flexbox, grid or external stylesheets, and a layout that only works in Gmail is a layout
+/// that half the recipients see collapsed into a column of unstyled text.
+///
+/// Every alert reads the same way: a plain-English sentence saying what happened, one large
+/// figure if there is one worth seeing at a glance, then the detail. Someone checking their
+/// phone should be able to stop after the first line.
 /// </summary>
 public static class AdminEmailTemplate
 {
@@ -19,57 +24,123 @@ public static class AdminEmailTemplate
     public static string Describe(TimeSpan span)
     {
         if (span.TotalMinutes < 1) return $"{Math.Max(1, (int)span.TotalSeconds)} seconds";
-        if (span.TotalHours < 1) return $"{(int)span.TotalMinutes} minutes";
+        if (span.TotalHours < 1)
+        {
+            var mins = (int)span.TotalMinutes;
+            return $"{mins} minute{(mins == 1 ? "" : "s")}";
+        }
 
         var hours = (int)span.TotalHours;
         var minutes = span.Minutes;
-        return minutes == 0 ? $"{hours} hour{(hours == 1 ? "" : "s")}"
-                            : $"{hours} hour{(hours == 1 ? "" : "s")} {minutes} minutes";
+        return minutes == 0
+            ? $"{hours} hour{(hours == 1 ? "" : "s")}"
+            : $"{hours} hour{(hours == 1 ? "" : "s")} {minutes} minute{(minutes == 1 ? "" : "s")}";
     }
 
+    /// <param name="heading">Short title, e.g. "Money taken today".</param>
+    /// <param name="summary">One sentence in plain English saying what happened and why it matters.</param>
+    /// <param name="headline">Optional single figure worth seeing without reading, e.g. "Rs 12,450".</param>
+    /// <param name="rows">Label/value detail. A blank label draws a divider.</param>
+    /// <param name="footnote">Optional closing note - what to do, or reassurance.</param>
     public static string Compose(
         string heading,
         string accent,
+        string summary,
         IEnumerable<(string Label, string Value)> rows,
+        string? headline = null,
         string? footnote = null)
     {
-        var body = new StringBuilder();
+        var m = new StringBuilder();
 
-        body.Append(
-            "<div style='background-color:#050505;color:#ffffff;font-family:\"Segoe UI\",Tahoma,Geneva,Verdana,sans-serif;padding:40px 20px;'>" +
-            "<div style='max-width:600px;margin:0 auto;background-color:#111111;border:1px solid #333333;border-radius:12px;overflow:hidden;'>" +
-            "<div style='background:linear-gradient(135deg,#1a1a24 0%,#0d0d14 100%);padding:30px 20px;border-bottom:2px solid " + accent + ";text-align:center;'>" +
-            "<h1 style='margin:0;font-size:26px;letter-spacing:2px;color:#ffffff;text-transform:uppercase;'>APPLE ESPORTS</h1>" +
-            "</div><div style='padding:36px 30px;'>" +
-            "<h2 style='margin-top:0;color:" + accent + ";font-size:22px;border-bottom:2px solid #333333;padding-bottom:14px;'>" +
-            System.Net.WebUtility.HtmlEncode(heading) + "</h2>" +
-            "<table style='width:100%;border-collapse:collapse;font-size:15px;'>");
+        m.Append(
+            "<!DOCTYPE html><html><body style='margin:0;padding:0;background-color:#0a0a0f;'>" +
+            // Preheader: what the inbox shows next to the subject before it is opened.
+            "<div style='display:none;max-height:0;overflow:hidden;'>" + Esc(summary) + "</div>" +
+            "<table role='presentation' width='100%' cellpadding='0' cellspacing='0' " +
+                   "style='background-color:#0a0a0f;padding:28px 12px;'><tr><td align='center'>" +
+            "<table role='presentation' width='100%' cellpadding='0' cellspacing='0' " +
+                   "style='max-width:600px;background-color:#131319;border:1px solid #2a2a33;border-radius:14px;overflow:hidden;'>");
+
+        // ── Brand bar ──
+        m.Append(
+            "<tr><td style='background-color:#0e0e14;padding:26px 30px;border-bottom:3px solid " + accent + ";'>" +
+            "<div style='font-family:Arial,Helvetica,sans-serif;font-size:21px;font-weight:bold;" +
+                   "letter-spacing:3px;color:#ffffff;'>APPLE ESPORTS</div>" +
+            "<div style='font-family:Arial,Helvetica,sans-serif;font-size:11px;letter-spacing:2px;" +
+                   "color:#7a7a88;padding-top:5px;text-transform:uppercase;'>Gaming Caf" + "é" + " Management</div>" +
+            "</td></tr>");
+
+        // ── Heading + the plain-English line ──
+        m.Append(
+            "<tr><td style='padding:30px 30px 0 30px;font-family:Arial,Helvetica,sans-serif;'>" +
+            "<div style='font-size:20px;font-weight:bold;color:" + accent + ";padding-bottom:12px;'>" +
+            Esc(heading) + "</div>" +
+            "<div style='font-size:15px;line-height:1.65;color:#d4d4dc;'>" + Esc(summary) + "</div>" +
+            "</td></tr>");
+
+        // ── The one figure worth seeing at a glance ──
+        if (!string.IsNullOrWhiteSpace(headline))
+        {
+            m.Append(
+                "<tr><td style='padding:24px 30px 0 30px;'>" +
+                "<table role='presentation' width='100%' cellpadding='0' cellspacing='0' " +
+                       "style='background-color:#0e0e14;border:1px solid #2a2a33;border-radius:10px;'>" +
+                "<tr><td align='center' style='padding:22px;font-family:Arial,Helvetica,sans-serif;" +
+                       "font-size:30px;font-weight:bold;color:#ffffff;letter-spacing:1px;'>" +
+                Esc(headline) + "</td></tr></table></td></tr>");
+        }
+
+        // ── Detail ──
+        m.Append("<tr><td style='padding:26px 30px 0 30px;'>" +
+                 "<table role='presentation' width='100%' cellpadding='0' cellspacing='0' " +
+                        "style='font-family:Arial,Helvetica,sans-serif;font-size:14px;'>");
 
         foreach (var (label, value) in rows)
         {
-            body.Append(
+            if (string.IsNullOrWhiteSpace(label) && string.IsNullOrWhiteSpace(value))
+            {
+                m.Append("<tr><td colspan='2' style='padding:6px 0;'>" +
+                         "<div style='border-top:1px solid #2a2a33;'></div></td></tr>");
+                continue;
+            }
+
+            // Indented labels group under the line above them, so a breakdown reads as one.
+            var indented = label.StartsWith("  ");
+            m.Append(
                 "<tr>" +
-                "<td style='padding:10px 0;color:#9ca3af;width:42%;vertical-align:top;'>" +
-                System.Net.WebUtility.HtmlEncode(label) + "</td>" +
-                "<td style='padding:10px 0;color:#ffffff;font-weight:600;'>" +
-                System.Net.WebUtility.HtmlEncode(value) + "</td>" +
-                "</tr>");
+                "<td style='padding:11px 12px 11px 0;color:" + (indented ? "#7a7a88" : "#9a9aa8") + ";" +
+                       "border-bottom:1px solid #1f1f27;vertical-align:top;width:48%;" +
+                       (indented ? "padding-left:16px;font-size:13px;" : "") + "'>" +
+                Esc(label.TrimStart()) + "</td>" +
+                "<td style='padding:11px 0;color:#ffffff;font-weight:bold;" +
+                       "border-bottom:1px solid #1f1f27;vertical-align:top;" +
+                       (indented ? "font-size:13px;font-weight:normal;color:#d4d4dc;" : "") + "'>" +
+                Esc(value) + "</td></tr>");
         }
 
-        body.Append("</table>");
+        m.Append("</table></td></tr>");
 
         if (!string.IsNullOrWhiteSpace(footnote))
         {
-            body.Append(
-                "<p style='margin-top:28px;padding-top:18px;border-top:1px solid #333333;color:#9ca3af;font-size:13px;line-height:1.6;'>" +
-                System.Net.WebUtility.HtmlEncode(footnote) + "</p>");
+            m.Append(
+                "<tr><td style='padding:24px 30px 0 30px;'>" +
+                "<table role='presentation' width='100%' cellpadding='0' cellspacing='0' " +
+                       "style='background-color:#0e0e14;border-left:3px solid " + accent + ";border-radius:6px;'>" +
+                "<tr><td style='padding:16px 18px;font-family:Arial,Helvetica,sans-serif;font-size:13px;" +
+                       "line-height:1.65;color:#b4b4c2;'>" + Esc(footnote) + "</td></tr></table></td></tr>");
         }
 
-        body.Append(
-            "</div><div style='padding:18px;text-align:center;color:#6b7280;font-size:11px;border-top:1px solid #222222;'>" +
-            "Sent automatically by Apple Esports. Times are IST." +
-            "</div></div></div>");
+        m.Append(
+            "<tr><td style='padding:28px 30px 26px 30px;'>" +
+            "<div style='border-top:1px solid #2a2a33;padding-top:16px;font-family:Arial,Helvetica,sans-serif;" +
+                   "font-size:11px;line-height:1.7;color:#6a6a78;'>" +
+            "Sent automatically by Apple Esports. All times are Indian Standard Time.<br>" +
+            "You are receiving this because you are an owner or admin on this system." +
+            "</div></td></tr>" +
+            "</table></td></tr></table></body></html>");
 
-        return body.ToString();
+        return m.ToString();
     }
+
+    private static string Esc(string? value) => WebUtility.HtmlEncode(value ?? string.Empty);
 }

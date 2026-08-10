@@ -161,23 +161,30 @@ public static class SessionDowntimeRecovery
             var branchName = await db.Branches.Where(b => b.Id == outage.BranchId)
                 .Select(b => b.Name).FirstOrDefaultAsync() ?? "Unknown branch";
 
+            var howLong = AdminEmailTemplate.Describe(TimeSpan.FromSeconds(outage.DurationSeconds));
+
             await notifier.NotifyAsync(
-                $"Power cut at {branchName} - down {AdminEmailTemplate.Describe(TimeSpan.FromSeconds(outage.DurationSeconds))}",
+                $"{branchName} went off for {howLong} - {outage.SessionsAffected} customer(s) playing",
                 AdminEmailTemplate.Compose(
-                    "The system was down",
+                    $"{branchName} lost power",
                     AdminEmailTemplate.Red,
+                    $"The system at {branchName} stopped running for {howLong}. This is usually a power cut, but a restart or a Windows update looks the same. " +
+                    (outage.SessionsAffected > 0
+                        ? $"{outage.SessionsAffected} customer{(outage.SessionsAffected == 1 ? " was" : "s were")} playing at the time."
+                        : "Nobody was playing at the time."),
                     new[]
                     {
                         ("Branch", branchName),
-                        ("What happened", "The system stopped running - power cut, restart or update."),
-                        ("Went down", IndiaTime.Format(outage.StartedAt)),
-                        ("Came back", IndiaTime.Format(outage.EndedAt)),
-                        ("Down for", AdminEmailTemplate.Describe(TimeSpan.FromSeconds(outage.DurationSeconds))),
-                        ("Sessions affected", outage.SessionsAffected.ToString()),
-                        ("Trading day", $"{outage.BusinessDay:dd MMM yyyy}"),
+                        ("", ""),
+                        ("Went off at", IndiaTime.Format(outage.StartedAt)),
+                        ("Came back at", IndiaTime.Format(outage.EndedAt)),
+                        ("Off for", howLong),
+                        ("", ""),
+                        ("Customers playing", outage.SessionsAffected.ToString()),
+                        ("Counts towards", $"{outage.BusinessDay:dd MMM yyyy}"),
                     },
-                    "Those sessions are paused, not stopped. The operator is asked whether each " +
-                    "customer is still there before any time is charged."));
+                    headline: $"Off for {howLong}",
+                    footnote: "Nobody has been charged for the time the system was off. Those customers' timers are paused, and the operator is asked whether each person is still there before any more time is counted."));
         }
 
         logger.LogInformation(

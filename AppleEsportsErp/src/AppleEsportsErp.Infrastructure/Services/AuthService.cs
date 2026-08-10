@@ -436,32 +436,46 @@ public class AuthService : IAuthService
                 .Where(d => d.BranchId == shift.BranchId && d.StartedAt >= dayStart && d.StartedAt < dayEnd)
                 .ToListAsync();
 
+            var total = payments.Sum(p => p.TotalAmount);
+
             var rows = new List<(string, string)>
             {
                 ("Branch", branchName),
-                ("Trading day", $"{businessDay:dd MMM yyyy}  (06:00 to 06:00)"),
-                ("Closed at", IndiaTime.Format(shift.LogoutTime ?? DateTimeOffset.UtcNow)),
-                ("Sessions", sessions.ToString()),
-                ("Total taken", $"Rs {payments.Sum(p => p.TotalAmount):0.00}"),
-                ("  of which cash", $"Rs {payments.Sum(p => p.CashAmount):0.00}"),
-                ("  of which online", $"Rs {payments.Sum(p => p.OnlineAmount):0.00}"),
-                ("  of which wallet", $"Rs {payments.Sum(p => p.WalletAmount):0.00}"),
-                ("Interruptions today", outages.Count == 0 ? "none" : outages.Count.ToString()),
+                ("Day", $"{businessDay:dd MMM yyyy}"),
+                ("Counted from", "6 in the morning to 6 the next morning"),
+                ("Shop closed at", IndiaTime.Format(shift.LogoutTime ?? DateTimeOffset.UtcNow)),
+                ("", ""),
+                ("Total money taken", $"Rs {total:0.00}"),
+                ("  Cash", $"Rs {payments.Sum(p => p.CashAmount):0.00}"),
+                ("  Online or UPI", $"Rs {payments.Sum(p => p.OnlineAmount):0.00}"),
+                ("  Paid from wallets", $"Rs {payments.Sum(p => p.WalletAmount):0.00}"),
+                ("", ""),
+                ("Customers who played", sessions.ToString()),
+                ("Bills taken", payments.Count.ToString()),
+                ("", ""),
+                ("Problems today", outages.Count == 0
+                    ? "None - the system ran all day"
+                    : $"{outages.Count} interruption{(outages.Count == 1 ? "" : "s")}"),
             };
 
             foreach (var outage in outages)
             {
-                rows.Add(($"  {outage.Kind}",
-                    $"{IndiaTime.Format(outage.StartedAt)}, lasted {AdminEmailTemplate.Describe(TimeSpan.FromSeconds(outage.DurationSeconds))}"));
+                var what = outage.Kind == DowntimeKind.InternetOffline
+                    ? "Internet was down"
+                    : "System was off";
+                rows.Add(($"  {what}",
+                    $"from {IndiaTime.FormatTime(outage.StartedAt)}, for {AdminEmailTemplate.Describe(TimeSpan.FromSeconds(outage.DurationSeconds))}"));
             }
 
             await _adminNotifier.NotifyAsync(
-                $"End of day - {branchName} - {businessDay:dd MMM yyyy}",
+                $"{branchName} - money taken on {businessDay:dd MMM yyyy} - Rs {total:0.00}",
                 AdminEmailTemplate.Compose(
-                    "End of day summary",
+                    $"How {branchName} did today",
                     AdminEmailTemplate.Green,
+                    $"The shop has closed for the day. {branchName} took Rs {total:0.00} from {sessions} customer{(sessions == 1 ? "" : "s")} on {businessDay:dd MMM yyyy}.",
                     rows,
-                    "Sent because the operator marked this as the last shift of the day."));
+                    headline: $"Rs {total:0.00}",
+                    footnote: "The day runs from 6 in the morning to 6 the next morning, so late-night play counts towards the day it started on. You are getting this because the operator ticked \"last shift of the day\" when they finished."));
         }
         catch (Exception ex)
         {
