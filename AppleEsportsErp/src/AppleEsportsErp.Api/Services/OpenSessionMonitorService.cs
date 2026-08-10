@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using AppleEsportsErp.Application.Services;
 using AppleEsportsErp.Application.Interfaces;
 using AppleEsportsErp.Domain.Enums;
 using AppleEsportsErp.Infrastructure.Data;
@@ -59,7 +60,10 @@ public class OpenSessionMonitorService : BackgroundService
             var member = await db.Members.FindAsync(new object[] { session.MemberId! }, stoppingToken);
             if (member == null) continue;
 
-            var actualDurationMin = (now - session.StartTime).TotalMinutes;
+            // Excludes any downtime already credited back, so a power cut never burns
+            // through a member's wallet balance while nobody was playing.
+            var actualDurationMin = (double)SessionTimeCalculator.ElapsedMinutes(
+                session.StartTime, session.PausedSeconds, now);
             decimal ratePerHour = 80m; // Member rate
             decimal hours = Math.Max((decimal)actualDurationMin / 60m, 1m / 60m);
             decimal accruedCost = Math.Round(hours * ratePerHour, 2);

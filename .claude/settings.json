@@ -15,7 +15,15 @@
       "Bash(ssh -i \"C:\\\\Users\\\\harsh\\\\Downloads\\\\ORACLE\\\\ssh-key-2026-07-21 \\(Private\\).key\" ubuntu@140.245.195.222 \"cd /home/ubuntu/APPLE-ESPORTS-GAMMING-SOFTWARE-new && cp docker-compose.yml.backup docker-compose.yml && cat docker-compose.yml | grep -A 5 'nginx:' | head -20\")",
       "Read(//home/ubuntu/APPLE-ESPORTS-GAMMING-SOFTWARE-new/**)",
       "Bash(ssh -i \"C:\\\\Users\\\\harsh\\\\Downloads\\\\ORACLE\\\\ssh-key-2026-07-21 \\(Private\\).key\" ubuntu@140.245.195.222 \"cd /home/ubuntu/APPLE-ESPORTS-GAMMING-SOFTWARE-new && sed -n '/^  nginx:/,/^  [a-z]/p' docker-compose.yml | head -30\")",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(dotnet --version)",
+      "Bash(dotnet --list-sdks)",
+      "Bash(reg query *)",
+      "PowerShell($paths = @\\(\"HKLM:\\\\SOFTWARE\\\\WOW6432Node\\\\Microsoft\\\\EdgeUpdate\\\\Clients\\\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}\", \"HKLM:\\\\SOFTWARE\\\\Microsoft\\\\EdgeUpdate\\\\Clients\\\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}\"\\); foreach \\($p in $paths\\) { if \\(Test-Path $p\\) { \"FOUND: \" + \\(Get-ItemProperty $p\\).pv } }; \"--- Docker ---\"; try { docker --version } catch { \"docker not found\" })",
+      "PowerShell(New-Item -ItemType Directory -Force \"c:\\\\Users\\\\harsh\\\\Desktop\\\\FINAL APPLE ESPORTS GAMMING SOFTWARE\\\\desktop-client\")",
+      "PowerShell(& \"C:\\\\Users\\\\harsh\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-harsh-Desktop-FINAL-APPLE-ESPORTS-GAMMING-SOFTWARE\\\\18ce7b45-694e-4ee3-8539-73f5f4e4cffd\\\\scratchpad\\\\make-icon.ps1\" -Source \"c:\\\\Users\\\\harsh\\\\Desktop\\\\FINAL APPLE ESPORTS GAMMING SOFTWARE\\\\client\\\\public\\\\logo.png\" -Destination \"c:\\\\Users\\\\harsh\\\\Desktop\\\\FINAL APPLE ESPORTS GAMMING SOFTWARE\\\\desktop-client\\\\appicon.ico\")",
+      "Bash(xargs cat)",
+      "Bash(xargs grep -n \"Task\")"
     ]
   }
 }

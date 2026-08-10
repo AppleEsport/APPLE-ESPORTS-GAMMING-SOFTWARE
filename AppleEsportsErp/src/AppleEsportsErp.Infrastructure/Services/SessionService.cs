@@ -286,14 +286,23 @@ public class SessionService : ISessionService
             if (session == null)
                 throw new NotFoundException("Session not found", "SESSION_NOT_FOUND");
 
-            if (session.State != SessionState.Active)
+            // Interrupted is stoppable too: that is the "customer left during the power cut"
+            // case, and they must still be billed for the minutes they actually played.
+            if (session.State != SessionState.Active && session.State != SessionState.Interrupted)
                 throw new AppException("Session is already ended.", System.Net.HttpStatusCode.BadRequest, "SESSION_ALREADY_ENDED");
 
             var now = DateTimeOffset.UtcNow;
+
+            // Fold any time spent on hold into the paused total before billing, so the
+            // wait for an operator's decision is never charged to the customer.
+            SettleInterruption(session, now);
+
             session.State = SessionState.Completed;
             session.UpdatedAt = now;
             session.EndTime = now;
-            session.ActualDurationMin = (int)(now - session.StartTime).TotalMinutes;
+            // Time the branch spent powered off is not play time — bill only what was actually used.
+            session.ActualDurationMin = (int)SessionTimeCalculator.ElapsedMinutes(
+                session.StartTime, session.PausedSeconds, now);
             
             var bill = session.Bills.FirstOrDefault();
 
@@ -448,6 +457,104 @@ public class SessionService : ISessionService
                 StartTime = session.StartTime,
                 EndTime = session.EndTime,
                 DurationMinutes = session.ActualDurationMin ?? 0,
+                ExpectedAmount = session.TotalAmount,
+                PackageName = session.GamingType,
+                Status = session.State,
+                BillId = session.Bills.FirstOrDefault()?.Id ?? Guid.Empty
+            };
+        }
+        catch
+        {
+            await _uow.RollbackTransactionAsync();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Folds time spent on hold after an outage into the session's paused total, and pushes
+    /// a fixed-duration finish time out by the same amount. Called before billing a session
+    /// and before resuming one, so the gap between the power returning and an operator
+    /// acting on it is never charged to the customer. Safe to call on any session.
+    /// </summary>
+    private static void SettleInterruption(Session session, DateTimeOffset now)
+    {
+        if (session.InterruptedAt is not { } interruptedAt)
+            return;
+
+        var heldSeconds = (int)Math.Max(0, (now - interruptedAt).TotalSeconds);
+        session.PausedSeconds += heldSeconds;
+
+        if (session.EndTime is { } endTime)
+            session.EndTime = endTime.AddSeconds(heldSeconds);
+
+        session.InterruptedAt = null;
+    }
+
+    public async Task<SessionDto> ResumeSessionAsync(Guid branchId, Guid operatorId, Guid sessionId)
+    {
+        await _uow.BeginTransactionAsync();
+        try
+        {
+            var session = await _db.Sessions
+                .Include(s => s.Pc)
+                .Include(s => s.Bills)
+                .FirstOrDefaultAsync(s => s.Id == sessionId && s.BranchId == branchId);
+
+            if (session == null)
+                throw new NotFoundException("Session not found", "SESSION_NOT_FOUND");
+
+            if (session.State != SessionState.Interrupted)
+                throw new AppException(
+                    "Only a session interrupted by an outage can be resumed.",
+                    System.Net.HttpStatusCode.BadRequest, "SESSION_NOT_INTERRUPTED");
+
+            var now = DateTimeOffset.UtcNow;
+
+            // Credit the hold, then start the clock again from this moment.
+            SettleInterruption(session, now);
+
+            session.State = SessionState.Active;
+            session.NeedsTimeReview = false;
+            session.LastHeartbeatAt = now;
+            session.UpdatedAt = now;
+
+            await _db.SaveChangesAsync();
+            await _uow.CommitTransactionAsync();
+
+            var pc = session.Pc;
+
+            // Unlock the PC again for whatever time the customer has left, not the
+            // original purchase — they already used part of it before the outage.
+            if (pc != null)
+            {
+                var elapsed = SessionTimeCalculator.ElapsedMinutes(session.StartTime, session.PausedSeconds, now);
+                var remaining = session.PlannedDurationMin.HasValue
+                    ? Math.Max(0, session.PlannedDurationMin.Value - (int)elapsed)
+                    : 0;   // open/pay-as-you-go session — no countdown to hand the agent
+
+                await _hubNotifier.SendUnlockCommandToAgentAsync(pc.Id, remaining, session.CustomerName ?? "Guest");
+                await _hubNotifier.BroadcastPcStatusChangeAsync(branchId, pc.Id);
+                await _hubNotifier.BroadcastSessionUpdateAsync(branchId, session.Id);
+            }
+
+            await _activityService.LogActivityAsync(
+                session.Id, branchId,
+                "session_resumed",
+                $"Session resumed after outage - {session.PausedSeconds / 60}m of downtime credited back",
+                null);
+
+            return new SessionDto
+            {
+                Id = session.Id,
+                PcId = session.PcId,
+                PcName = pc?.PcNumber ?? string.Empty,
+                BranchId = branchId,
+                OperatorId = session.OperatorId,
+                ShiftId = session.ShiftId ?? Guid.Empty,
+                CustomerName = session.CustomerName,
+                StartTime = session.StartTime,
+                EndTime = session.EndTime,
+                DurationMinutes = session.PlannedDurationMin ?? 0,
                 ExpectedAmount = session.TotalAmount,
                 PackageName = session.GamingType,
                 Status = session.State,

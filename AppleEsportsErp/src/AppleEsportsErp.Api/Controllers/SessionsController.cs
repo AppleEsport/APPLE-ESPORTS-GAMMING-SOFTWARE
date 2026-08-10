@@ -53,6 +53,19 @@ public class SessionsController : ControllerBase
         return Ok(ApiResponse<SessionDto>.Ok(result));
     }
 
+    /// <summary>
+    /// Restarts a session that was put on hold by a power cut or restart, with the
+    /// customer's unused paid time intact. The alternative — the customer went home —
+    /// is the existing stop endpoint, which bills only the minutes actually played.
+    /// </summary>
+    [HttpPost("{id}/resume")]
+    public async Task<IActionResult> ResumeSession(Guid id)
+    {
+        var result = await _sessionService.ResumeSessionAsync(
+            GetBranchId(), await this.GetOperatorIdAsync(), id);
+        return Ok(ApiResponse<SessionDto>.Ok(result));
+    }
+
     [HttpPost("{id}/stop")]
     public async Task<IActionResult> StopSession(Guid id, [FromBody] StopSessionDto? dto = null)
     {

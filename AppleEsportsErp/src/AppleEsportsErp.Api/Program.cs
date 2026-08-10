@@ -263,6 +263,8 @@ builder.Services.AddHostedService<AppleEsportsErp.Api.Services.OpenSessionMonito
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.FixedDurationSessionMonitorService>();
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.DeferredBillingMonitorService>();
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.SessionActivityCleanupService>();
+// Marks live sessions as still running, so a power cut can be told apart from play time.
+builder.Services.AddHostedService<AppleEsportsErp.Api.Services.SessionHeartbeatService>();
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.SyncCourierService>();
 builder.Services.AddScoped<IOfflineSyncService, OfflineSyncService>();
 builder.Services.AddScoped<IEmployeeService, EmployeeService>();
@@ -331,6 +333,21 @@ using (var scope = app.Services.CreateScope())
     {
         Log.Warning("Database migration skipped: {Message} | Inner: {Inner}", ex.Message, ex.InnerException?.Message);
     }
+}
+
+// ── Credit back time lost while we were down (power cut, restart, update) ──
+// Must happen here, before app.Run() starts the hosted services: the fixed-duration
+// monitor auto-stops sessions whose EndTime has passed, and after an outage that
+// would close sessions which are only "expired" because the branch had no power.
+try
+{
+    var recoveryLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SessionDowntimeRecovery");
+    await AppleEsportsErp.Api.Services.SessionDowntimeRecovery.RunAsync(app.Services, recoveryLogger);
+}
+catch (Exception ex)
+{
+    // Never block start-up over this — worst case is that no time is credited back.
+    Log.Warning("Session downtime recovery skipped: {Message}", ex.Message);
 }
 
 // ── 1. Global Exception Handler (maps from errorHandler.js) ──

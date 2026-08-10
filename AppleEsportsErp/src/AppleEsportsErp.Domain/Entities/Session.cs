@@ -19,6 +19,32 @@ public class Session
     public int? PlannedDurationMin { get; set; }
     public int? ActualDurationMin { get; set; }
 
+    // ── Downtime tolerance (power cuts, restarts, failover) ──
+    // Elapsed time cannot be derived from the wall clock alone: if the branch loses
+    // power for 30 minutes, the clock still advances but the customer was not playing.
+    // A heartbeat stamps LastHeartbeatAt while the session is live; on start-up the gap
+    // since the last heartbeat is treated as downtime and credited back to the customer.
+
+    /// <summary>Last moment the system confirmed this session was actually running.</summary>
+    public DateTimeOffset? LastHeartbeatAt { get; set; }
+
+    /// <summary>Total seconds of downtime credited back — never billed to the customer.</summary>
+    public int PausedSeconds { get; set; }
+
+    /// <summary>
+    /// When the session was put on hold after an outage. The wait between the power
+    /// returning and an operator deciding what to do is also not play time, so this is
+    /// folded into <see cref="PausedSeconds"/> the moment the session is resumed or stopped.
+    /// </summary>
+    public DateTimeOffset? InterruptedAt { get; set; }
+
+    /// <summary>
+    /// Set when a recovered gap was too long to credit automatically (for example a PC left
+    /// on overnight with a session open). The operator is asked to confirm rather than the
+    /// system silently resuming or silently charging.
+    /// </summary>
+    public bool NeedsTimeReview { get; set; }
+
     // Billing — SOP: gaming and food MUST remain separated
     public decimal GamingAmount { get; set; }
     public decimal FoodAmount { get; set; }
