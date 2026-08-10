@@ -55,8 +55,10 @@ public class AppDbContext : DbContext
     public DbSet<VersionInfo> VersionInfos => Set<VersionInfo>();
     public DbSet<BranchVersionStatus> BranchVersionStatuses => Set<BranchVersionStatus>();
 
-    // Sync engine
+    // Sync engine — outbox is what a branch owes Head Office, inbox is what Head Office
+    // has been told by its branches.
     public DbSet<SyncOutboxEntry> SyncOutboxEntries => Set<SyncOutboxEntry>();
+    public DbSet<SyncInboxEntry> SyncInboxEntries => Set<SyncInboxEntry>();
 
     // Power cuts and lost connections, for the EOD and printed reports
     public DbSet<DowntimeEvent> DowntimeEvents => Set<DowntimeEvent>();

@@ -15,17 +15,20 @@ public class BillingService : IBillingService
     private readonly IAuditService _auditService;
     private readonly IHubNotificationService _hubNotification;
     private readonly IWalletService _walletService;
+    private readonly IOutboxService _outbox;
 
     public BillingService(
         IUnitOfWork unitOfWork,
         IAuditService auditService,
         IHubNotificationService hubNotification,
-        IWalletService walletService)
+        IWalletService walletService,
+        IOutboxService outbox)
     {
         _unitOfWork = unitOfWork;
         _auditService = auditService;
         _hubNotification = hubNotification;
         _walletService = walletService;
+        _outbox = outbox;
     }
 
     public async Task<PaginatedResult<BillDto>> GetActiveBillsAsync(Guid branchId, int page = 1, int pageSize = 50)
@@ -411,6 +414,26 @@ public class BillingService : IBillingService
                 TargetType = "bill",
                 TargetId = bill.Id,
                 Details = new { BillNumber = bill.BillNumber }
+            });
+
+            // Cash actually taken. This is the figure the owner reconciles the day against,
+            // so it goes up with the split intact — gaming, food and discount separately,
+            // plus how it was paid — rather than a single total Head Office cannot break down.
+            await _outbox.RecordEventAsync(branchId, "Bill", bill.Id, "bill.paid", new
+            {
+                billId = bill.Id,
+                billNumber = bill.BillNumber,
+                sessionId = completedSessionId,
+                operatorId,
+                shiftId,
+                paymentType = dto.PaymentType.ToString(),
+                cashAmount = dto.CashAmount,
+                totalPaid = totalPayment,
+                gamingAmount = bill.GamingAmount,
+                foodAmount = bill.FoodAmount,
+                discountAmount = bill.DiscountAmount,
+                billTotal = bill.TotalAmount,
+                paidAt = DateTimeOffset.UtcNow,
             });
 
             await _unitOfWork.CommitTransactionAsync();
