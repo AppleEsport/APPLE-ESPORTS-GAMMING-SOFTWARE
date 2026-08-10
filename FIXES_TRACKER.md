@@ -27,6 +27,12 @@ How to use this file:
 
 ## Fixed (history log)
 
+### Issue #22 — No "Forgot Password?" on the PC kiosk member login screen (2026-08-11)
+- **Problem:** The member login screen actually shown on the gaming station (the full-screen lock screen before a session starts) had no way to reset a forgotten password — only username/password fields, no link.
+- **Root cause:** The forgot-password flow was already built and wired up on two other member-login screens (`MemberLoginPage.jsx` at `/user/member-login`, and `OverlayMemberLoginScreen.jsx` inside an active session's overlay nav), but was never added to `PcLockScreen.jsx` — the actual entry screen members use before a session starts, and the one they hit most often.
+- **Fix:** Added the same inline "Forgot Password?" toggle/flow to `PcLockScreen.jsx`'s member login form, posting to `/api/auth/forgot-password` and reusing the existing backend endpoint/email flow.
+- **Files changed:** `client/src/pages/overlay/components/PcLockScreen.jsx`
+
 ### Issue #21 — Beep sound on login/branch switch, only at Adajan (2026-08-11)
 - **Problem:** Logging in as an operator, or switching branch to Adajan from Super Admin, played a notification beep every time. Other branches were silent.
 - **Root cause:** `GlobalFoodOrderListener.jsx` runs on every authenticated page and, on login/branch-change, calls `checkOrders()` to "baseline" the pending food-order count. That baseline call reused the exact same "did the count increase?" comparison as real new-order detection, starting from `prevPendingCount.current = 0`. So any branch that currently had a pending food order (count > 0) looked like it had "new" orders and beeped — Adajan happened to have one sitting in `Pending` status; other branches didn't.

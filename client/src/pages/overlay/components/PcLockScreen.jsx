@@ -21,6 +21,11 @@ export default function PcLockScreen() {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [loginError, setLoginError] = useState('');
   const [profile, setProfile] = useState(null);
+
+  const [isForgotPassword, setIsForgotPassword] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotSuccess, setForgotSuccess] = useState(false);
+  const [isSendingReset, setIsSendingReset] = useState(false);
   
   const [walletEmpty, setWalletEmpty] = useState(localStorage.getItem('walletEmptyAlert') === 'true');
 
@@ -74,6 +79,29 @@ export default function PcLockScreen() {
       setStep('selection');
     }
   }, [walkinDeclineEvent, walkinRequested]);
+
+  const handleForgotPassword = async (e) => {
+    e.preventDefault();
+    if (!forgotEmail) {
+      toast.error('Please enter your email address.');
+      return;
+    }
+    try {
+      setIsSendingReset(true);
+      await axios.post('/api/auth/forgot-password', { email: forgotEmail });
+      setForgotSuccess(true);
+      toast.success('Reset link sent! Please check your inbox.');
+      setTimeout(() => {
+        setIsForgotPassword(false);
+        setForgotSuccess(false);
+        setForgotEmail('');
+      }, 5000);
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Failed to send reset link.');
+    } finally {
+      setIsSendingReset(false);
+    }
+  };
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -378,8 +406,8 @@ export default function PcLockScreen() {
       exit={{ opacity: 0, y: -20 }}
       className="max-w-md w-full mx-auto card bg-bg-2/80 backdrop-blur-xl border-border/60 shadow-xl shadow-black/50 p-8 relative hover:border-accent transition-colors duration-300"
     >
-      <button 
-        onClick={() => setStep('selection')}
+      <button
+        onClick={() => (isForgotPassword ? setIsForgotPassword(false) : setStep('selection'))}
         className="absolute top-6 left-6 flex items-center gap-2 text-text-2 hover:text-text transition-colors"
       >
         <ArrowLeft className="w-5 h-5" />
@@ -393,6 +421,56 @@ export default function PcLockScreen() {
         <p className="text-text-2 font-body mt-2 text-sm">Start a session directly from your wallet.</p>
       </div>
 
+      {isForgotPassword ? (
+        <form onSubmit={handleForgotPassword} className="space-y-6">
+          <div className="text-center mb-4">
+            <p className="text-text-2 text-sm">Enter your account email to receive a reset link.</p>
+          </div>
+
+          {forgotSuccess ? (
+            <div className="bg-green-500/10 border border-green-500/30 text-green-500 text-sm p-4 rounded text-center">
+              Link sent! Please check your inbox.
+            </div>
+          ) : (
+            <div>
+              <label className="block text-sm font-medium text-text-2 mb-2 font-body tracking-wide">ACCOUNT EMAIL</label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <UserCheck className="h-5 w-5 text-text-3" />
+                </div>
+                <input
+                  type="email"
+                  required
+                  value={forgotEmail}
+                  onChange={(e) => setForgotEmail(e.target.value)}
+                  className="input w-full pl-10 focus:border-accent focus:ring-accent/30"
+                  placeholder="member@example.com"
+                />
+              </div>
+            </div>
+          )}
+
+          {!forgotSuccess && (
+            <button
+              type="submit"
+              disabled={isSendingReset || !forgotEmail}
+              className="w-full bg-accent hover:bg-accent-dark text-white font-semibold py-3 px-4 rounded-sm transition-all duration-200 flex items-center justify-center shadow-[0_0_15px_rgba(220,38,38,0.3)] disabled:opacity-50 disabled:cursor-not-allowed border border-accent/50 mt-4"
+            >
+              {isSendingReset ? <Loader2 className="w-5 h-5 animate-spin" /> : <span className="font-heading text-lg tracking-wider uppercase font-bold">Send Reset Link</span>}
+            </button>
+          )}
+
+          <div className="text-center mt-4">
+            <button
+              type="button"
+              onClick={() => setIsForgotPassword(false)}
+              className="text-text-2 hover:text-text text-sm transition-colors"
+            >
+              Back to Login
+            </button>
+          </div>
+        </form>
+      ) : (
       <form onSubmit={handleLogin} className="space-y-6">
         <div>
           <label className="block text-sm font-medium text-text-2 mb-2 font-body tracking-wide">USERNAME OR EMAIL</label>
@@ -426,10 +504,19 @@ export default function PcLockScreen() {
               placeholder="••••••••"
             />
           </div>
+          <div className="text-right mt-2">
+            <button
+              type="button"
+              onClick={() => setIsForgotPassword(true)}
+              className="text-sm text-text-2 hover:text-accent transition-colors"
+            >
+              Forgot Password?
+            </button>
+          </div>
         </div>
 
         {loginError && (
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0, y: -5 }} animate={{ opacity: 1, y: 0 }}
             className="p-3 bg-neon-red/10 border border-neon-red/30 rounded flex items-start gap-2"
           >
@@ -446,6 +533,7 @@ export default function PcLockScreen() {
           {isLoggingIn ? <Loader2 className="w-5 h-5 animate-spin" /> : <span className="font-heading text-lg tracking-wider uppercase font-bold">Login</span>}
         </button>
       </form>
+      )}
     </motion.div>
   );
 
