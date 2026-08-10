@@ -40,6 +40,18 @@ public class SyncCourierService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // Head Office has nowhere to send to, and the same build runs in both roles. Without
+        // this it polled every 30 seconds forever and logged a warning per branch each time,
+        // which is noise on the one instance whose logs matter most — and it buries the very
+        // warning that means something on a branch that genuinely cannot reach Head Office.
+        if (string.IsNullOrWhiteSpace(_configuration["Sync:HeadOfficeUrl"]))
+        {
+            _logger.LogInformation(
+                "No Sync:HeadOfficeUrl configured, so this instance is Head Office. " +
+                "The sync courier will not run; it is branches that report upward, not Head Office.");
+            return;
+        }
+
         _logger.LogInformation("Sync Courier service starting. Poll interval: {IntervalSeconds}s, Max attempts: {MaxAttempts}, Batch size: {BatchSize}",
             _pollIntervalSeconds, _maxAttempts, _batchSize);
 
