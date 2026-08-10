@@ -33,13 +33,12 @@ export function BranchProvider({ children }) {
       });
     }
 
-    // Super Admin — load all branches
-    if (isSuperAdmin) {
-      loadBranches();
-    }
+    // Load the branch list for everyone (needed for read-only branch lookups,
+    // e.g. dropdowns) — only Super Admin actually gets to switch the active branch.
+    loadBranches();
   }, [user, isSuperAdmin]);
 
-  // ── Load all branches (Super Admin) ──
+  // ── Load all branches ──
   const loadBranches = useCallback(async () => {
     try {
       setLoading(true);
@@ -47,19 +46,21 @@ export function BranchProvider({ children }) {
       const branchList = response.data.data;
       setBranches(branchList);
 
-      // Restore previously selected branch or default to 'All Branches' (null)
-      const savedBranch = localStorage.getItem('activeBranchId');
-      if (savedBranch && branchList.find((b) => b.id === savedBranch)) {
-        switchBranch(savedBranch, branchList);
-      } else {
-        switchBranch(null, branchList);
+      if (isSuperAdmin) {
+        // Restore previously selected branch or default to 'All Branches' (null)
+        const savedBranch = localStorage.getItem('activeBranchId');
+        if (savedBranch && branchList.find((b) => b.id === savedBranch)) {
+          switchBranch(savedBranch, branchList);
+        } else {
+          switchBranch(null, branchList);
+        }
       }
     } catch (error) {
       console.error('Failed to load branches:', error);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isSuperAdmin]);
 
   // ── Switch active branch (Super Admin only) ──
   const switchBranch = useCallback((branchId, branchList = branches) => {

@@ -567,6 +567,14 @@ export default function PcLockScreen() {
       {/* Background glow effects matching LandingGatewayPage */}
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-accent/20 rounded-full blur-[120px] pointer-events-none" />
 
+      {/* Background logo watermark */}
+      <img
+        src="/logo.png"
+        alt=""
+        aria-hidden="true"
+        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[450px] h-[450px] object-contain opacity-20 pointer-events-none select-none z-0"
+      />
+
       <div className="relative z-10 w-full py-8 my-auto">
         {walletEmpty && (
           <div className="mx-auto bg-neon-red/10 border border-neon-red/30 p-6 rounded-xl max-w-md animate-in zoom-in mb-8 text-center backdrop-blur-md shadow-[0_0_30px_rgba(255,51,102,0.2)]">

@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   User, Phone, Home, Briefcase, Landmark, Users,
   Search, Plus, ChevronDown, ChevronUp, Printer,
-  CheckCircle2, ArrowLeft, Eye, EyeOff, FileText, Shield, Store
+  CheckCircle2, ArrowLeft, Eye, EyeOff, FileText, Shield, Store,
+  UploadCloud, X, CreditCard
 } from 'lucide-react';
 import api from '../../config/api';
 import PageHeader from '../../components/layout/PageHeader';
@@ -14,9 +15,13 @@ import { BranchPickerOverlay } from '../../components/layout/BranchRequired';
 // ─── Print stylesheet injected once ───────────────────────────────────────────
 const printStyle = `
 @media print {
-  body > * { display: none !important; }
-  #employee-print-root { display: block !important; }
-  #employee-print-root { font-family: 'Arial', sans-serif; color: #000; padding: 30px; }
+  /* #employee-print-root is nested deep under #root — a display:none ancestor
+     would hide it regardless of its own display value, so hide via visibility
+     instead (a visible descendant overrides an invisible ancestor) and pull it
+     out of the page flow left behind by its now-invisible ancestors. */
+  body * { visibility: hidden; }
+  #employee-print-root, #employee-print-root * { visibility: visible; }
+  #employee-print-root { position: absolute; top: 0; left: 0; width: 100%; font-family: 'Arial', sans-serif; color: #000; padding: 30px; }
   .no-print { display: none !important; }
   .print-section { page-break-inside: avoid; margin-bottom: 20px; border: 1px solid #ccc; border-radius: 6px; padding: 14px; }
   .print-header { text-align: center; margin-bottom: 24px; border-bottom: 2px solid #000; padding-bottom: 12px; }
@@ -67,8 +72,91 @@ const emptyForm = () => ({
   positionTitle: '', department: '', supervisor: '', startDate: '',
   bankName: '', accountNumber: '', accountHolderName: '', bankBranch: '',
   refName: '', refRelationship: '', refPhone: '', refAddress: '',
+  photoDataUrl: '', aadharDataUrl: '',
   createSystemAccount: false, systemRole: 'Operator', systemUsername: '', systemPassword: '', systemPin: ''
 });
+
+const MAX_UPLOAD_BYTES = 5 * 1024 * 1024; // 5 MB
+
+// Reads a file into a data: URL. Images are downscaled/re-encoded as JPEG so the
+// resulting payload stays small enough to store as a DB text column; PDFs pass through as-is.
+function fileToDataUrl(file, maxDim = 900, quality = 0.82) {
+  return new Promise((resolve, reject) => {
+    if (file.type === 'application/pdf') {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error('Could not read file'));
+      reader.readAsDataURL(file);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          const scale = maxDim / Math.max(width, height);
+          width = Math.round(width * scale);
+          height = Math.round(height * scale);
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = () => reject(new Error('Invalid image file'));
+      img.src = reader.result;
+    };
+    reader.onerror = () => reject(new Error('Could not read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+// ─── Upload field: passport photo or Aadhar card ──────────────────────────────
+function UploadField({ label, accept, value, onChange, onError, previewClass, hint }) {
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (file.size > MAX_UPLOAD_BYTES) { onError('File is too large — please choose one under 5 MB'); return; }
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      onChange(dataUrl);
+    } catch {
+      onError('Could not process that file — try a different image');
+    }
+  };
+
+  const isPdf = value?.startsWith('data:application/pdf');
+
+  return (
+    <div>
+      <label className="text-[10px] font-bold uppercase tracking-widest text-text-3 block mb-1">{label}</label>
+      {value ? (
+        <div className="flex items-center gap-3">
+          {isPdf ? (
+            <div className={`${previewClass} flex items-center justify-center bg-bg-3 border border-border rounded-lg text-text-3`}>
+              <FileText className="w-6 h-6" />
+            </div>
+          ) : (
+            <img src={value} alt={label} className={`${previewClass} object-cover rounded-lg border border-border`} />
+          )}
+          <button type="button" onClick={() => onChange('')} className="flex items-center gap-1.5 px-3 py-1.5 border border-border rounded-lg text-xs font-semibold text-text-2 hover:text-neon-red hover:border-neon-red/40 transition-all">
+            <X className="w-3.5 h-3.5" /> Remove
+          </button>
+        </div>
+      ) : (
+        <label className="flex items-center gap-2 px-4 py-3 border border-dashed border-border rounded-lg text-text-3 hover:text-accent hover:border-accent/40 cursor-pointer transition-all text-xs font-semibold uppercase tracking-wider">
+          <UploadCloud className="w-4 h-4" />
+          Upload {label}
+          <input type="file" accept={accept} onChange={handleFile} className="hidden" />
+        </label>
+      )}
+      {hint && <p className="text-[10px] text-text-3 mt-1">{hint}</p>}
+    </div>
+  );
+}
 
 // ─── VIEW: Full employee record (read-only) ───────────────────────────────────
 function EmployeeDetailView({ employee, onBack }) {
@@ -97,8 +185,12 @@ function EmployeeDetailView({ employee, onBack }) {
         </div>
 
         <div className="bg-accent/5 border border-accent/20 rounded-xl p-5 flex flex-wrap gap-6 items-center">
-          <div className="w-16 h-16 rounded-full bg-accent/20 flex items-center justify-center">
-            <User className="w-8 h-8 text-accent" />
+          <div className="w-16 h-16 rounded-full bg-accent/20 flex items-center justify-center overflow-hidden shrink-0 print:w-24 print:h-28 print:rounded-md print:border print:border-black">
+            {employee.photoDataUrl ? (
+              <img src={employee.photoDataUrl} alt={employee.fullName} className="w-full h-full object-cover" />
+            ) : (
+              <User className="w-8 h-8 text-accent" />
+            )}
           </div>
           <div>
             <p className="text-xl font-heading font-extrabold text-text">{employee.fullName}</p>
@@ -147,6 +239,34 @@ function EmployeeDetailView({ employee, onBack }) {
             <Field label="Start Date" value={employee.startDate} />
           </div>
         </Section>
+
+        {(employee.photoDataUrl || employee.aadharDataUrl) && (
+          <Section icon={CreditCard} title="Documents" color="text-neon-blue">
+            <div className={grid2}>
+              {employee.photoDataUrl && (
+                <div>
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-text-3 block mb-1.5">Passport Size Photo</label>
+                  <img src={employee.photoDataUrl} alt="Passport size photo" className="w-28 h-32 object-cover rounded-lg border border-border" />
+                </div>
+              )}
+              {employee.aadharDataUrl && (
+                <div>
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-text-3 block mb-1.5">Aadhar Card</label>
+                  {employee.aadharDataUrl.startsWith('data:application/pdf') ? (
+                    <>
+                      <a href={employee.aadharDataUrl} target="_blank" rel="noreferrer" className="no-print inline-flex items-center gap-1.5 text-accent text-xs font-semibold underline">
+                        <FileText className="w-3.5 h-3.5" /> View Aadhar Card (PDF)
+                      </a>
+                      <p className="hidden print:block text-xs text-text-2">Aadhar Card (PDF) on file.</p>
+                    </>
+                  ) : (
+                    <img src={employee.aadharDataUrl} alt="Aadhar card" className="w-full max-w-xs object-contain rounded-lg border border-border" />
+                  )}
+                </div>
+              )}
+            </div>
+          </Section>
+        )}
 
         {/* Banking — hidden unless toggled on screen, always visible on print */}
         <div>
@@ -259,6 +379,7 @@ export default function EmployeeFormsPage() {
         accountHolderName: form.accountHolderName || null, bankBranch: form.bankBranch || null,
         refName: form.refName || null, refRelationship: form.refRelationship || null,
         refPhone: form.refPhone || null, refAddress: form.refAddress || null,
+        photoDataUrl: form.photoDataUrl || null, aadharDataUrl: form.aadharDataUrl || null,
         createSystemAccount: form.createSystemAccount,
         systemRole: form.createSystemAccount ? form.systemRole : null,
         systemUsername: form.createSystemAccount ? form.systemUsername : null,
@@ -420,6 +541,17 @@ export default function EmployeeFormsPage() {
                     <option>Unmarried</option><option>Married</option>
                   </select>
                 </div>
+                <div className="sm:col-span-2">
+                  <UploadField
+                    label="Passport Size Photo"
+                    accept="image/*"
+                    value={form.photoDataUrl}
+                    onChange={(v) => setForm(f => ({ ...f, photoDataUrl: v }))}
+                    onError={(msg) => toast.error(msg)}
+                    previewClass="w-24 h-28"
+                    hint="JPEG/PNG, under 5 MB — will be printed on the joining form."
+                  />
+                </div>
               </div>
             </Section>
 
@@ -462,15 +594,34 @@ export default function EmployeeFormsPage() {
                 <div><label className="text-[10px] font-bold uppercase tracking-widest text-text-3 block mb-1">Position Title</label><input value={form.positionTitle} onChange={set('positionTitle')} placeholder="e.g. Gaming Operator" className={inputCls} /></div>
                 <div>
                   <label className="text-[10px] font-bold uppercase tracking-widest text-text-3 block mb-1">Department / Branch</label>
-                  <select value={activeBranch?.id || ''} onChange={(e) => switchBranch(e.target.value)} className={selectCls}>
-                    <option value="" disabled>Select Branch...</option>
-                    {branches.map(b => (
-                      <option key={b.id} value={b.id}>{b.name}</option>
-                    ))}
-                  </select>
+                  {isSuperAdmin ? (
+                    <select value={activeBranch?.id || ''} onChange={(e) => switchBranch(e.target.value)} className={selectCls}>
+                      <option value="" disabled>Select Branch...</option>
+                      {branches.map(b => (
+                        <option key={b.id} value={b.id}>{b.name}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input value={activeBranch?.name || ''} disabled className={`${inputCls} opacity-70 cursor-not-allowed`} />
+                  )}
                 </div>
                 <div><label className="text-[10px] font-bold uppercase tracking-widest text-text-3 block mb-1">Supervisor / Manager</label><input value={form.supervisor} onChange={set('supervisor')} placeholder="Reporting manager name" className={inputCls} /></div>
                 <div><label className="text-[10px] font-bold uppercase tracking-widest text-text-3 block mb-1">Start Date</label><input type="date" value={form.startDate} onChange={set('startDate')} className={inputCls} style={{ colorScheme: 'dark' }} /></div>
+              </div>
+            </Section>
+
+            {/* Documents */}
+            <Section icon={CreditCard} title="Documents" color="text-neon-blue">
+              <div className={grid2}>
+                <UploadField
+                  label="Aadhar Card"
+                  accept="image/*,application/pdf"
+                  value={form.aadharDataUrl}
+                  onChange={(v) => setForm(f => ({ ...f, aadharDataUrl: v }))}
+                  onError={(msg) => toast.error(msg)}
+                  previewClass="w-24 h-24"
+                  hint="Image or PDF, under 5 MB."
+                />
               </div>
             </Section>
 

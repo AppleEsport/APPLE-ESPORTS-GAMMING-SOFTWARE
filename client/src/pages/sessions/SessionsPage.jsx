@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { MonitorPlay, MonitorOff, IndianRupee, Clock, ShieldAlert, Banknote } from 'lucide-react';
+import { MonitorPlay, MonitorOff, IndianRupee, Clock, ShieldAlert, Banknote, Minus, Plus } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useBranch } from '../../contexts/BranchContext';
 import { useSocket } from '../../contexts/SocketContext';
 import api from '../../config/api';
 
 import PcGrid from '../../components/sessions/PcGrid';
+import { TILE_SIZES } from '../../components/sessions/PcTile';
 import PcDetailPanel from '../../components/sessions/PcDetailPanel';
 import QuickStartModal from '../../components/sessions/QuickStartModal';
 import SessionActivityLog from '../../components/sessions/SessionActivityLog';
@@ -30,6 +31,7 @@ export default function SessionsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [selectedPcId, setSelectedPcId] = useState(null); // PC shown in the detail panel
   const [quickStartPc, setQuickStartPc] = useState(null); // PC being quick-started via double-click
+  const [tileSizeIndex, setTileSizeIndex] = useState(1); // index into TILE_SIZES — controls PC tile size
 
   // Reservation Override modal states
   const [overrideData, setOverrideData] = useState(null); // { id, pcName }
@@ -402,13 +404,38 @@ export default function SessionsPage() {
         Click a PC to view details or start a session. <span className="text-pc-active font-semibold">Double-click</span> an idle PC to quick-start.
       </p>
 
-      {/* ── Legend ── */}
-      <div className="flex flex-wrap items-center gap-3 text-[10px] font-bold uppercase tracking-wider">
-        <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-pc-idle" /> Idle</div>
-        <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-pc-active" /> Active</div>
-        <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-pc-reserved" /> Reserved</div>
-        <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-neon-orange" /> Awaiting Bill</div>
-        <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-pc-offline" /> Maintenance</div>
+      {/* ── Legend + tile size zoom control ── */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3 text-[10px] font-bold uppercase tracking-wider">
+          <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-pc-idle" /> Idle</div>
+          <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-pc-active" /> Active</div>
+          <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-pc-reserved" /> Reserved</div>
+          <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-neon-orange" /> Awaiting Bill</div>
+          <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-pc-offline" /> Maintenance</div>
+        </div>
+        <div className="flex items-center gap-1 border border-border rounded-lg p-0.5">
+          <button
+            type="button"
+            onClick={() => setTileSizeIndex((i) => Math.max(0, i - 1))}
+            disabled={tileSizeIndex === 0}
+            className="p-1.5 rounded-md text-text-2 hover:text-text hover:bg-bg-3 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+            title="Shrink PC tiles"
+          >
+            <Minus className="w-3.5 h-3.5" />
+          </button>
+          <span className="text-[10px] font-mono font-bold uppercase text-text-2 w-6 text-center select-none">
+            {TILE_SIZES[tileSizeIndex]}
+          </span>
+          <button
+            type="button"
+            onClick={() => setTileSizeIndex((i) => Math.min(TILE_SIZES.length - 1, i + 1))}
+            disabled={tileSizeIndex === TILE_SIZES.length - 1}
+            className="p-1.5 rounded-md text-text-2 hover:text-text hover:bg-bg-3 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+            title="Enlarge PC tiles"
+          >
+            <Plus className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
 
       {/* ── Detail panel + PC Grid ── */}
@@ -435,6 +462,7 @@ export default function SessionsPage() {
             onSelectPc={(pc) => setSelectedPcId(pc.id)}
             onQuickStart={(pc) => setQuickStartPc(pc)}
             onRefresh={fetchPcs}
+            size={TILE_SIZES[tileSizeIndex]}
           />
         </div>
       </div>
