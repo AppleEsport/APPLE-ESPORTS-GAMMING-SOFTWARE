@@ -58,6 +58,9 @@ public class AppDbContext : DbContext
     // Sync engine
     public DbSet<SyncOutboxEntry> SyncOutboxEntries => Set<SyncOutboxEntry>();
 
+    // Power cuts and lost connections, for the EOD and printed reports
+    public DbSet<DowntimeEvent> DowntimeEvents => Set<DowntimeEvent>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);

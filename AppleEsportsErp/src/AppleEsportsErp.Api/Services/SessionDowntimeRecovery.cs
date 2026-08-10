@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using AppleEsportsErp.Application.Services;
+using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
 using AppleEsportsErp.Infrastructure.Data;
 
@@ -48,6 +49,10 @@ public static class SessionDowntimeRecovery
         var credited = 0;
         var flagged = 0;
 
+        // One outage hits a whole branch at once, so the report wants one row per branch,
+        // not one per session. Keyed by branch, widened to cover every session it touched.
+        var outages = new Dictionary<Guid, DowntimeEvent>();
+
         foreach (var session in liveSessions)
         {
             var downtimeSeconds = SessionTimeCalculator.DowntimeSecondsToCredit(session.LastHeartbeatAt, now);
@@ -62,6 +67,8 @@ public static class SessionDowntimeRecovery
             var gapStart = session.LastHeartbeatAt!.Value;
             var needsReview = session.Branch is { } branch
                 && SessionTimeCalculator.RequiresReview(gapStart, now, branch.OpeningTime, branch.ClosingTime);
+
+            RecordOutage(outages, session.BranchId, gapStart, now);
 
             if (needsReview)
             {
@@ -105,10 +112,59 @@ public static class SessionDowntimeRecovery
                 downtimeSeconds / 60.0, session.Id, session.PausedSeconds / 60.0);
         }
 
+        if (outages.Count > 0)
+            db.DowntimeEvents.AddRange(outages.Values);
+
         await db.SaveChangesAsync();
+
+        foreach (var outage in outages.Values)
+        {
+            logger.LogInformation(
+                "Downtime recorded for branch {BranchId}: {From} to {To} IST ({Minutes:N0} min), " +
+                "{Sessions} session(s) affected — will appear on the {Day} report.",
+                outage.BranchId, IndiaTime.Format(outage.StartedAt), IndiaTime.Format(outage.EndedAt),
+                outage.DurationSeconds / 60.0, outage.SessionsAffected, outage.BusinessDay);
+        }
 
         logger.LogInformation(
             "Downtime recovery complete: {Checked} active session(s) checked, {Held} held after an outage, {Flagged} flagged for review.",
             liveSessions.Count, credited, flagged);
+    }
+
+    /// <summary>
+    /// Folds a session's gap into a single per-branch outage row. Sessions on the same branch
+    /// share one power cut, so the report shows "Adajan was down 20:30-22:00, 6 PCs affected"
+    /// rather than six near-identical rows. The window widens to the earliest start seen,
+    /// since heartbeats do not all land on the same tick.
+    /// </summary>
+    private static void RecordOutage(
+        Dictionary<Guid, DowntimeEvent> outages, Guid branchId, DateTimeOffset gapStart, DateTimeOffset now)
+    {
+        if (outages.TryGetValue(branchId, out var existing))
+        {
+            if (gapStart < existing.StartedAt)
+            {
+                existing.StartedAt = gapStart;
+                existing.DurationSeconds = (int)(existing.EndedAt - gapStart).TotalSeconds;
+                existing.BusinessDay = IndiaTime.BusinessDayOf(gapStart);
+            }
+            existing.SessionsAffected++;
+            return;
+        }
+
+        outages[branchId] = new DowntimeEvent
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            Kind = DowntimeKind.PowerOrRestart,
+            StartedAt = gapStart,
+            EndedAt = now,
+            DurationSeconds = (int)(now - gapStart).TotalSeconds,
+            SessionsAffected = 1,
+            // Reported against the night it disrupted, not the morning it was noticed.
+            BusinessDay = IndiaTime.BusinessDayOf(gapStart),
+            Notes = "System was not running — power cut, restart or update.",
+            CreatedAt = now,
+        };
     }
 }

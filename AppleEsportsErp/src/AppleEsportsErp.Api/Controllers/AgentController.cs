@@ -59,6 +59,143 @@ public class AgentController : ControllerBase
         }));
     }
 
+    /// <summary>
+    /// First-run setup for a Gaming PC — POST /api/agent/provision.
+    ///
+    /// Binds one physical machine to one PC record, permanently. Until this succeeds the PC
+    /// sits in AwaitingSetup and cannot take a session, so an operator can never seat a
+    /// customer at a machine that will not unlock.
+    ///
+    /// Re-running setup on the <i>same</i> machine is allowed and simply returns the existing
+    /// token — reinstalls, repairs and re-imaging must not require a Super Admin. Claiming a
+    /// PC number that a <i>different</i> machine already holds is refused: two machines both
+    /// answering as "PC-1" would send unlock commands to the wrong screen.
+    /// </summary>
+    [HttpPost("provision")]
+    [AllowAnonymous]   // No credentials exist yet — the machine is claiming its identity here.
+    public async Task<IActionResult> Provision([FromBody] AgentProvisionDto dto)
+    {
+        if (dto is null || string.IsNullOrWhiteSpace(dto.MachineId) || string.IsNullOrWhiteSpace(dto.PcNumber))
+            return BadRequest(ApiResponse<object>.Fail("Machine id and PC number are required."));
+
+        var machineId = dto.MachineId.Trim();
+        var pcNumber = dto.PcNumber.Trim();
+
+        var pcs = _unitOfWork.Repository<Domain.Entities.Pc>();
+
+        // Has this machine already claimed a seat? If so it is a reinstall, not a new setup.
+        var alreadyClaimed = await pcs.Query()
+            .Include(p => p.Branch)
+            .FirstOrDefaultAsync(p => p.MachineId == machineId && !p.IsDeleted);
+
+        if (alreadyClaimed != null)
+        {
+            if (!string.Equals(alreadyClaimed.PcNumber, pcNumber, StringComparison.OrdinalIgnoreCase))
+            {
+                return Conflict(ApiResponse<object>.Fail(
+                    $"This machine is already set up as {alreadyClaimed.PcNumber}. " +
+                    $"Remove that setup from the dashboard before assigning it to {pcNumber}.",
+                    "MACHINE_ALREADY_PROVISIONED"));
+            }
+
+            // Same machine, same seat — hand back what it already has.
+            return Ok(ApiResponse<object>.Ok(new
+            {
+                pcId = alreadyClaimed.Id,
+                pcNumber = alreadyClaimed.PcNumber,
+                branchId = alreadyClaimed.BranchId,
+                branchName = alreadyClaimed.Branch?.Name,
+                token = alreadyClaimed.MachineToken,
+                reused = true,
+            }));
+        }
+
+        var target = await pcs.Query()
+            .Include(p => p.Branch)
+            .FirstOrDefaultAsync(p => p.BranchId == dto.BranchId
+                                   && p.PcNumber.ToLower() == pcNumber.ToLower()
+                                   && !p.IsDeleted);
+
+        if (target == null)
+            return NotFound(ApiResponse<object>.Fail(
+                $"{pcNumber} does not exist at this branch. Create it in the dashboard first.",
+                "PC_NOT_FOUND"));
+
+        if (target.MachineId != null)
+        {
+            return Conflict(ApiResponse<object>.Fail(
+                $"{pcNumber} is already set up on another machine " +
+                $"(since {AppleEsportsErp.Application.Services.IndiaTime.Format(target.ProvisionedAt ?? target.UpdatedAt)}). " +
+                "Pick a different PC number, or remove the existing setup from the dashboard first.",
+                "PC_ALREADY_PROVISIONED"));
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        target.MachineId = machineId;
+        target.MachineToken = _jwtTokenService.GenerateAgentToken(
+            pcId: target.Id.ToString(),
+            branchId: target.BranchId.ToString(),
+            pcNumber: target.PcNumber);
+        target.ProvisionedAt = now;
+        target.UpdatedAt = now;
+        target.IpAddress = dto.IpAddress ?? target.IpAddress;
+
+        // Only now does it become bookable.
+        if (target.State == Domain.Enums.PcState.AwaitingSetup)
+            target.State = Domain.Enums.PcState.Idle;
+
+        await _unitOfWork.SaveChangesAsync();
+
+        return Ok(ApiResponse<object>.Ok(new
+        {
+            pcId = target.Id,
+            pcNumber = target.PcNumber,
+            branchId = target.BranchId,
+            branchName = target.Branch?.Name,
+            token = target.MachineToken,
+            reused = false,
+        }));
+    }
+
+    /// <summary>
+    /// Releases a PC so a replacement machine can be set up against the same number —
+    /// for a dead or swapped-out box. Super Admin only: it hands the seat's identity to
+    /// whichever machine claims it next.
+    /// </summary>
+    [HttpPost("deprovision/{pcId:guid}")]
+    [Authorize(Roles = Roles.SuperAdmin)]
+    public async Task<IActionResult> Deprovision(Guid pcId)
+    {
+        var pc = await _unitOfWork.Repository<Domain.Entities.Pc>()
+            .Query()
+            .FirstOrDefaultAsync(p => p.Id == pcId && !p.IsDeleted);
+
+        if (pc == null)
+            return NotFound(ApiResponse<object>.Fail("PC not found"));
+
+        if (pc.State == Domain.Enums.PcState.Active)
+            return BadRequest(ApiResponse<object>.Fail(
+                $"{pc.PcNumber} has a session running. Stop it before removing the setup.",
+                "PC_IN_USE"));
+
+        pc.MachineId = null;
+        pc.MachineToken = null;
+        pc.ProvisionedAt = null;
+        pc.IsAgentOnline = false;
+        pc.ConnectionMode = "None";
+        pc.State = Domain.Enums.PcState.AwaitingSetup;
+        pc.UpdatedAt = DateTimeOffset.UtcNow;
+
+        await _unitOfWork.SaveChangesAsync();
+
+        return Ok(ApiResponse<object>.Ok(new
+        {
+            pcId = pc.Id,
+            pcNumber = pc.PcNumber,
+            message = $"{pc.PcNumber} is free to be set up again.",
+        }));
+    }
+
     /// <summary>Get agent connection status for all PCs in a branch</summary>
     [HttpGet("status/{branchId:guid}")]
     [Authorize(Roles = Roles.SuperAdmin + "," + Roles.Admin + "," + Roles.Operator)]
@@ -142,6 +279,23 @@ public class AgentHeartbeatDto
 {
     public string PcId { get; set; } = null!;
     public string? ConnectionMode { get; set; }
+}
+
+/// <summary>First-run setup request sent by a Gaming PC agent.</summary>
+public class AgentProvisionDto
+{
+    public Guid BranchId { get; set; }
+
+    /// <summary>Which seat this machine is being set up as, e.g. "PC-1".</summary>
+    public string PcNumber { get; set; } = null!;
+
+    /// <summary>
+    /// Stable hardware fingerprint. It must survive a reinstall, otherwise a repaired
+    /// machine would look like a new one and be refused its own seat.
+    /// </summary>
+    public string MachineId { get; set; } = null!;
+
+    public string? IpAddress { get; set; }
 }
 
 public class RemoteStartDto
