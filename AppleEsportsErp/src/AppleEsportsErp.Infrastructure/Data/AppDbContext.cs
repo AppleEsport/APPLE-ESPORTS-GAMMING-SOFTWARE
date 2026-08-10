@@ -51,6 +51,13 @@ public class AppDbContext : DbContext
     // Maintenance Logs
     public DbSet<MaintenanceLog> MaintenanceLogs => Set<MaintenanceLog>();
 
+    // Version tracking & updates
+    public DbSet<VersionInfo> VersionInfos => Set<VersionInfo>();
+    public DbSet<BranchVersionStatus> BranchVersionStatuses => Set<BranchVersionStatus>();
+
+    // Sync engine
+    public DbSet<SyncOutboxEntry> SyncOutboxEntries => Set<SyncOutboxEntry>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);

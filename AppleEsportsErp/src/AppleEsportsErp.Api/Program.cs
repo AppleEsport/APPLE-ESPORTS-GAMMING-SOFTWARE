@@ -263,9 +263,13 @@ builder.Services.AddHostedService<AppleEsportsErp.Api.Services.OpenSessionMonito
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.FixedDurationSessionMonitorService>();
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.DeferredBillingMonitorService>();
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.SessionActivityCleanupService>();
+builder.Services.AddHostedService<AppleEsportsErp.Api.Services.SyncCourierService>();
 builder.Services.AddScoped<IOfflineSyncService, OfflineSyncService>();
 builder.Services.AddScoped<IEmployeeService, EmployeeService>();
 builder.Services.AddScoped<IPricingProfileService, PricingProfileService>();
+builder.Services.AddScoped<IVersionService, VersionService>();
+builder.Services.AddScoped<IOutboxService, OutboxService>();
+builder.Services.AddScoped<IEmailQueueService, EmailQueueService>();
 
 
 // ── 9. Controllers + Swagger ──

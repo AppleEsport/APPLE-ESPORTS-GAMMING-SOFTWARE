@@ -57,6 +57,7 @@ import MainDashboardPage from './pages/dashboard/MainDashboardPage';
 import PcStatusPage from './pages/admin/PcStatusPage';
 import SettingsPage from './pages/admin/SettingsPage';
 import ReportsPage from './pages/admin/ReportsPage';
+import UpdatesPage from './pages/admin/UpdatesPage';
 
 // ── HR ──
 import EmployeeFormsPage from './pages/hr/EmployeeFormsPage';
@@ -242,6 +243,14 @@ export default function App() {
                     element={
                       <ProtectedRoute allowedRoles={[ROLES.SUPER_ADMIN, ROLES.ADMIN]} dashboardKey={DASHBOARDS.SETTINGS}>
                         <SettingsPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="updates"
+                    element={
+                      <ProtectedRoute allowedRoles={[ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.OPERATOR]}>
+                        <UpdatesPage />
                       </ProtectedRoute>
                     }
                   />
