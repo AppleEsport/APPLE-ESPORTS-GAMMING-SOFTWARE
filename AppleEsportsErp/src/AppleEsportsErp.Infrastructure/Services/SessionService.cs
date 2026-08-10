@@ -106,7 +106,11 @@ public class SessionService : ISessionService
                 .AsNoTracking()
                 .Where(s => s.BranchId == branchId
                     && s.PcId == pc.Id
-                    && (s.State == SessionState.Active || s.State == SessionState.AwaitingBilling))
+                    // Interrupted counts as open: a session held after a power cut is still
+                    // sitting on this PC, waiting for the operator to resume or stop it.
+                    && (s.State == SessionState.Active
+                        || s.State == SessionState.Interrupted
+                        || s.State == SessionState.AwaitingBilling))
                 .OrderByDescending(s => s.UpdatedAt)
                 .ThenByDescending(s => s.StartTime)
                 .FirstOrDefaultAsync();
@@ -147,6 +151,32 @@ public class SessionService : ISessionService
                         $"Cannot start session — {member.FullName}'s Gaming wallet balance is ₹{member.GamingBalance:0.00}. Please top up the Gaming wallet before starting a session.",
                         System.Net.HttpStatusCode.BadRequest,
                         "INSUFFICIENT_GAMING_BALANCE");
+                }
+
+                // One member, one PC at a time. Two live sessions would both draw down the
+                // same Gaming wallet, so they would race each other and could overdraw it.
+                // Deliberately not filtered by branch: the wallet is shared across all four,
+                // so playing at Adajan and Citylight at once is the same problem.
+                // Interrupted counts as occupied — that seat is being held for them.
+                var sessionElsewhere = await _db.Sessions.AsNoTracking()
+                    .Include(s => s.Pc)
+                    .Include(s => s.Branch)
+                    .Where(s => s.MemberId == dto.MemberId.Value
+                        && (s.State == SessionState.Active || s.State == SessionState.Interrupted))
+                    .FirstOrDefaultAsync();
+
+                if (sessionElsewhere != null)
+                {
+                    var where = sessionElsewhere.Pc?.PcNumber ?? "another PC";
+                    var atBranch = sessionElsewhere.BranchId == branchId
+                        ? string.Empty
+                        : $" at {sessionElsewhere.Branch?.Name ?? "another branch"}";
+
+                    throw new AppException(
+                        $"{member.FullName} already has a session running on {where}{atBranch}. " +
+                        "Stop that session before starting a new one.",
+                        System.Net.HttpStatusCode.BadRequest,
+                        "MEMBER_ALREADY_IN_SESSION");
                 }
             }
 
