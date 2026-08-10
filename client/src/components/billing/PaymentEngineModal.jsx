@@ -7,7 +7,8 @@ import { useToast } from '../ui/Toast';
 import { formatMoney } from '../../utils/money';
 
 // Quick-tender presets for cash (common Indian denominations)
-const QUICK_TENDER = [20, 50, 100, 200, 500, 1000, 2000];
+// No Rs 1000 or Rs 2000: neither note is in circulation in India any more.
+const QUICK_TENDER = [10, 20, 50, 100, 200, 500];
 
 /**
  * PaymentEngineModal — SOP §10.2 full split-payment engine

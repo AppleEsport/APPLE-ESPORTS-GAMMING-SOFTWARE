@@ -3,8 +3,9 @@ import { Calculator, AlertTriangle, ShieldCheck } from 'lucide-react';
 import api from '../../config/api';
 import { generateIdempotencyKey } from '../../utils/idempotency';
 
+// Rs 2000 (withdrawn 2023) and Rs 1000 (demonetised 2016) are deliberately absent - the
+// notes no longer exist, so counting them can only ever be zero.
 const DENOMINATIONS = [
-  { key: 'notes2000', label: '₹2000', value: 2000, type: 'note' },
   { key: 'notes500', label: '₹500', value: 500, type: 'note' },
   { key: 'notes200', label: '₹200', value: 200, type: 'note' },
   { key: 'notes100', label: '₹100', value: 100, type: 'note' },
@@ -18,7 +19,7 @@ const DENOMINATIONS = [
 
 export default function DenominationCounter({ expectedTotal, onVerified }) {
   const [counts, setCounts] = useState({
-    notes2000: '', notes500: '', notes200: '', notes100: '',
+    notes500: '', notes200: '', notes100: '',
     notes50: '', notes20: '', notes10: '',
     coins5: '', coins2: '', coins1: ''
   });
@@ -53,7 +54,6 @@ export default function DenominationCounter({ expectedTotal, onVerified }) {
 
     try {
       const payload = {
-        notes2000: parseInt(counts.notes2000 || '0', 10),
         notes500: parseInt(counts.notes500 || '0', 10),
         notes200: parseInt(counts.notes200 || '0', 10),
         notes100: parseInt(counts.notes100 || '0', 10),

@@ -7,7 +7,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useBranch } from '../../contexts/BranchContext';
 import { formatMoney } from '../../utils/money';
 
-const DENOMINATIONS = [20, 50, 100, 200, 500, 1000, 2000];
+// No Rs 1000 or Rs 2000: neither note is in circulation in India any more.
+const DENOMINATIONS = [10, 20, 50, 100, 200, 500];
 
 export default function CreditsPage() {
   const { isSuperAdmin, user } = useAuth();

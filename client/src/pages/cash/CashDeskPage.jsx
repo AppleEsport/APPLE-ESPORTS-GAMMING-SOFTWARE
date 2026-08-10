@@ -19,6 +19,14 @@ export default function CashDeskPage() {
 
   const [isLocking, setIsLocking] = useState(false);
   const [isClosing, setIsClosing] = useState(false);
+
+  // The one question the system cannot work out for itself: is anyone coming in after this
+  // operator? It decides whether the day's takings are totalled and emailed now, and whether
+  // the system going quiet tonight is the shop being shut or a fault. Off by default, because
+  // a handover between shifts is the ordinary case and wrongly closing the day would send half
+  // a day's figures as though they were the whole day's.
+  const [closesTradingDay, setClosesTradingDay] = useState(false);
+  const [stockChecked, setStockChecked] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
 
   const targetBranchId = isSuperAdmin ? activeBranch?.id : user?.branchId;
@@ -77,8 +85,9 @@ export default function CashDeskPage() {
         switchBranch(null);
         navigate('/app/dashboard');
       } else {
-        // Operator's shift is over — log them out.
-        logout();
+        // Operator's shift is over — log them out, carrying their answer about the day so the
+        // server can close the trading day and send its totals.
+        logout({ closesTradingDay });
       }
     } catch (err) {
       setError(err.response?.data?.error || err.response?.data?.message || 'Failed to close shift.');
@@ -227,17 +236,59 @@ export default function CashDeskPage() {
               </span>
             </div>
           </div>
+          {/* Stock, then the day. Both asked here rather than on a later screen, because this
+              is the last moment the operator is still standing at the counter. */}
+          {!isSuperAdmin && (
+            <div className="w-full max-w-md mb-6 space-y-3 text-left">
+              <label className="flex items-start gap-3 bg-bg-3 border border-border rounded-xl p-4 cursor-pointer hover:border-accent/40 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={stockChecked}
+                  onChange={(e) => setStockChecked(e.target.checked)}
+                  className="mt-0.5 w-4 h-4 accent-accent cursor-pointer flex-shrink-0"
+                />
+                <span>
+                  <span className="block text-text text-sm font-bold">I have checked the stock</span>
+                  <span className="block text-text-3 text-[11px] mt-1 leading-relaxed">
+                    Food and drinks on the shelf match what the system says is left.
+                  </span>
+                </span>
+              </label>
+
+              <label className="flex items-start gap-3 bg-bg-3 border border-border rounded-xl p-4 cursor-pointer hover:border-neon-red/40 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={closesTradingDay}
+                  onChange={(e) => setClosesTradingDay(e.target.checked)}
+                  className="mt-0.5 w-4 h-4 accent-neon-red cursor-pointer flex-shrink-0"
+                />
+                <span>
+                  <span className="block text-text text-sm font-bold">This is the last shift of the day</span>
+                  <span className="block text-text-3 text-[11px] mt-1 leading-relaxed">
+                    Only tick this if the shop is closing now and nobody is taking over. The
+                    day's totals are sent to the owner, and the system knows it has been shut
+                    rather than gone wrong.
+                  </span>
+                </span>
+              </label>
+            </div>
+          )}
+
           <button
             onClick={handleCloseShift}
-            disabled={isClosing}
-            className="w-full max-w-md py-4 rounded-xl font-bold uppercase tracking-widest text-sm transition-all bg-accent hover:bg-accent-hover text-white shadow-lg shadow-accent/20 flex justify-center items-center gap-2"
+            disabled={isClosing || (!isSuperAdmin && !stockChecked)}
+            className="w-full max-w-md py-4 rounded-xl font-bold uppercase tracking-widest text-sm transition-all bg-accent hover:bg-accent-hover text-white shadow-lg shadow-accent/20 flex justify-center items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {isClosing ? (
               <div className="w-5 h-5 rounded-full border-2 border-white border-t-transparent animate-spin" />
             ) : (
-              <><LogOut className="w-5 h-5" /> Finalize & Close Shift</>
+              <><LogOut className="w-5 h-5" /> {closesTradingDay ? 'Close The Day & Log Out' : 'End Shift & Log Out'}</>
             )}
           </button>
+
+          {!isSuperAdmin && !stockChecked && (
+            <p className="text-text-3 text-[11px] mt-3">Check the stock before you can finish.</p>
+          )}
         </div>
       )}
     </div>

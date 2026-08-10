@@ -10,7 +10,8 @@ import { useSocket } from '../../contexts/SocketContext';
 import { useToast } from '../ui/Toast';
 import { formatMoney } from '../../utils/money';
 
-const DENOMINATIONS = [20, 50, 100, 200, 500, 1000, 2000];
+// No Rs 1000 or Rs 2000: neither note is in circulation in India any more.
+const DENOMINATIONS = [10, 20, 50, 100, 200, 500];
 const DISC_PRESETS   = [0, 5, 10, 15, 20];
 
 export default function BillDetailsPanel({ bill, onBillUpdate, onPaymentSuccess, defaultPaymentMethod }) {

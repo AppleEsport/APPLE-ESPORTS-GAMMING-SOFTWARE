@@ -247,17 +247,49 @@ public class AuthService : IAuthService
             throw new AuthenticationException("Invalid password or PIN", "INVALID_CREDENTIALS");
         }
 
-        // 5. Start shift — SOP §5: log operator, branch, login time, device
-        var shift = new Shift
+        // 5. Resume this operator's open shift if they already have one, rather than opening a
+        //    second. A shift only ends by being closed properly, with the cash counted - so an
+        //    operator whose PC lost power mid-shift comes back to a shift still marked Active.
+        //    Starting a fresh one would leave the first open forever, with uncounted takings
+        //    against it, and every login would add another. There is no counting your way out
+        //    of that. Resuming also means the shop opens on time without ringing an admin.
+        var shift = await _db.Shifts
+            .Where(s => s.OperatorId == op.Id && s.Status == ShiftStatus.Active)
+            .OrderByDescending(s => s.LoginTime)
+            .FirstOrDefaultAsync();
+
+        var resumedShift = shift is not null;
+        var gapSinceLastSeen = TimeSpan.Zero;
+
+        if (resumedShift)
         {
-            OperatorId = op.Id,
-            BranchId = dto.BranchId,
-            LoginTime = DateTimeOffset.UtcNow,
-            DeviceInfo = dto.DeviceInfo != null ? JsonSerializer.Serialize(dto.DeviceInfo) : null,
-            Status = ShiftStatus.Active,
-            CreatedAt = DateTimeOffset.UtcNow,
-        };
-        _db.Shifts.Add(shift);
+            // How long the shift was unattended, measured from the last thing that actually
+            // happened on it rather than from login - a shift opened at 09:00 and abandoned at
+            // 23:00 was not "14 hours idle".
+            var lastActivity = await _db.Sessions
+                .Where(s => s.ShiftId == shift!.Id)
+                .MaxAsync(s => (DateTimeOffset?)s.UpdatedAt) ?? shift!.LoginTime;
+
+            gapSinceLastSeen = DateTimeOffset.UtcNow - lastActivity;
+
+            shift!.DeviceInfo = dto.DeviceInfo != null ? JsonSerializer.Serialize(dto.DeviceInfo) : shift.DeviceInfo;
+            _logger.LogInformation(
+                "Operator {Operator} resumed shift {ShiftId}, which had been unattended for {Gap}.",
+                op.FullName, shift.Id, gapSinceLastSeen);
+        }
+        else
+        {
+            shift = new Shift
+            {
+                OperatorId = op.Id,
+                BranchId = dto.BranchId,
+                LoginTime = DateTimeOffset.UtcNow,
+                DeviceInfo = dto.DeviceInfo != null ? JsonSerializer.Serialize(dto.DeviceInfo) : null,
+                Status = ShiftStatus.Active,
+                CreatedAt = DateTimeOffset.UtcNow,
+            };
+            _db.Shifts.Add(shift);
+        }
 
         // 6. Update operator status to active
         op.Status = OperatorStatus.Active;
@@ -328,6 +360,11 @@ public class AuthService : IAuthService
             },
             AccessToken = accessToken,
             RefreshToken = refreshToken,
+            ResumedShift = resumedShift,
+            UnattendedMinutes = (int)gapSinceLastSeen.TotalMinutes,
+            // Ten minutes, so a browser refresh or a quick re-login is not treated as an
+            // incident, while a genuine outage or an overnight shutdown always is.
+            NeedsGapExplanation = resumedShift && gapSinceLastSeen >= TimeSpan.FromMinutes(10),
         };
     }
 

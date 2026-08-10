@@ -23,6 +23,25 @@ public class LoginResponseDto
     public UserProfileDto User { get; set; } = null!;
     public string AccessToken { get; set; } = null!;
     public string RefreshToken { get; set; } = null!;
+
+    /// <summary>
+    /// True when this login picked up a shift that was still open rather than starting a new
+    /// one - which means the last one was never closed properly. Usually a power cut or a PC
+    /// switched off with the app running.
+    /// </summary>
+    public bool ResumedShift { get; set; }
+
+    /// <summary>
+    /// How long that shift sat unattended, in minutes. Only meaningful with ResumedShift.
+    /// </summary>
+    public int UnattendedMinutes { get; set; }
+
+    /// <summary>
+    /// True when the gap is long enough to be worth explaining. The operator is asked what
+    /// happened, and nothing is reported to the owner until they answer - guessing would mean
+    /// a power-cut email every morning somebody simply shut the shop without ending a shift.
+    /// </summary>
+    public bool NeedsGapExplanation { get; set; }
 }
 
 /// <summary>User profile — returned on login and GET /me</summary>
