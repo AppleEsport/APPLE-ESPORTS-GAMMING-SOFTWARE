@@ -3,10 +3,11 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Shield, User, MapPin, Loader2, KeyRound, Eye, EyeOff } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
+import { sessionBelongsOnPortal } from '../../config/portalAccess';
 import api from '../../config/api';
 
 export default function LoginPage() {
-  const { loginAdmin, loginOperator, isAuthenticated, isSuperAdmin } = useAuth();
+  const { loginAdmin, loginOperator, isAuthenticated, isSuperAdmin, user, clearSession } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const reason = searchParams.get('reason');
@@ -17,18 +18,18 @@ export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
-  // Redirect if already authenticated (page refresh / revisit)
+  // Only a Super Admin session skips this form. An operator or admin session left on this
+  // machine is signed out rather than promoted — see portalAccess.js.
   useEffect(() => {
-    if (isAuthenticated) {
-      const role = (typeof window !== 'undefined' && JSON.parse(localStorage.getItem('user') || '{}'))?.role || '';
-      if (role === 'super_admin' || role.toLowerCase().includes('admin')) {
-        navigate('/app/sessions', { replace: true });
-      } else {
-        navigate('/app/sessions', { replace: true });
-      }
+    if (!isAuthenticated) return;
+
+    if (sessionBelongsOnPortal(user, 'superadmin')) {
+      navigate('/app/sessions', { replace: true });
+    } else {
+      clearSession();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAuthenticated]);
+  }, [isAuthenticated, user]);
 
   const handleAdminSubmit = async (e) => {
     e.preventDefault();
