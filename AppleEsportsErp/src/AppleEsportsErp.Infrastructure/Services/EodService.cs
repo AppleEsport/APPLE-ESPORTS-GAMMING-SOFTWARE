@@ -142,7 +142,15 @@ public class EodService : IEodService
         // sum of every shift's opening.
         report.Cash.TotalOpeningBalance = firstRegister?.OpeningBalance ?? 0m;
 
-        report.Cash.TotalCashSales = registers.Sum(r => r.TotalCashSales) + report.PaymentMethods.TotalWalletTopUps;
+        // Only the part of each top-up that was actually paid in notes. TotalWalletTopUps is
+        // every top-up whatever the method, which is right for revenue and wrong for a drawer:
+        // adding a UPI top-up to the cash line inflates the cash the operator is expected to
+        // have, and they show short by exactly the amount nobody ever handed them.
+        var cashFromTopUps = walletTxs
+            .Where(w => w.Action == WalletAction.Recharge)
+            .Sum(w => w.CashAmount);
+
+        report.Cash.TotalCashSales = registers.Sum(r => r.TotalCashSales) + cashFromTopUps;
 
         var allCashTxs = registers.SelectMany(r => r.CashTransactions).ToList();
         report.Cash.TotalCashInwards = allCashTxs.Where(t => t.TransactionType == "inward").Sum(t => t.CashAmount);
