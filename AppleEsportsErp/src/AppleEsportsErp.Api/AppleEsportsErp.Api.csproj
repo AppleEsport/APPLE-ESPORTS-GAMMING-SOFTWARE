@@ -15,6 +15,9 @@
     <PackageReference Include="Serilog.AspNetCore" Version="8.0.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="5.0.0" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.5.0" />
+    <!-- Lets the branch install run as a Windows service, so the shop opens by turning
+         the PC on rather than by someone remembering to launch a console window. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.0" />
   </ItemGroup>
 
   <ItemGroup>

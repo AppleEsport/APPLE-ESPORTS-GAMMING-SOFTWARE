@@ -23,6 +23,12 @@ using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// At a branch this runs as a Windows service so the shop is ready the moment the operator
+// PC boots, with no console window for anyone to close by accident. Harmless elsewhere:
+// outside a service host it is a no-op, so the same build still runs in Docker and from
+// the command line unchanged.
+builder.Host.UseWindowsService(options => options.ServiceName = "AppleEsportsApi");
+
 // Enable DI validation on build
 builder.Host.UseDefaultServiceProvider((context, options) => {
     options.ValidateScopes = true;
@@ -380,6 +386,18 @@ app.UseAuthorization();
 // ── 5. Rate Limiting (maps from rateLimit.js) ──
 app.UseRateLimiter();
 
+// ── 5b. Serve the dashboard itself, when it has been published alongside the API ──
+// A branch install has no nginx: one Windows service answers both the API and the screens,
+// which removes a whole moving part from every operator PC. In Docker the client container
+// still serves the UI and wwwroot simply does not exist, so this stays inert there.
+var dashboardRoot = Path.Combine(app.Environment.ContentRootPath, "wwwroot");
+if (Directory.Exists(dashboardRoot))
+{
+    app.UseDefaultFiles();
+    app.UseStaticFiles();
+    Log.Information("Serving the dashboard from {Root}", dashboardRoot);
+}
+
 // ── 6. Map Controllers (maps from routes/index.js registerRoutes) ──
 app.MapControllers();
 
@@ -393,6 +411,14 @@ app.MapHub<CashHub>("/hubs/cash");
 app.MapHub<NotificationHub>("/hubs/notifications");
 app.MapHub<DashboardHub>("/hubs/dashboard");
 app.MapHub<PcOverlayHub>("/hubs/pc-overlay");
+
+// The dashboard is a single-page app: refreshing on /app/sessions must return index.html
+// rather than a 404, because that route only exists in the browser. Registered after the
+// controllers and hubs so it can never shadow a real endpoint.
+if (Directory.Exists(dashboardRoot))
+{
+    app.MapFallbackToFile("index.html");
+}
 
 // ── Startup banner ──
 app.Lifetime.ApplicationStarted.Register(() =>
