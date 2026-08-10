@@ -12,6 +12,7 @@ import BranchRequired from './BranchRequired';
 import { useAuth } from '../../contexts/AuthContext';
 import ShiftStartModal from '../shift/ShiftStartModal';
 import ShiftEndModal from '../shift/ShiftEndModal';
+import ShiftGapModal from '../shift/ShiftGapModal';
 import GlobalFoodOrderListener from './GlobalFoodOrderListener';
 import GlobalNotificationListener from './GlobalNotificationListener';
 
@@ -64,6 +65,13 @@ export default function AppShell() {
 
   // ── Shift End Modal: shown when operator requests logout ──
   const [showShiftEnd, setShowShiftEnd] = useState(false);
+
+  // Read from sessionStorage rather than held in state, so refreshing the page cannot lose
+  // the question - a refresh would otherwise be the easiest way to avoid answering it.
+  const [pendingGap, setPendingGap] = useState(() => {
+    try { return JSON.parse(sessionStorage.getItem('pendingShiftGap') || 'null'); }
+    catch { return null; }
+  });
 
   // Check if operator needs to do shift start checklist
   // We store a flag in sessionStorage so it doesn't show again on page refresh mid-shift
@@ -148,8 +156,20 @@ export default function AppShell() {
         </main>
       </div>
 
+      {/* ── Explain the gap first (blocks everything, cannot be dismissed) ──
+          Shown before the shift-start modal on purpose: what happened to the last shift is a
+          question about the past, and it must not be possible to start trading on top of an
+          unexplained hole. */}
+      {isOperator && pendingGap?.shiftId && (
+        <ShiftGapModal
+          shiftId={pendingGap.shiftId}
+          unattendedMinutes={pendingGap.unattendedMinutes || 0}
+          onAnswered={() => setPendingGap(null)}
+        />
+      )}
+
       {/* ── Shift Start Modal (blocks operator until complete) ── */}
-      {isOperator && showShiftStart && (
+      {isOperator && !pendingGap?.shiftId && showShiftStart && (
         <ShiftStartModal onComplete={handleShiftStartComplete} />
       )}
 

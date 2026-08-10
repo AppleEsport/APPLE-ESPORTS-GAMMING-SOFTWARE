@@ -73,11 +73,23 @@ export function AuthProvider({ children }) {
     try {
       setError(null);
       const response = await api.post('/auth/operator/login', { branchId, username, password });
-      const { user: userData } = response.data.data;
+      const { user: userData, resumedShift, unattendedMinutes, needsGapExplanation } = response.data.data;
+
+      // A resumed shift with a hole in it has to be explained before the operator can work.
+      // Kept in sessionStorage rather than state so a page refresh cannot lose the question -
+      // refreshing past it would be the easiest way to avoid answering.
+      if (needsGapExplanation) {
+        sessionStorage.setItem('pendingShiftGap', JSON.stringify({
+          shiftId: userData?.shiftId,
+          unattendedMinutes: unattendedMinutes || 0,
+        }));
+      } else {
+        sessionStorage.removeItem('pendingShiftGap');
+      }
 
       localStorage.setItem('user', JSON.stringify(userData));
       setUser(userData);
-      return userData;
+      return { ...userData, resumedShift, unattendedMinutes, needsGapExplanation };
     } catch (err) {
       const message = err.response?.data?.error || 'Login failed';
       setError(message);
