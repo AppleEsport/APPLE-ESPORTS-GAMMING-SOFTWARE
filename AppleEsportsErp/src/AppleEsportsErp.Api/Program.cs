@@ -21,7 +21,16 @@ using Serilog;
 //  SOP Master Source of Truth compliance
 // ═══════════════════════════════════════════════
 
-var builder = WebApplication.CreateBuilder(args);
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = args,
+    // Pinned to where the executable lives, not to whatever directory it happened to be
+    // launched from. A Windows service starts in System32, so the default would send it
+    // looking for appsettings.Production.json there — and it would die on start-up
+    // complaining that nothing is configured, which is exactly how a branch install
+    // fails in a way nobody can diagnose.
+    ContentRootPath = AppContext.BaseDirectory,
+});
 
 // At a branch this runs as a Windows service so the shop is ready the moment the operator
 // PC boots, with no console window for anyone to close by accident. Harmless elsewhere:
@@ -61,6 +70,28 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 );
 
 // ── 2. JWT Authentication (SOP §21 + Q1: full claims embedded) ──
+//
+// Checked explicitly rather than dereferenced with "!". In Docker these arrive as
+// environment variables from compose, but a branch install has neither — and the
+// unchecked version died on start-up with "ArgumentNullException: Parameter 's'",
+// which tells whoever is standing at the branch precisely nothing. The service would
+// register, refuse to run, and look like a broken installer.
+foreach (var required in new[] { "Secret", "RefreshSecret" })
+{
+    if (string.IsNullOrWhiteSpace(jwtConfig[required]))
+    {
+        var message =
+            $"Jwt:{required} is not configured, so the API cannot start.\n" +
+            "A branch install writes this into appsettings.Production.json during setup; " +
+            "a Docker deployment passes it in as an environment variable. " +
+            "If you are seeing this on a branch PC, re-run the installer.";
+
+        Log.Fatal(message);
+        Console.Error.WriteLine(message);
+        return 1;
+    }
+}
+
 var jwtKey = Encoding.UTF8.GetBytes(jwtConfig["Secret"]!);
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 .AddJwtBearer(options =>
@@ -432,3 +463,7 @@ app.Lifetime.ApplicationStarted.Register(() =>
 });
 
 app.Run();
+
+// Top-level statements need an explicit success code because the configuration check
+// above returns 1 on failure.
+return 0;
