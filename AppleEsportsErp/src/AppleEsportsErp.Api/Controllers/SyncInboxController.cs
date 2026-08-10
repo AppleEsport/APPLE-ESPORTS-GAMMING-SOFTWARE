@@ -50,18 +50,26 @@ public class SyncInboxController : ControllerBase
             var receivedAt = DateTimeOffset.UtcNow;
 
             // Redelivery is normal: a branch that never saw our response will send again.
-            // Skip what we already hold rather than double-counting it.
+            //
+            // Held is not the same as applied, and treating it as such lost records for good.
+            // An entry that was stored but failed to fold in was skipped on every resend, so
+            // one failure became permanent — the branch was told "delivered", stopped
+            // resending, and the session never appeared at Head Office. Anything not yet
+            // applied is retried instead.
             var incomingIds = dto.Entries.Select(e => e.Id).ToList();
-            var alreadyHeld = (await _db.SyncInboxEntries
+            var held = await _db.SyncInboxEntries
                 .Where(e => incomingIds.Contains(e.Id))
-                .Select(e => e.Id)
-                .ToListAsync()).ToHashSet();
+                .ToListAsync();
+
+            var alreadyApplied = held.Where(e => e.Applied).Select(e => e.Id).ToHashSet();
+            var awaitingRetry = held.Where(e => !e.Applied).ToList();
 
             var stored = new List<SyncInboxEntry>();
 
             foreach (var entry in dto.Entries)
             {
-                if (alreadyHeld.Contains(entry.Id)) continue;
+                if (alreadyApplied.Contains(entry.Id)) continue;
+                if (awaitingRetry.Any(h => h.Id == entry.Id)) continue;   // retried below
 
                 stored.Add(new SyncInboxEntry
                 {
@@ -91,36 +99,55 @@ public class SyncInboxController : ControllerBase
 
             var appliedCount = 0;
 
-            foreach (var held in stored)
+            foreach (var entry in stored.Concat(awaitingRetry))
             {
                 try
                 {
-                    await ApplyToHeadOfficeRecordsAsync(held);
-                    held.Applied = true;
+                    await ApplyToHeadOfficeRecordsAsync(entry);
+                    entry.Applied = true;
+                    entry.ApplyError = null;
+
+                    // Saved per entry, inside the try. Applying only queues changes — the
+                    // insert happens here — so a single save for the whole batch threw
+                    // outside this catch, took the entire request down with a 500, and left
+                    // the error unrecorded. One bad entry must not cost the good ones.
+                    await _db.SaveChangesAsync();
                     appliedCount++;
                 }
                 catch (Exception ex)
                 {
-                    // The payload is already safe. Record why it could not be folded in and
-                    // carry on — it can be replayed without the branch resending anything.
-                    held.ApplyError = ex.Message;
+                    // Whatever this entry queued is still tracked and would be retried by the
+                    // next save, failing again and taking the rest of the batch with it.
+                    DiscardPendingChanges();
+
+                    entry.Applied = false;
+                    entry.ApplyError = ex.GetBaseException().Message;
+
                     _logger.LogError(ex,
                         "Stored but could not apply sync entry {EntryId} ({EventType}) from branch {BranchId}",
-                        held.Id, held.EventType, dto.BranchId);
+                        entry.Id, entry.EventType, dto.BranchId);
+
+                    try { await _db.SaveChangesAsync(); }
+                    catch (Exception saveEx)
+                    {
+                        _logger.LogError(saveEx, "Could not even record why entry {EntryId} failed.", entry.Id);
+                    }
                 }
             }
 
-            await _db.SaveChangesAsync();
-
+            // Retries are counted separately from new arrivals. A batch that is all retries
+            // and applies none of them is the signal that something is stuck, and lumping
+            // them in with duplicates is what made this invisible in the first place.
             _logger.LogInformation(
-                "Sync batch from branch {BranchId}: {Received} received, {Stored} new, {Applied} applied, {Duplicate} already held.",
-                dto.BranchId, dto.Entries.Count, stored.Count, appliedCount, alreadyHeld.Count);
+                "Sync batch from branch {BranchId}: {Received} received, {Stored} new, {Retried} retried, {Applied} applied, {Duplicate} already applied.",
+                dto.BranchId, dto.Entries.Count, stored.Count, awaitingRetry.Count, appliedCount, alreadyApplied.Count);
 
             return Ok(ApiResponse<object>.Ok(new
             {
                 processed = appliedCount,
                 stored = stored.Count,
-                duplicates = alreadyHeld.Count,
+                retried = awaitingRetry.Count,
+                duplicates = alreadyApplied.Count,
                 total = dto.Entries.Count,
                 branchId = dto.BranchId
             }));
@@ -184,6 +211,39 @@ public class SyncInboxController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Forgets an optional reference Head Office does not have.
+    ///
+    /// A shift belongs to the branch that opened it and is never sent up — so a session
+    /// naming one failed its foreign key, and the whole delivery was lost:
+    ///
+    ///     insert or update on table "sessions" violates foreign key
+    ///     constraint "FK_sessions_shifts_ShiftId"
+    ///
+    /// Refusing the record over a detail Head Office does not track would be the wrong
+    /// trade. Who played, on which PC, for how much, is what matters up here; which of the
+    /// operator's shifts it fell in is branch bookkeeping. The session is kept and the
+    /// reference dropped, rather than the reverse.
+    /// </summary>
+    private async Task<Guid?> KnownHereOnly<TEntity>(Guid? id) where TEntity : class
+        => id is null || !await _db.Set<TEntity>().AnyAsync(e => EF.Property<Guid>(e, "Id") == id)
+            ? null
+            : id;
+
+    /// <summary>
+    /// Drops everything a failed entry queued, so the next save is not poisoned by it.
+    /// Inbox rows are kept — they carry the record of what went wrong.
+    /// </summary>
+    private void DiscardPendingChanges()
+    {
+        foreach (var tracked in _db.ChangeTracker.Entries().ToList())
+        {
+            if (tracked.Entity is SyncInboxEntry) continue;
+            if (tracked.State is EntityState.Added or EntityState.Modified)
+                tracked.State = EntityState.Detached;
+        }
+    }
+
     private async Task UpsertSessionStartedAsync(SyncInboxEntry held, JsonElement root)
     {
         var sessionId = held.AggregateId;
@@ -209,8 +269,8 @@ public class SyncInboxController : ControllerBase
             BranchId = held.BranchId,
             PcId = pcId.Value,
             OperatorId = operatorId.Value,
-            ShiftId = ReadGuid(root, "shiftId"),
-            MemberId = ReadGuid(root, "memberId"),
+            ShiftId = await KnownHereOnly<Shift>(ReadGuid(root, "shiftId")),
+            MemberId = await KnownHereOnly<Member>(ReadGuid(root, "memberId")),
             CustomerName = ReadString(root, "customerName"),
             StartTime = ReadDate(root, "startTime") ?? held.OccurredAt,
             PlannedDurationMin = ReadInt(root, "plannedDurationMin"),
