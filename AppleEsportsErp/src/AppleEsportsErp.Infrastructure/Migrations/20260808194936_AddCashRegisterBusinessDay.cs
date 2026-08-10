@@ -34,9 +34,9 @@ namespace AppleEsportsErp.Infrastructure.Migrations
                         ELSE (""OpenedAt"" AT TIME ZONE 'Asia/Kolkata')::date
                     END
                 )::date
-                -- Not "= '0001-01-01'". Postgres stores DateOnly.MinValue as -infinity, so
-                -- an equality test against the literal silently matches nothing and every
-                -- row keeps the sentinel. Anything older than the business is the sentinel.
+                -- Deliberately a range test, not equality against '0001-01-01'. Postgres
+                -- stores DateOnly.MinValue as -infinity, so the equality version silently
+                -- matched no rows at all and left every register on the sentinel date.
                 WHERE ""BusinessDay"" < DATE '2000-01-01';
             ");
         }
