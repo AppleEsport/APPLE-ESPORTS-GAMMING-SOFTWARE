@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using AppleEsportsErp.Application.DTOs.Eod;
 using AppleEsportsErp.Application.Exceptions;
@@ -81,14 +81,22 @@ public class EodService : IEodService
             .ToListAsync();
 
         // Fetch Registers
+        // Selected by the trading day the register itself belongs to, which is the day it was
+        // opened under. The register table already records that, and it is the same 06:00-06:00
+        // day the money is counted by everywhere else.
+        //
+        // What was here before ended with "|| r.Status == CashRegisterStatus.Open", with no
+        // date on it. That pulled in every register still open on any day in history. On the
+        // live system that was 21 registers going back three weeks, and the day's opening
+        // balance read Rs 5,500 against a drawer that had Rs 100 in it. A register left open
+        // by a crash is a problem for the day it belongs to, never for today.
+        var businessDay = DateOnly.FromDateTime(startOfDay.UtcDateTime.Date);
+
         var registers = await _unitOfWork.Repository<CashRegister>().Query()
             .Include(r => r.Operator)
             .Include(r => r.CashTransactions)
-            .Where(r => r.BranchId == branchId && (
-                (r.OpenedAt >= startOfDay && r.OpenedAt < endOfDay) || 
-                (r.ClosedAt >= startOfDay && r.ClosedAt < endOfDay) || 
-                r.Status == CashRegisterStatus.Open
-            ))
+            .Where(r => r.BranchId == branchId && r.BusinessDay == businessDay)
+            .OrderBy(r => r.OpenedAt)
             .ToListAsync();
 
         var walletTxs = await _unitOfWork.Repository<WalletTransaction>().Query()
@@ -121,18 +129,47 @@ public class EodService : IEodService
         report.PaymentMethods.TotalWalletDeductions = payments.Sum(p => p.WalletAmount);
         report.PaymentMethods.TotalWalletTopUps = walletTxs.Where(w => w.Action == WalletAction.Recharge).Sum(w => w.Amount);
 
-        // Cash Summary
-        report.Cash.TotalOpeningBalance = registers.Sum(r => r.OpeningBalance);
+        // ── Cash Summary ──────────────────────────────────────────────────────────
+        //
+        // A branch has ONE physical drawer. Every figure here describes that one drawer over
+        // the day, so nothing may be summed across shifts: shift 2 opens with the cash shift 1
+        // left behind, and adding both totals counts the same notes twice. Summing them is
+        // what produced an expected drawer of Rs 52,210 against a real one holding Rs 6,760.
+        var firstRegister = registers.FirstOrDefault();
+        var lastRegister = registers.LastOrDefault();
+
+        // The money the drawer started the day with - the first shift's opening float, not the
+        // sum of every shift's opening.
+        report.Cash.TotalOpeningBalance = firstRegister?.OpeningBalance ?? 0m;
+
         report.Cash.TotalCashSales = registers.Sum(r => r.TotalCashSales) + report.PaymentMethods.TotalWalletTopUps;
-        
+
         var allCashTxs = registers.SelectMany(r => r.CashTransactions).ToList();
         report.Cash.TotalCashInwards = allCashTxs.Where(t => t.TransactionType == "inward").Sum(t => t.CashAmount);
         report.Cash.TotalPettyExpenses = allCashTxs.Where(t => t.TransactionType == "petty_expense").Sum(t => Math.Abs(t.CashAmount));
+
+        // Cash taken out of the drawer and handed to the owner. This leaves the branch, so it
+        // must come off what the drawer is expected to hold - otherwise every handover looks
+        // like the operator is short by exactly the amount they correctly sent up.
         report.Cash.TotalOwnerWithdrawals = allCashTxs.Where(t => t.TransactionType == "withdrawal").Sum(t => Math.Abs(t.CashAmount));
-        
-        report.Cash.ExpectedCashInDrawer = registers.Sum(r => r.ExpectedDrawerCash);
-        report.Cash.ActualPhysicalCashCounted = registers.Sum(r => r.PhysicalCashCounted ?? 0);
-        report.Cash.TotalDiscrepancy = registers.Sum(r => r.CashDifference ?? 0);
+
+        // The drawer as it stands. ExpectedDrawerCash is maintained on the register by every
+        // cash movement as it happens, so the latest register carries the running figure -
+        // no need to re-derive it, and re-deriving it is where double counting creeps in.
+        report.Cash.ExpectedCashInDrawer = lastRegister?.ExpectedDrawerCash ?? 0m;
+
+        // What was actually counted, from the last shift that counted it. A shift still open
+        // has counted nothing, and reading that as zero cash would show the whole day's
+        // takings as missing.
+        var lastCounted = registers.LastOrDefault(r => r.PhysicalCashCounted.HasValue);
+        report.Cash.ActualPhysicalCashCounted = lastCounted?.PhysicalCashCounted ?? 0m;
+
+        // Only meaningful once somebody has counted. Before that the difference is unknown,
+        // not zero - and "zero difference" on an uncounted drawer is the most dangerous
+        // possible thing for this screen to say.
+        report.Cash.TotalDiscrepancy = lastCounted is null
+            ? 0m
+            : (lastCounted.PhysicalCashCounted ?? 0m) - lastCounted.ExpectedDrawerCash;
 
         // Shifts Summary
         report.Shifts.TotalShifts = registers.Count;

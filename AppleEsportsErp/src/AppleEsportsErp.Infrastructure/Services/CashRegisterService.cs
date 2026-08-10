@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Cash;
 using AppleEsportsErp.Application.Exceptions;
@@ -113,15 +113,42 @@ public class CashRegisterService : ICashRegisterService
                                        && r.Status == CashRegisterStatus.Open)
                 ?? throw new NotFoundException("No cash register has been opened for today yet.");
 
+            // The direction is decided here, from what kind of movement this is. It is never
+            // taken from the sign the caller happened to send.
+            //
+            // This used to be "ExpectedDrawerCash += dto.Amount" with a comment saying
+            // withdrawals decrease it - true only if whoever called remembered to pass a
+            // negative number. A Rs 5,000 handover to the owner entered as 5000 RAISED the
+            // expected drawer by Rs 5,000 instead of lowering it: a Rs 10,000 error, and the
+            // operator shows short by exactly the amount they correctly sent up.
+            var magnitude = Math.Abs(dto.Amount);
+            if (magnitude == 0)
+                throw new AppException("Enter an amount.");
+
+            var signedAmount = dto.TransactionType switch
+            {
+                "inward" => magnitude,            // cash added to the drawer
+                "petty_expense" => -magnitude,    // spent out of the drawer
+                "withdrawal" => -magnitude,       // taken out and sent to the owner
+                _ => throw new AppException(
+                        $"'{dto.TransactionType}' is not a kind of cash movement this can record."),
+            };
+
+            // Taking out more than the drawer holds is a typing mistake, not a transaction.
+            // Letting it through leaves a negative expected drawer, which nobody can reconcile.
+            if (signedAmount < 0 && magnitude > register.ExpectedDrawerCash)
+                throw new AppException(
+                    $"The drawer only has Rs {register.ExpectedDrawerCash:0.00} in it, so Rs {magnitude:0.00} cannot be taken out.");
+
             var tx = new CashTransaction
             {
                 CashRegisterId = register.Id,
                 BranchId = branchId,
                 OperatorId = operatorId,
-                CashAmount = dto.Amount,
-                CashReceived = dto.Amount,
+                CashAmount = signedAmount,
+                CashReceived = signedAmount,
                 ChangeReturned = 0,
-                ActualCashCollected = dto.Amount,
+                ActualCashCollected = signedAmount,
                 GamingAmount = 0,
                 FoodAmount = 0,
                 CustomerName = dto.Reason ?? "Operator Adjustment",
@@ -131,8 +158,7 @@ public class CashRegisterService : ICashRegisterService
 
             await _unitOfWork.Repository<CashTransaction>().AddAsync(tx);
 
-            // Inwards increase drawer cash, Withdrawals/Expenses decrease drawer cash
-            register.ExpectedDrawerCash += dto.Amount;
+            register.ExpectedDrawerCash += signedAmount;
             
             _unitOfWork.Repository<CashRegister>().Update(register);
 
