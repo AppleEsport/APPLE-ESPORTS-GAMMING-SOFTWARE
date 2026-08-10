@@ -3,6 +3,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using AppleEsportsErp.Application.Interfaces;
+using AppleEsportsErp.Application.Services;
 using AppleEsportsErp.Application.DTOs.SystemDesks;
 using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
@@ -26,27 +27,28 @@ public class SystemDesksService : ISystemDesksService
         if (shift == null)
             throw new Exception("Shift not found.");
 
-        var endTime = shift.LogoutTime ?? DateTimeOffset.UtcNow;
-
-        // Money belongs to the shift that TOOK it, not the shift that opened the bill.
+        // Money is reported per TRADING DAY (06:00-06:00 IST), not per operator login.
         //
-        // This used to select bills by their own CreatedAt/ShiftId and then read the payments
-        // hanging off them. A session opened before midnight and settled after — routine at a
-        // branch trading until 02:00 — put the payment on a bill belonging to the previous
-        // shift, so the operator who actually collected the money saw none of it and came up
-        // short at reconciliation. Querying payments directly by when they were taken is the
-        // only reading that matches the cash drawer.
+        // Two separate faults came from scoping it by shift. Bills were selected by their own
+        // CreatedAt, so a session opened before midnight and settled after — routine at a
+        // branch trading past 02:00 — landed on the previous shift and the operator who took
+        // the money saw Rs 0. And an operator who logs in three times in a day used to split
+        // one day's takings into three sets of figures that reconcile against nothing.
+        //
+        // How often somebody logs in is their business. The day's money is the day's money.
+        var (dayStart, dayEnd) = IndiaTime.BusinessDayRangeFor(DateTimeOffset.UtcNow);
+
         var payments = await _unitOfWork.Repository<Payment>().Query()
             .Where(p => p.BranchId == branchId
                      && p.OnlineAmount > 0
-                     && p.CreatedAt >= shift.LoginTime
-                     && p.CreatedAt <= endTime)
+                     && p.CreatedAt >= dayStart
+                     && p.CreatedAt < dayEnd)
             .Include(p => p.Bill)
                 .ThenInclude(b => b.Member)
             .ToListAsync();
 
         var walletTxs = await _unitOfWork.Repository<WalletTransaction>().Query()
-            .Where(w => w.BranchId == branchId && w.CreatedAt >= shift.LoginTime && w.CreatedAt <= endTime)
+            .Where(w => w.BranchId == branchId && w.CreatedAt >= dayStart && w.CreatedAt < dayEnd)
             .Include(w => w.Member)
             .ToListAsync();
 
@@ -98,20 +100,20 @@ public class SystemDesksService : ISystemDesksService
         if (shift == null)
             throw new Exception("Shift not found.");
 
-        var endTime = shift.LogoutTime ?? DateTimeOffset.UtcNow;
+
+        // Same trading-day scope as the Online Desk — see the note there.
+        var (dayStart, dayEnd) = IndiaTime.BusinessDayRangeFor(DateTimeOffset.UtcNow);
 
         var walletTxs = await _unitOfWork.Repository<WalletTransaction>().Query()
-            .Where(w => w.BranchId == branchId && w.CreatedAt >= shift.LoginTime && w.CreatedAt <= endTime)
+            .Where(w => w.BranchId == branchId && w.CreatedAt >= dayStart && w.CreatedAt < dayEnd)
             .Include(w => w.Member)
             .ToListAsync();
 
-        // Same correction as the Online Desk: attribute a payment to the shift that took it,
-        // not to the shift the bill happened to be opened in.
         var walletPayments = await _unitOfWork.Repository<Payment>().Query()
             .Where(p => p.BranchId == branchId
                      && p.WalletAmount > 0
-                     && p.CreatedAt >= shift.LoginTime
-                     && p.CreatedAt <= endTime)
+                     && p.CreatedAt >= dayStart
+                     && p.CreatedAt < dayEnd)
             .Include(p => p.Bill)
                 .ThenInclude(b => b.Member)
             .ToListAsync();

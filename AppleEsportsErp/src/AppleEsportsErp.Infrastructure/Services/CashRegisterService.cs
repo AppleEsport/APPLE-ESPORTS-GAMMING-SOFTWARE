@@ -3,6 +3,7 @@ using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Cash;
 using AppleEsportsErp.Application.Exceptions;
 using AppleEsportsErp.Application.Interfaces;
+using AppleEsportsErp.Application.Services;
 using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
 
@@ -27,29 +28,47 @@ public class CashRegisterService : ICashRegisterService
         _emailService = emailService;
     }
 
+    /// <summary>
+    /// The branch's drawer for the current trading day, whoever opened it.
+    ///
+    /// Scoped by day rather than by shift: there is one physical cash box, and an operator
+    /// logging in again part-way through the evening should carry on with the same drawer
+    /// rather than be told there isn't one.
+    /// </summary>
     public async Task<CashRegisterDto> GetActiveRegisterAsync(Guid branchId, Guid shiftId)
     {
+        var today = IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow);
+
         var register = await _unitOfWork.Repository<CashRegister>().Query()
             .Include(r => r.CashTransactions)
-            .FirstOrDefaultAsync(r => r.BranchId == branchId && r.ShiftId == shiftId && r.Status != CashRegisterStatus.Closed)
-            ?? throw new NotFoundException("No active cash register found for this shift.");
+            .FirstOrDefaultAsync(r => r.BranchId == branchId
+                                   && r.BusinessDay == today
+                                   && r.Status != CashRegisterStatus.Closed)
+            ?? throw new NotFoundException("No cash register has been opened for today yet.");
 
         return MapToDto(register);
     }
 
     public async Task<CashRegisterDto> OpenRegisterAsync(Guid branchId, Guid operatorId, Guid shiftId, OpenRegisterDto dto)
     {
+        var today = IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow);
+
         var existing = await _unitOfWork.Repository<CashRegister>().Query()
-            .FirstOrDefaultAsync(r => r.BranchId == branchId && r.ShiftId == shiftId && r.Status == CashRegisterStatus.Open);
-            
+            .FirstOrDefaultAsync(r => r.BranchId == branchId
+                                   && r.BusinessDay == today
+                                   && r.Status == CashRegisterStatus.Open);
+
+        // Deliberately not an error for a second login: the drawer for today already exists,
+        // so hand it back rather than refusing or opening a rival one with its own float.
         if (existing != null)
-            throw new AppException("Cash register is already open for this shift.");
+            return MapToDto(existing);
 
         var register = new CashRegister
         {
             BranchId = branchId,
             OperatorId = operatorId,
             ShiftId = shiftId,
+            BusinessDay = today,
             OpeningBalance = dto.OpeningBalance,
             ExpectedDrawerCash = dto.OpeningBalance, // Only opening balance affects drawer cash initially
             TotalCashSales = 0,
@@ -83,10 +102,16 @@ public class CashRegisterService : ICashRegisterService
         await _unitOfWork.BeginTransactionAsync();
         try
         {
+            // Today's drawer, whoever opened it — cash taken after a re-login belongs in the
+            // same box it physically went into.
+            var today = IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow);
+
             var register = await _unitOfWork.Repository<CashRegister>().Query()
                 .Include(r => r.CashTransactions)
-                .FirstOrDefaultAsync(r => r.BranchId == branchId && r.ShiftId == shiftId && r.Status == CashRegisterStatus.Open)
-                ?? throw new NotFoundException("No active cash register found for this shift.");
+                .FirstOrDefaultAsync(r => r.BranchId == branchId
+                                       && r.BusinessDay == today
+                                       && r.Status == CashRegisterStatus.Open)
+                ?? throw new NotFoundException("No cash register has been opened for today yet.");
 
             var tx = new CashTransaction
             {
