@@ -44,15 +44,15 @@ export default function GlobalFoodOrderListener() {
     }
   }, []);
 
-  const checkOrders = useCallback(async () => {
+  const checkOrders = useCallback(async (isBaseline = false) => {
     if (!targetBranchId) return;
     try {
       const { data } = await api.get('/food-orders', { params: { page: 1, pageSize: 50, branchId: targetBranchId } });
       const orders = data?.data?.items || [];
       const pendingOrders = orders.filter(o => o.status === 0 || o.status === 'Pending');
       const pendingCount = pendingOrders.length;
-      
-      if (pendingCount > prevPendingCount.current) {
+
+      if (!isBaseline && pendingCount > prevPendingCount.current) {
          // Check if sound is enabled globally (defaults to true)
          const soundEnabled = localStorage.getItem('food_order_sound_enabled') !== 'false';
          
@@ -79,8 +79,8 @@ export default function GlobalFoodOrderListener() {
   useEffect(() => {
     if (!connected || !targetBranchId) return;
     
-    // Initial check to baseline the count
-    checkOrders();
+    // Initial check to baseline the count — must not compare/beep, only record it
+    checkOrders(true);
 
     const unsubUpdated = subscribe(SIGNALR_HUBS.FOOD_ORDERS, 'FoodOrderUpdated', () => {
       checkOrders();

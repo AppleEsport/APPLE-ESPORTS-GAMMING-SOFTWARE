@@ -78,14 +78,11 @@ function RegisterDrawer({ open, onClose, onSuccess, editMember }) {
   const toast = useToast();
   const isEdit = !!editMember;
   const [fields, setFields] = useState({ fullName: '', mobileNumber: '', email: '', username: '', password: '' });
-  const [enableLogin, setEnableLogin] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
   useEffect(() => {
     if (open) {
-      const hasCredentials = !!(editMember?.username);
       setFields({
         fullName: editMember?.fullName ?? '',
         mobileNumber: editMember?.mobileNumber ?? '',
@@ -93,8 +90,6 @@ function RegisterDrawer({ open, onClose, onSuccess, editMember }) {
         username: editMember?.username ?? '',
         password: '',
       });
-      setEnableLogin(hasCredentials);
-      setShowPassword(false);
       setError(null);
     }
   }, [open, editMember]);
@@ -105,17 +100,14 @@ function RegisterDrawer({ open, onClose, onSuccess, editMember }) {
     e?.preventDefault();
     setError(null);
 
-    // Validate credentials section
-    if (enableLogin) {
-      const username = fields.username.trim();
-      if (!username) {
-        setError('Username is required when Login Access is enabled.');
-        return;
-      }
-      if (username.length < 3) {
-        setError('Username must be at least 3 characters.');
-        return;
-      }
+    const username = fields.username.trim();
+    if (!username) {
+      setError('Username is required.');
+      return;
+    }
+    if (username.length < 3) {
+      setError('Username must be at least 3 characters.');
+      return;
     }
     setLoading(true);
     try {
@@ -123,11 +115,8 @@ function RegisterDrawer({ open, onClose, onSuccess, editMember }) {
         fullName: fields.fullName.trim(),
         mobileNumber: fields.mobileNumber.trim(),
         ...(fields.email.trim() && { email: fields.email.trim() }),
-        // Only include credentials if the toggle is ON
-        ...(enableLogin && fields.username.trim() && { username: fields.username.trim() }),
-        ...(enableLogin && fields.password && { password: fields.password }),
-        // Signal backend to clear credentials if disabled during edit
-        ...(isEdit && !enableLogin && { disableLogin: true }),
+        username,
+        ...(fields.password && { password: fields.password }),
       };
       if (isEdit) {
         const updated = await updateMember(editMember.id, dto);
@@ -205,58 +194,22 @@ function RegisterDrawer({ open, onClose, onSuccess, editMember }) {
             </div>
           </div>
 
-          {/* ── Login credentials toggle ── */}
-          <div className="border border-border rounded-xl overflow-hidden">
-            {/* Toggle row */}
-            <button
-              type="button"
-              onClick={() => setEnableLogin(p => !p)}
-              className={`w-full flex items-center justify-between px-4 py-3 transition-colors ${
-                enableLogin ? 'bg-neon-blue/10' : 'bg-bg-3 hover:bg-bg-2'
-              }`}
-            >
-              <div className="flex items-center gap-2.5">
-                <KeyRound className={`w-4 h-4 ${enableLogin ? 'text-neon-blue' : 'text-text-3'}`} />
-                <div className="text-left">
-                  <p className={`text-sm font-bold ${enableLogin ? 'text-neon-blue' : 'text-text-2'}`}>
-                    Setup Login Access
-                  </p>
-                  <p className="text-[10px] text-text-3 mt-0.5">
-                    Member can log in and use wallet for payments
-                  </p>
-                </div>
-              </div>
-              {/* Toggle switch */}
-              <div className={`w-10 h-5 rounded-full border-2 relative transition-colors shrink-0 ${
-                enableLogin ? 'bg-neon-blue border-neon-blue' : 'bg-bg-2 border-border'
-              }`}>
-                <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-transform ${
-                  enableLogin ? 'translate-x-[18px]' : 'translate-x-0.5'
-                }`} />
-              </div>
-            </button>
-
-            {/* Credential fields — only visible when toggle is ON */}
-            {enableLogin && (
-              <div className="px-4 pb-4 pt-3 space-y-3 border-t border-border bg-bg-3/50">
-                <div>
-                  <label className="block text-[10px] text-text-3 uppercase tracking-widest font-bold mb-1.5">
-                    Username *
-                  </label>
-                  <div className="relative">
-                    <UserIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-3" />
-                    <input
-                      type="text"
-                      autoComplete="off"
-                      value={fields.username}
-                      onChange={e => set('username', e.target.value.replace(/\s/g, '').toLowerCase())}
-                      placeholder="e.g. rahul123"
-                      className="w-full bg-bg-3 border border-border text-text rounded-lg pl-9 pr-3 py-2.5 text-sm font-mono focus:border-neon-blue focus:ring-1 focus:ring-neon-blue transition-all placeholder:text-text-3"
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
+          <div>
+            <label className="block text-[10px] text-text-3 uppercase tracking-widest font-bold mb-1.5">
+              Username * <span className="normal-case font-normal">(login &amp; wallet payments)</span>
+            </label>
+            <div className="relative">
+              <UserIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-3" />
+              <input
+                required
+                type="text"
+                autoComplete="off"
+                value={fields.username}
+                onChange={e => set('username', e.target.value.replace(/\s/g, '').toLowerCase())}
+                placeholder="e.g. rahul123"
+                className="w-full bg-bg-3 border border-border text-text rounded-lg pl-9 pr-3 py-2.5 text-sm font-mono focus:border-accent focus:ring-1 focus:ring-accent transition-all placeholder:text-text-3"
+              />
+            </div>
           </div>
         </form>
 

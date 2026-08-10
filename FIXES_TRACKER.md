@@ -27,6 +27,12 @@ How to use this file:
 
 ## Fixed (history log)
 
+### Issue #21 — Beep sound on login/branch switch, only at Adajan (2026-08-11)
+- **Problem:** Logging in as an operator, or switching branch to Adajan from Super Admin, played a notification beep every time. Other branches were silent.
+- **Root cause:** `GlobalFoodOrderListener.jsx` runs on every authenticated page and, on login/branch-change, calls `checkOrders()` to "baseline" the pending food-order count. That baseline call reused the exact same "did the count increase?" comparison as real new-order detection, starting from `prevPendingCount.current = 0`. So any branch that currently had a pending food order (count > 0) looked like it had "new" orders and beeped — Adajan happened to have one sitting in `Pending` status; other branches didn't.
+- **Fix:** `checkOrders()` now takes an `isBaseline` flag. The initial call after login/branch-switch passes `true` and only records the starting count without comparing or playing the sound; only subsequent SignalR-triggered checks (`NewFoodOrder`/`FoodOrderUpdated`) can trigger the beep.
+- **Files changed:** `client/src/components/layout/GlobalFoodOrderListener.jsx`
+
 ### Issue #20 — Active Shift Not Detected for Multiple Operators (2026-08-06) [CRITICAL]
 - **Problem:** Multiple operators in live shifts were seeing "No Active Shift" error on Cash Register page, even though shift was active (SHIFT ACTIVE shown at bottom). This is a critical bug because it blocks all cash register operations.
 - **Root cause:** GetShiftIdAsync() in ControllerExtensions.cs was relying solely on JWT "shiftId" claim for regular operators. If the claim was missing or empty (due to token generation issues, claim not embedded during login, or old tokens), it threw an error instead of falling back to database lookup. SuperAdmin/Admin had a fallback (create shift if missing), but regular operators didn't.
