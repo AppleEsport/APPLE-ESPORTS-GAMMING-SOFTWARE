@@ -28,15 +28,25 @@ public class SystemDesksService : ISystemDesksService
 
         var endTime = shift.LogoutTime ?? DateTimeOffset.UtcNow;
 
-        // Find all bills for this shift
-        var bills = await _unitOfWork.Repository<Bill>().Query()
-            .Where(b => b.ShiftId == shiftId || (b.OperatorId == shift.OperatorId && b.CreatedAt >= shift.LoginTime && b.CreatedAt <= endTime))
-            .Include(b => b.Payments)
-            .Include(b => b.Member)
+        // Money belongs to the shift that TOOK it, not the shift that opened the bill.
+        //
+        // This used to select bills by their own CreatedAt/ShiftId and then read the payments
+        // hanging off them. A session opened before midnight and settled after — routine at a
+        // branch trading until 02:00 — put the payment on a bill belonging to the previous
+        // shift, so the operator who actually collected the money saw none of it and came up
+        // short at reconciliation. Querying payments directly by when they were taken is the
+        // only reading that matches the cash drawer.
+        var payments = await _unitOfWork.Repository<Payment>().Query()
+            .Where(p => p.BranchId == branchId
+                     && p.OnlineAmount > 0
+                     && p.CreatedAt >= shift.LoginTime
+                     && p.CreatedAt <= endTime)
+            .Include(p => p.Bill)
+                .ThenInclude(b => b.Member)
             .ToListAsync();
 
         var walletTxs = await _unitOfWork.Repository<WalletTransaction>().Query()
-            .Where(w => w.BranchId == branchId && (w.ShiftId == shiftId || (w.OperatorId == shift.OperatorId && w.CreatedAt >= shift.LoginTime && w.CreatedAt <= endTime)))
+            .Where(w => w.BranchId == branchId && w.CreatedAt >= shift.LoginTime && w.CreatedAt <= endTime)
             .Include(w => w.Member)
             .ToListAsync();
 
@@ -45,23 +55,18 @@ public class SystemDesksService : ISystemDesksService
             ShiftId = shiftId
         };
 
-        foreach (var bill in bills)
+        foreach (var payment in payments)
         {
-            foreach (var payment in bill.Payments)
+            dto.TotalOnlineSales += payment.OnlineAmount;
+            dto.Transactions.Add(new OnlineTransactionDto
             {
-                if (payment.OnlineAmount > 0)
-                {
-                    dto.TotalOnlineSales += payment.OnlineAmount;
-                    dto.Transactions.Add(new OnlineTransactionDto
-                    {
-                        Id = payment.Id,
-                        Timestamp = payment.CreatedAt,
-                        Description = $"Bill Payment #{bill.BillNumber} ({bill.CustomerName ?? bill.Member?.Username ?? "Walk-in"})",
-                        Amount = payment.OnlineAmount,
-                        PaymentMethod = "Online"
-                    });
-                }
-            }
+                Id = payment.Id,
+                Timestamp = payment.CreatedAt,
+                Description = $"Bill Payment #{payment.Bill?.BillNumber} " +
+                              $"({payment.Bill?.CustomerName ?? payment.Bill?.Member?.Username ?? "Walk-in"})",
+                Amount = payment.OnlineAmount,
+                PaymentMethod = "Online"
+            });
         }
 
         foreach (var tx in walletTxs)
@@ -96,14 +101,19 @@ public class SystemDesksService : ISystemDesksService
         var endTime = shift.LogoutTime ?? DateTimeOffset.UtcNow;
 
         var walletTxs = await _unitOfWork.Repository<WalletTransaction>().Query()
-            .Where(w => w.BranchId == branchId && (w.ShiftId == shiftId || (w.OperatorId == shift.OperatorId && w.CreatedAt >= shift.LoginTime && w.CreatedAt <= endTime)))
+            .Where(w => w.BranchId == branchId && w.CreatedAt >= shift.LoginTime && w.CreatedAt <= endTime)
             .Include(w => w.Member)
             .ToListAsync();
 
-        var bills = await _unitOfWork.Repository<Bill>().Query()
-            .Where(b => b.ShiftId == shiftId || (b.OperatorId == shift.OperatorId && b.CreatedAt >= shift.LoginTime && b.CreatedAt <= endTime))
-            .Include(b => b.Payments)
-            .Include(b => b.Member)
+        // Same correction as the Online Desk: attribute a payment to the shift that took it,
+        // not to the shift the bill happened to be opened in.
+        var walletPayments = await _unitOfWork.Repository<Payment>().Query()
+            .Where(p => p.BranchId == branchId
+                     && p.WalletAmount > 0
+                     && p.CreatedAt >= shift.LoginTime
+                     && p.CreatedAt <= endTime)
+            .Include(p => p.Bill)
+                .ThenInclude(b => b.Member)
             .ToListAsync();
 
         var dto = new WalletDeskSummaryDto
@@ -132,23 +142,18 @@ public class SystemDesksService : ISystemDesksService
             });
         }
 
-        foreach (var bill in bills)
+        foreach (var payment in walletPayments)
         {
-            foreach (var payment in bill.Payments)
+            dto.TotalWalletDeductions += payment.WalletAmount;
+            dto.Transactions.Add(new WalletTransactionSummaryDto
             {
-                if (payment.WalletAmount > 0)
-                {
-                    dto.TotalWalletDeductions += payment.WalletAmount;
-                    dto.Transactions.Add(new WalletTransactionSummaryDto
-                    {
-                        Id = payment.Id,
-                        Timestamp = payment.CreatedAt,
-                        Description = $"Bill Payment via Wallet #{bill.BillNumber} ({bill.CustomerName ?? bill.Member?.Username ?? "Walk-in"})",
-                        Amount = payment.WalletAmount,
-                        Action = "Deduction"
-                    });
-                }
-            }
+                Id = payment.Id,
+                Timestamp = payment.CreatedAt,
+                Description = $"Bill Payment via Wallet #{payment.Bill?.BillNumber} " +
+                              $"({payment.Bill?.CustomerName ?? payment.Bill?.Member?.Username ?? "Walk-in"})",
+                Amount = payment.WalletAmount,
+                Action = "Deduction"
+            });
         }
 
         dto.Transactions = dto.Transactions.OrderByDescending(t => t.Timestamp).ToList();
