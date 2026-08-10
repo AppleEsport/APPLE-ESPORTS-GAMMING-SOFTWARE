@@ -101,14 +101,17 @@ export default function AppShell() {
     }
   }, [isOperator, logout]);
 
-  const handleShiftEndComplete = useCallback(async () => {
+  const handleShiftEndComplete = useCallback(async (result = {}) => {
     setShowShiftEnd(false);
     // Clear the shift start session flag so next login shows it again
     if (user) {
       const sessionKey = `shift_start_done_${user.id || user.username}`;
       sessionStorage.removeItem(sessionKey);
     }
-    await logout();
+    // Carries the operator's "last shift of the day" answer through to the server, which
+    // closes the trading day, emails its totals, and stops tonight's silence being read
+    // as a power cut.
+    await logout({ closesTradingDay: result?.closesTradingDay === true });
   }, [logout, user]);
 
   const handleShiftEndCancel = useCallback(() => {

@@ -1,11 +1,13 @@
-using System.Text;
+﻿using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using AppleEsportsErp.Application.Services;
+using AppleEsportsErp.Application.Interfaces;
 using AppleEsportsErp.Infrastructure.Configuration;
+using AppleEsportsErp.Infrastructure.Services;
 using AppleEsportsErp.Infrastructure.Data;
 using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
@@ -240,6 +242,31 @@ public class SyncCourierService : BackgroundService
         _logger.LogInformation(
             "Branch {BranchId} link restored after {Minutes:N0} minutes offline ({From} to {To} IST) — recorded for the day's report.",
             branchId, seconds / 60.0, IndiaTime.Format(since), IndiaTime.Format(now));
+
+        // Sent on recovery, never during: there was no line to send it on. Said plainly,
+        // because "the internet was down" reads alarmingly and nothing was actually lost -
+        // the shop traded normally throughout and the figures have now arrived.
+        var branchName = await context.Branches.Where(b => b.Id == branchId)
+            .Select(b => b.Name).FirstOrDefaultAsync(cancellationToken) ?? "Unknown branch";
+
+        using (var scope = _serviceProvider.CreateAsyncScope())
+        {
+            var notifier = scope.ServiceProvider.GetRequiredService<IAdminNotifier>();
+            await notifier.NotifyAsync(
+                $"Internet was down at {branchName} - {AdminEmailTemplate.Describe(TimeSpan.FromSeconds(seconds))}",
+                AdminEmailTemplate.Compose(
+                    "Branch could not reach Head Office",
+                    AdminEmailTemplate.Amber,
+                    new[]
+                    {
+                        ("Branch", branchName),
+                        ("Lost connection", IndiaTime.Format(since)),
+                        ("Reconnected", IndiaTime.Format(now)),
+                        ("Offline for", AdminEmailTemplate.Describe(TimeSpan.FromSeconds(seconds))),
+                        ("Effect on the shop", "None - play and billing carried on as normal"),
+                    },
+                    "Everything recorded while offline has now been delivered. Nothing was lost."));
+        }
     }
 
     private void HandleSyncFailure(AppDbContext context, List<SyncOutboxEntry> entries, string errorMsg)

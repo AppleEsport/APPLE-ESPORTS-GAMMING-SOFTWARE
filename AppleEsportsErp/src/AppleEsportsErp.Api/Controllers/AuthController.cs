@@ -1,4 +1,4 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using AppleEsportsErp.Api.Extensions;
@@ -58,14 +58,14 @@ public class AuthController : ControllerBase
     /// <summary>SOP §10: Logout — POST /api/auth/logout</summary>
     [HttpPost("logout")]
     [Authorize]
-    public async Task<IActionResult> Logout()
+    public async Task<IActionResult> Logout([FromBody] LogoutDto? dto = null)
     {
         var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
         var role = User.FindFirstValue(ClaimTypes.Role)!;
         var shiftIdClaim = User.FindFirstValue("shiftId");
         var shiftId = string.IsNullOrEmpty(shiftIdClaim) ? (Guid?)null : Guid.Parse(shiftIdClaim);
 
-        await _authService.LogoutAsync(userId, role, shiftId);
+        await _authService.LogoutAsync(userId, role, shiftId, dto?.ClosesTradingDay ?? false);
 
         // The client cannot clear an HttpOnly cookie itself, so without this the browser
         // keeps presenting a valid token and the next visit silently logs straight back in.

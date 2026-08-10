@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Authorization;
+﻿using Microsoft.AspNetCore.Authorization;
 using System;
 using System.Security.Claims;
 using System.ComponentModel.DataAnnotations;
@@ -602,17 +602,20 @@ public class OperatorsController : ControllerBase
     private readonly AppleEsportsErp.Application.Interfaces.IAuditService _auditService;
     private readonly AppleEsportsErp.Application.Interfaces.IEmailService _emailService;
     private readonly Microsoft.AspNetCore.SignalR.IHubContext<AppleEsportsErp.Api.Hubs.NotificationHub> _notificationHub;
+    private readonly AppleEsportsErp.Application.Interfaces.IAdminNotifier _adminNotifier;
 
     public OperatorsController(
-        AppleEsportsErp.Application.Interfaces.IUnitOfWork unitOfWork, 
+        AppleEsportsErp.Application.Interfaces.IUnitOfWork unitOfWork,
         AppleEsportsErp.Application.Interfaces.IAuditService auditService,
         AppleEsportsErp.Application.Interfaces.IEmailService emailService,
-        Microsoft.AspNetCore.SignalR.IHubContext<AppleEsportsErp.Api.Hubs.NotificationHub> notificationHub)
+        Microsoft.AspNetCore.SignalR.IHubContext<AppleEsportsErp.Api.Hubs.NotificationHub> notificationHub,
+        AppleEsportsErp.Application.Interfaces.IAdminNotifier adminNotifier)
     {
         _unitOfWork = unitOfWork;
         _auditService = auditService;
         _emailService = emailService;
         _notificationHub = notificationHub;
+        _adminNotifier = adminNotifier;
     }
 
     [HttpGet]
@@ -713,6 +716,14 @@ public class OperatorsController : ControllerBase
         var op = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.Operator>().Query().FirstOrDefaultAsync(o => o.Id == id);
         if (op == null) return NotFound(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Fail("Operator not found"));
 
+        // Captured before the change so the alert can say what it was, not just what it is.
+        // What an operator may reach IS their role here - there is no separate role field -
+        // so a permissions or branch change is exactly the thing an owner needs telling about.
+        var previousBranchId = op.BranchId;
+        var previousPermissions = op.DashboardPermissions;
+        var previousBranchName = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.Branch>()
+            .Query().Where(b => b.Id == previousBranchId).Select(b => b.Name).FirstOrDefaultAsync();
+
         op.FullName = dto.FullName;
         op.Username = dto.Username;
         if (!string.IsNullOrWhiteSpace(dto.Email))
@@ -732,6 +743,38 @@ public class OperatorsController : ControllerBase
         await _unitOfWork.SaveChangesAsync();
 
         await _notificationHub.Clients.Group($"user:{op.Id}").SendAsync("PermissionsUpdated");
+
+        // Only when what they can reach actually changed. Correcting a spelling in someone's
+        // name should not email the owner; granting them the till should.
+        var branchChanged = previousBranchId != op.BranchId;
+        var permissionsChanged = !string.Equals(previousPermissions, op.DashboardPermissions, StringComparison.Ordinal);
+
+        if (branchChanged || permissionsChanged)
+        {
+            var newBranchName = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.Branch>()
+                .Query().Where(b => b.Id == op.BranchId).Select(b => b.Name).FirstOrDefaultAsync();
+
+            var rows = new List<(string, string)>
+            {
+                ("Staff member", op.FullName),
+                ("Username", op.Username),
+                ("Changed at", AppleEsportsErp.Application.Services.IndiaTime.Now.ToString("dd MMM yyyy, hh:mm tt")),
+            };
+
+            if (branchChanged)
+                rows.Add(("Branch", $"{previousBranchName ?? "unknown"}  ->  {newBranchName ?? "unknown"}"));
+
+            if (permissionsChanged)
+                rows.Add(("Access", "the screens this person can open have changed"));
+
+            await _adminNotifier.NotifyAsync(
+                $"Access changed: {op.FullName}",
+                AppleEsportsErp.Infrastructure.Services.AdminEmailTemplate.Compose(
+                    "Staff access changed",
+                    AppleEsportsErp.Infrastructure.Services.AdminEmailTemplate.Amber,
+                    rows,
+                    "If you did not make this change, review it in Settings straight away."));
+        }
 
         return Ok(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Ok(new { op.Id, op.Username }));
     }
@@ -838,52 +881,19 @@ public class OperatorsController : ControllerBase
         }
     }
 
-    private async Task SendNotificationAsync(string subject, string body)
-    {
-        try 
-        {
-            System.IO.File.AppendAllText("email_log.txt", $"[OperatorsController] SendNotificationAsync hit! Subject: {subject}\n");
-            var config = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.SystemConfig>().Query()
-                .FirstOrDefaultAsync(c => c.ConfigKey == "global_system_rules");
-            if (config != null && !string.IsNullOrEmpty(config.ConfigValue))
-            {
-                var doc = System.Text.Json.JsonDocument.Parse(config.ConfigValue);
-                if (doc.RootElement.TryGetProperty("emailNotifications", out var emailNode))
-                {
-                    if (emailNode.TryGetProperty("receivers", out var receiversNode))
-                    {
-                        var receivers = receiversNode.GetString();
-                        System.IO.File.AppendAllText("email_log.txt", $"[OperatorsController] Found receivers: '{receivers}'\n");
-                        if (!string.IsNullOrWhiteSpace(receivers))
-                        {
-                            await _emailService.SendEmailAsync(receivers, subject, body);
-                        }
-                        else
-                        {
-                            System.IO.File.AppendAllText("email_log.txt", $"[OperatorsController] Receivers string was empty or whitespace.\n");
-                        }
-                    }
-                    else
-                    {
-                        System.IO.File.AppendAllText("email_log.txt", $"[OperatorsController] 'receivers' property not found in JSON.\n");
-                    }
-                }
-                else
-                {
-                    System.IO.File.AppendAllText("email_log.txt", $"[OperatorsController] 'emailNotifications' property not found in JSON.\n");
-                }
-            }
-            else
-            {
-                System.IO.File.AppendAllText("email_log.txt", $"[OperatorsController] No config found in DB or it was empty.\n");
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[OperatorsController] Failed to send email notification: {ex.Message}");
-            System.IO.File.AppendAllText("email_log.txt", $"[OperatorsController] Exception: {ex.ToString()}\n");
-        }
-    }
+    /// <summary>
+    /// Tells the owner and any admins about a staffing change.
+    ///
+    /// This used to read a "receivers" string out of system settings and send only if
+    /// somebody had filled it in. Nobody had, on the live system, so every operator alert
+    /// ever raised here was addressed to an empty string and dropped — and the only record
+    /// of it was a line appended to a file called email_log.txt next to the executable.
+    ///
+    /// The notifier still honours that setting, and adds the admins from the database, so
+    /// the alert reaches someone whether or not the field was ever filled in.
+    /// </summary>
+    private Task SendNotificationAsync(string subject, string body)
+        => _adminNotifier.NotifyAsync(subject, body);
 
     [HttpPost("{id}/admin-role")]
     [Authorize(Policy = "AdminOrSuperAdmin")]

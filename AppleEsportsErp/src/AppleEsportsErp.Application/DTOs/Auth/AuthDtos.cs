@@ -1,4 +1,4 @@
-namespace AppleEsportsErp.Application.DTOs.Auth;
+﻿namespace AppleEsportsErp.Application.DTOs.Auth;
 
 /// <summary>SOP §6.2: Super Admin Login request</summary>
 public class AdminLoginDto
@@ -161,4 +161,15 @@ public class AvailableAdminDto
     public string FullName { get; set; } = null!;
     public string Type { get; set; } = null!; // "Admin" or "Operator"
     public int PinLength { get; set; }
+}
+
+/// <summary>Body of POST /api/auth/logout. Optional - a plain logout sends nothing.</summary>
+public class LogoutDto
+{
+    /// <summary>
+    /// The operator ticked "this is the last shift of the day". Only they know whether
+    /// another shift follows, and guessing it from the clock is what would make every
+    /// nightly close look like a power cut.
+    /// </summary>
+    public bool ClosesTradingDay { get; set; }
 }

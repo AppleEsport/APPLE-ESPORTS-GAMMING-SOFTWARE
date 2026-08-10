@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System.Text.Json;
@@ -28,8 +28,9 @@ public class WalletService : IWalletService
 
     private readonly IOutboxService _outbox;
 
-    public WalletService(IUnitOfWork unitOfWork, IAuditService auditService, IEmailService emailService, IConfiguration configuration, IAppUrlProvider appUrls, ILogger<WalletService> logger, IOutboxService outbox)
+    public WalletService(IUnitOfWork unitOfWork, IAuditService auditService, IEmailService emailService, IConfiguration configuration, IAppUrlProvider appUrls, ILogger<WalletService> logger, IOutboxService outbox, IAdminNotifier adminNotifier)
     {
+        _adminNotifier = adminNotifier;
         _unitOfWork = unitOfWork;
         _auditService = auditService;
         _emailService = emailService;
@@ -38,6 +39,8 @@ public class WalletService : IWalletService
         _logger = logger;
         _outbox = outbox;
     }
+
+    private readonly IAdminNotifier _adminNotifier;
 
     private async Task<(decimal minGamingTopUp, decimal defaultBonusPercent)> GetTopUpRulesAsync()
     {
@@ -328,6 +331,24 @@ public class WalletService : IWalletService
                 </div>";
 
             await _emailService.SendEmailAsync(member.Email, "Apple Esports - Wallet Top-Up Receipt", receiptBody);
+
+            // The owner sees every rupee that goes onto a wallet. Money entering the business
+            // outside the till is exactly what someone paying the bills wants sight of, and
+            // until now only the member was ever told.
+            await _adminNotifier.NotifyAsync(
+                $"Wallet top-up: {member.FullName} - Rs {amount:0.00}",
+                AdminEmailTemplate.Compose(
+                    "Member wallet topped up",
+                    AdminEmailTemplate.Green,
+                    new[]
+                    {
+                        ("Member", $"{member.FullName} ({member.MemberNumber})"),
+                        ("Top-up", $"Rs {amount:0.00}"),
+                        ("Bonus", $"Rs {bonusAmount:0.00}"),
+                        ("New gaming balance", $"Rs {member.GamingBalance:0.00}"),
+                        ("New food balance", $"Rs {member.FoodBalance:0.00}"),
+                        ("Taken at", AppleEsportsErp.Application.Services.IndiaTime.Now.ToString("dd MMM yyyy, hh:mm tt")),
+                    }));
 
             if (string.IsNullOrWhiteSpace(member.Username) || !string.IsNullOrWhiteSpace(member.PasswordHash))
                 return;

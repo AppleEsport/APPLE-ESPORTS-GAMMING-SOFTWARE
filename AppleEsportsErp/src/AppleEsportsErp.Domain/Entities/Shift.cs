@@ -1,4 +1,4 @@
-using AppleEsportsErp.Domain.Enums;
+﻿using AppleEsportsErp.Domain.Enums;
 
 namespace AppleEsportsErp.Domain.Entities;
 
@@ -13,6 +13,17 @@ public class Shift
     public string? DeviceInfo { get; set; } // JSONB
     public ShiftStatus Status { get; set; } = ShiftStatus.Active;
     /// <summary>SOP §18: Shift Summary stored at closure — JSONB</summary>
+    /// <summary>
+    /// Set when the operator ticks "this is the last shift of the day" on the way out.
+    ///
+    /// One tick answers two questions that cannot be answered reliably any other way. It
+    /// closes the trading day, which is when the day's summary is sent. And it says the
+    /// quiet that follows is the shop being shut, not a fault - without it, turning the
+    /// cafe off at night looks exactly like a power cut, and every branch would report one
+    /// every single night.
+    /// </summary>
+    public bool ClosedTradingDay { get; set; }
+
     public string? Summary { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 

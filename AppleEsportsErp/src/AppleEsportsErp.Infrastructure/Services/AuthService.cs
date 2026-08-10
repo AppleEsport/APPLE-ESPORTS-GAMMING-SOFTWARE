@@ -1,4 +1,4 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -7,6 +7,7 @@ using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Auth;
 using AppleEsportsErp.Application.Exceptions;
 using AppleEsportsErp.Application.Interfaces;
+using AppleEsportsErp.Application.Services;
 using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
 using AppleEsportsErp.Infrastructure.Data;
@@ -33,8 +34,11 @@ public class AuthService : IAuthService
     private readonly IAppUrlProvider _appUrls;
     private const int SALT_ROUNDS = 12;
 
-    public AuthService(AppDbContext db, JwtTokenService jwt, IAuditService audit, ILogger<AuthService> logger, ITokenRevocationService tokenRevocation, IEmailService emailService, IConfiguration configuration, IAppUrlProvider appUrls)
+    private readonly IAdminNotifier _adminNotifier;
+
+    public AuthService(AppDbContext db, JwtTokenService jwt, IAuditService audit, ILogger<AuthService> logger, ITokenRevocationService tokenRevocation, IEmailService emailService, IConfiguration configuration, IAppUrlProvider appUrls, IAdminNotifier adminNotifier)
     {
+        _adminNotifier = adminNotifier;
         _db = db;
         _jwt = jwt;
         _audit = audit;
@@ -403,7 +407,69 @@ public class AuthService : IAuthService
     /// SOP: System records logout time, shift summary, revenue, actions.
     /// Maps from: auth.service.js logout()
     /// </summary>
-    public async Task LogoutAsync(Guid userId, string role, Guid? shiftId)
+    /// <summary>
+    /// The day's figures, emailed to the owner when the last shift closes.
+    ///
+    /// Counted over the 06:00-06:00 trading day rather than the shift, because that is how
+    /// the money is counted everywhere else - a session that starts at 01:00 belongs to the
+    /// night before, whoever happened to be on duty.
+    ///
+    /// Never throws. A summary that cannot be emailed must not stop an operator going home.
+    /// </summary>
+    private async Task SendDaySummaryAsync(Shift shift)
+    {
+        try
+        {
+            var (dayStart, dayEnd) = IndiaTime.BusinessDayRangeFor(shift.LogoutTime ?? DateTimeOffset.UtcNow);
+            var businessDay = IndiaTime.BusinessDayOf(shift.LogoutTime ?? DateTimeOffset.UtcNow);
+            var branchName = await _db.Branches.Where(b => b.Id == shift.BranchId)
+                .Select(b => b.Name).FirstOrDefaultAsync() ?? "Unknown branch";
+
+            var payments = await _db.Payments.AsNoTracking()
+                .Where(p => p.BranchId == shift.BranchId && p.CreatedAt >= dayStart && p.CreatedAt < dayEnd)
+                .ToListAsync();
+
+            var sessions = await _db.Sessions.AsNoTracking()
+                .CountAsync(s => s.BranchId == shift.BranchId && s.StartTime >= dayStart && s.StartTime < dayEnd);
+
+            var outages = await _db.DowntimeEvents.AsNoTracking()
+                .Where(d => d.BranchId == shift.BranchId && d.StartedAt >= dayStart && d.StartedAt < dayEnd)
+                .ToListAsync();
+
+            var rows = new List<(string, string)>
+            {
+                ("Branch", branchName),
+                ("Trading day", $"{businessDay:dd MMM yyyy}  (06:00 to 06:00)"),
+                ("Closed at", IndiaTime.Format(shift.LogoutTime ?? DateTimeOffset.UtcNow)),
+                ("Sessions", sessions.ToString()),
+                ("Total taken", $"Rs {payments.Sum(p => p.TotalAmount):0.00}"),
+                ("  of which cash", $"Rs {payments.Sum(p => p.CashAmount):0.00}"),
+                ("  of which online", $"Rs {payments.Sum(p => p.OnlineAmount):0.00}"),
+                ("  of which wallet", $"Rs {payments.Sum(p => p.WalletAmount):0.00}"),
+                ("Interruptions today", outages.Count == 0 ? "none" : outages.Count.ToString()),
+            };
+
+            foreach (var outage in outages)
+            {
+                rows.Add(($"  {outage.Kind}",
+                    $"{IndiaTime.Format(outage.StartedAt)}, lasted {AdminEmailTemplate.Describe(TimeSpan.FromSeconds(outage.DurationSeconds))}"));
+            }
+
+            await _adminNotifier.NotifyAsync(
+                $"End of day - {branchName} - {businessDay:dd MMM yyyy}",
+                AdminEmailTemplate.Compose(
+                    "End of day summary",
+                    AdminEmailTemplate.Green,
+                    rows,
+                    "Sent because the operator marked this as the last shift of the day."));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Could not send the end-of-day summary for shift {ShiftId}.", shift.Id);
+        }
+    }
+
+    public async Task LogoutAsync(Guid userId, string role, Guid? shiftId, bool closesTradingDay = false)
     {
         if (role == Roles.Operator && shiftId.HasValue)
         {
@@ -414,18 +480,28 @@ public class AuthService : IAuthService
             {
                 shift.LogoutTime = DateTimeOffset.UtcNow;
                 shift.Status = ShiftStatus.Completed;
+                shift.ClosedTradingDay = closesTradingDay;
             }
 
             // Update operator status
             var op = await _db.Operators.FindAsync(userId);
-            if (op != null) 
+            if (op != null)
             {
                 op.Status = OperatorStatus.LoggedOut;
                 op.IsOnline = false;
             }
 
             await _db.SaveChangesAsync();
-            _logger.LogInformation("Operator shift ended: {UserId}, shift: {ShiftId}", userId, shiftId);
+            _logger.LogInformation("Operator shift ended: {UserId}, shift: {ShiftId}, closed the day: {ClosedDay}",
+                userId, shiftId, closesTradingDay);
+
+            // Sent after the save, so the figures in it are the ones on record. Only on the
+            // last shift of the day: a summary after every shift would be partial, and with
+            // four branches and several shifts each it would be ignored within a week.
+            if (closesTradingDay && shift != null)
+            {
+                await SendDaySummaryAsync(shift);
+            }
         }
 
         // Fetch user name for audit

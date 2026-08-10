@@ -1,4 +1,4 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using System.Text;
 using System.Threading.RateLimiting;
 using FluentValidation;
@@ -337,6 +337,10 @@ builder.Services.AddHostedService<AppleEsportsErp.Api.Services.SyncCourierServic
 // what makes anything it later reports recognisable at Head Office.
 builder.Services.AddHttpClient();
 builder.Services.AddScoped<AppleEsportsErp.Api.Services.BranchAdoptionService>();
+
+// One answer to "who is an admin", shared by every alert. Three separate places had
+// their own answer and all three resolved to nobody on the live system.
+builder.Services.AddScoped<IAdminNotifier, AdminNotifier>();
 
 builder.Services.AddScoped<IOfflineSyncService, OfflineSyncService>();
 builder.Services.AddScoped<IEmployeeService, EmployeeService>();

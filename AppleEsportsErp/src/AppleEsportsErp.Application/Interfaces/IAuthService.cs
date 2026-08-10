@@ -1,4 +1,4 @@
-using AppleEsportsErp.Application.DTOs.Auth;
+﻿using AppleEsportsErp.Application.DTOs.Auth;
 
 namespace AppleEsportsErp.Application.Interfaces;
 
@@ -18,7 +18,14 @@ public interface IAuthService
     Task<LoginResponseDto> LoginMemberAsync(MemberLoginDto dto);
 
     /// <summary>SOP §10: Logout — closes shift for operators</summary>
-    Task LogoutAsync(Guid userId, string role, Guid? shiftId);
+    /// <summary>
+    /// Ends the session, and the operator's shift with it.
+    ///
+    /// <paramref name="closesTradingDay"/> is the operator ticking "this is the last shift
+    /// of the day". It closes the 06:00-06:00 trading day, sends the day's summary, and
+    /// marks the quiet that follows as the shop being shut rather than a power cut.
+    /// </summary>
+    Task LogoutAsync(Guid userId, string role, Guid? shiftId, bool closesTradingDay = false);
 
     /// <summary>SOP §11: Force Logout — Super Admin forcibly logs out an operator</summary>
     Task<ForceLogoutResponseDto> ForceLogoutAsync(Guid adminId, Guid operatorId);

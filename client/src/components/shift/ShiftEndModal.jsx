@@ -121,9 +121,13 @@ export default function ShiftEndModal({ onComplete, onCancel }) {
 
 
   // ── Step 3: Final Logout ──
+  // Defaults to false: a handover between shifts is the common case, and wrongly closing
+  // the day would send half a day's figures as if they were the whole day's.
+  const [closesTradingDay, setClosesTradingDay] = useState(false);
+
   const handleFinalLogout = () => {
     // Store cash verification data in session for backend logging if needed
-    onComplete({ physicalCash: physicalCashNum, mismatchReason });
+    onComplete({ physicalCash: physicalCashNum, mismatchReason, closesTradingDay });
   };
 
   const getStepNum = () => {
@@ -464,6 +468,29 @@ export default function ShiftEndModal({ onComplete, onCancel }) {
                     </div>
                   )}
                 </div>
+
+                {/* Only the operator knows whether anyone is coming in after them, and that
+                    one answer decides two things: whether the day's takings are totalled and
+                    emailed now, and whether the system going quiet tonight counts as a power
+                    cut. Guessing it from the clock would report a fault every single night. */}
+                <label className="w-full flex items-start gap-3 bg-bg-3 rounded-xl border border-border p-4 mb-5 cursor-pointer hover:border-accent/50 transition-colors text-left">
+                  <input
+                    type="checkbox"
+                    checked={closesTradingDay}
+                    onChange={(e) => setClosesTradingDay(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 accent-neon-red cursor-pointer flex-shrink-0"
+                  />
+                  <span>
+                    <span className="block text-text text-sm font-bold">
+                      This is the last shift of the day
+                    </span>
+                    <span className="block text-text-3 text-[11px] mt-1 leading-relaxed">
+                      Tick this only if the shop is closing now and nobody else is taking over.
+                      The day's totals are sent to the owner, and the system knows it is shut
+                      rather than broken.
+                    </span>
+                  </span>
+                </label>
 
                 <p className="text-text-3 text-xs mb-6">
                   Click below to end your shift. You will be logged out of the system.

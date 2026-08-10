@@ -124,12 +124,16 @@ export function AuthProvider({ children }) {
   }, [fetchCurrentUser]);
 
   // ── Logout (SOP §10: shift closure for operators) ──
-  const logout = useCallback(async () => {
+  const logout = useCallback(async (options = {}) => {
     // Capture role to determine where to redirect after logout
     const role = user?.role || user?.Role || '';
 
     try {
-      await api.post('/auth/logout', { shiftId: user?.shiftId }).catch(() => {});
+      await api.post('/auth/logout', {
+        shiftId: user?.shiftId,
+        // Operator ticked "last shift of the day" - closes the trading day and sends its summary.
+        closesTradingDay: options.closesTradingDay === true,
+      }).catch(() => {});
     } finally {
       localStorage.removeItem('user');
       localStorage.removeItem('activeBranchId');

@@ -69,6 +69,12 @@ ADD COLUMN IF NOT EXISTS ""SoldQty"" integer NOT NULL DEFAULT 0;
 ALTER TABLE operators
 ADD COLUMN IF NOT EXISTS ""IsGlobalAdmin"" boolean NOT NULL DEFAULT false;
 
+-- Set when the operator ticks ""this is the last shift of the day"" on the way out. It closes
+-- the trading day, and it tells the outage check that the quiet which follows is the shop
+-- being shut rather than a fault. Without it every branch reports a power cut every night.
+ALTER TABLE shifts
+ADD COLUMN IF NOT EXISTS ""ClosedTradingDay"" boolean NOT NULL DEFAULT false;
+
 ALTER TABLE bills
 ADD COLUMN IF NOT EXISTS ""IsDeferred"" boolean NOT NULL DEFAULT false;
 

@@ -1,8 +1,10 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using AppleEsportsErp.Application.Services;
 using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
+using AppleEsportsErp.Application.Interfaces;
 using AppleEsportsErp.Infrastructure.Data;
+using AppleEsportsErp.Infrastructure.Services;
 
 namespace AppleEsportsErp.Api.Services;
 
@@ -30,6 +32,7 @@ public static class SessionDowntimeRecovery
     {
         using var scope = services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var notifier = scope.ServiceProvider.GetRequiredService<IAdminNotifier>();
 
         var now = DateTimeOffset.UtcNow;
 
@@ -112,6 +115,33 @@ public static class SessionDowntimeRecovery
                 downtimeSeconds / 60.0, session.Id, session.PausedSeconds / 60.0);
         }
 
+        // A branch whose last shift was marked "last of the day" was shut on purpose. The
+        // silence that follows is the cafe being closed, not a power cut, and recording one
+        // every night would bury the real ones and email the owner daily for nothing. Only
+        // reached when an operator left a session running before shutting down; a clean close
+        // has no live sessions and never gets this far.
+        var expected = new List<Guid>();
+        foreach (var (branchId, outage) in outages)
+        {
+            var closedDeliberately = await db.Shifts
+                .Where(s => s.BranchId == branchId
+                            && s.ClosedTradingDay
+                            && s.LogoutTime != null
+                            && s.LogoutTime <= outage.StartedAt.AddMinutes(30))
+                .OrderByDescending(s => s.LogoutTime)
+                .AnyAsync();
+
+            if (closedDeliberately) expected.Add(branchId);
+        }
+
+        foreach (var branchId in expected)
+        {
+            logger.LogInformation(
+                "Branch {BranchId} was shut deliberately at the end of the day - not recording a power cut.",
+                branchId);
+            outages.Remove(branchId);
+        }
+
         if (outages.Count > 0)
             db.DowntimeEvents.AddRange(outages.Values);
 
@@ -124,6 +154,30 @@ public static class SessionDowntimeRecovery
                 "{Sessions} session(s) affected — will appear on the {Day} report.",
                 outage.BranchId, IndiaTime.Format(outage.StartedAt), IndiaTime.Format(outage.EndedAt),
                 outage.DurationSeconds / 60.0, outage.SessionsAffected, outage.BusinessDay);
+        }
+
+        foreach (var outage in outages.Values)
+        {
+            var branchName = await db.Branches.Where(b => b.Id == outage.BranchId)
+                .Select(b => b.Name).FirstOrDefaultAsync() ?? "Unknown branch";
+
+            await notifier.NotifyAsync(
+                $"Power cut at {branchName} - down {AdminEmailTemplate.Describe(TimeSpan.FromSeconds(outage.DurationSeconds))}",
+                AdminEmailTemplate.Compose(
+                    "The system was down",
+                    AdminEmailTemplate.Red,
+                    new[]
+                    {
+                        ("Branch", branchName),
+                        ("What happened", "The system stopped running - power cut, restart or update."),
+                        ("Went down", IndiaTime.Format(outage.StartedAt)),
+                        ("Came back", IndiaTime.Format(outage.EndedAt)),
+                        ("Down for", AdminEmailTemplate.Describe(TimeSpan.FromSeconds(outage.DurationSeconds))),
+                        ("Sessions affected", outage.SessionsAffected.ToString()),
+                        ("Trading day", $"{outage.BusinessDay:dd MMM yyyy}"),
+                    },
+                    "Those sessions are paused, not stopped. The operator is asked whether each " +
+                    "customer is still there before any time is charged."));
         }
 
         logger.LogInformation(
