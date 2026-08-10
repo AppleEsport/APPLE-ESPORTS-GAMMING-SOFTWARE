@@ -30,9 +30,10 @@ public class AuthService : IAuthService
     private readonly ITokenRevocationService _tokenRevocation;
     private readonly IEmailService _emailService;
     private readonly IConfiguration _configuration;
+    private readonly IAppUrlProvider _appUrls;
     private const int SALT_ROUNDS = 12;
 
-    public AuthService(AppDbContext db, JwtTokenService jwt, IAuditService audit, ILogger<AuthService> logger, ITokenRevocationService tokenRevocation, IEmailService emailService, IConfiguration configuration)
+    public AuthService(AppDbContext db, JwtTokenService jwt, IAuditService audit, ILogger<AuthService> logger, ITokenRevocationService tokenRevocation, IEmailService emailService, IConfiguration configuration, IAppUrlProvider appUrls)
     {
         _db = db;
         _jwt = jwt;
@@ -41,6 +42,7 @@ public class AuthService : IAuthService
         _tokenRevocation = tokenRevocation;
         _emailService = emailService;
         _configuration = configuration;
+        _appUrls = appUrls;
     }
 
     /// <summary>
@@ -805,11 +807,7 @@ public class AuthService : IAuthService
 
         await _db.SaveChangesAsync();
 
-        var configuredBaseUrl = _configuration["App:BaseUrl"];
-        var appBaseUrl = string.IsNullOrWhiteSpace(configuredBaseUrl)
-            ? "http://localhost:5173"
-            : configuredBaseUrl.Trim().TrimEnd('/');
-        string resetLink = $"{appBaseUrl}/reset-password?email={Uri.EscapeDataString(email)}&token={Uri.EscapeDataString(token)}";
+        string resetLink = _appUrls.BuildResetPasswordLink(email, token);
         string subject = "Apple Esports - Password Reset";
         string htmlBody = $@"
         <div style='background-color:#050505; color:#ffffff; font-family:""Segoe UI"", Tahoma, Geneva, Verdana, sans-serif; padding:40px 20px; text-align:center;'>

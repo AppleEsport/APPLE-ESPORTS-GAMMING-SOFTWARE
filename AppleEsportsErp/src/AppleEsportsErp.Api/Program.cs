@@ -234,6 +234,8 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IAuditService, AuditService>();
 builder.Services.AddScoped<IEmailService, EmailService>();
+// Resolves this deployment's own public URL for links inside outgoing emails.
+builder.Services.AddSingleton<IAppUrlProvider, AppUrlProvider>();
 builder.Services.AddScoped<IPcStatusService, PcStatusService>();
 builder.Services.AddScoped<ITokenRevocationService, TokenRevocationService>();
 builder.Services.AddScoped<ISessionService, SessionService>();
