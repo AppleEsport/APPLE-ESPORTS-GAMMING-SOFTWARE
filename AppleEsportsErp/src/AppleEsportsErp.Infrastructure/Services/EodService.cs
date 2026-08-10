@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using AppleEsportsErp.Application.DTOs.Eod;
 using AppleEsportsErp.Application.Exceptions;
 using AppleEsportsErp.Application.Interfaces;
+using AppleEsportsErp.Application.Services;
 using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
 
@@ -21,8 +22,17 @@ public class EodService : IEodService
 
     public async Task<ValidationStatusDto> GetValidationStatusAsync(Guid branchId, DateTimeOffset targetDate)
     {
+        // startOfDay stays as the day's KEY - it is what a saved EOD snapshot is filed under,
+        // and changing it would orphan every snapshot already finalised.
         var startOfDay = new DateTimeOffset(targetDate.UtcDateTime.Date, TimeSpan.Zero);
         var endOfDay = startOfDay.AddDays(1);
+
+        // The window everything is actually counted over: 06:00 to 06:00 IST, the trading day.
+        // A session that starts at 01:00 belongs to the night before, and the cash desk and
+        // wallet desk have always read it that way. This screen read midnight-to-midnight UTC,
+        // which is 05:30 IST - so late-night takings landed on the wrong day here and the right
+        // day everywhere else, and the two screens disagreed about the same money.
+        var (dayStart, dayEnd) = IndiaTime.BusinessDayRange(DateOnly.FromDateTime(startOfDay.UtcDateTime.Date));
 
         var blockers = new List<string>();
 
@@ -44,7 +54,7 @@ public class EodService : IEodService
 
         // 3. Check for Pending/Unpaid Bills
         var pendingBills = await _unitOfWork.Repository<Bill>().Query()
-            .Where(b => b.BranchId == branchId && b.CreatedAt >= startOfDay && b.CreatedAt < endOfDay && b.Status != BillStatus.Completed)
+            .Where(b => b.BranchId == branchId && b.CreatedAt >= dayStart && b.CreatedAt < dayEnd && b.Status != BillStatus.Completed)
             .CountAsync();
 
         if (pendingBills > 0)
@@ -66,18 +76,27 @@ public class EodService : IEodService
 
     public async Task<EodReportDto> GenerateEodReportAsync(Guid branchId, DateTimeOffset targetDate)
     {
+        // startOfDay stays as the day's KEY - it is what a saved EOD snapshot is filed under,
+        // and changing it would orphan every snapshot already finalised.
         var startOfDay = new DateTimeOffset(targetDate.UtcDateTime.Date, TimeSpan.Zero);
         var endOfDay = startOfDay.AddDays(1);
 
+        // The window everything is actually counted over: 06:00 to 06:00 IST, the trading day.
+        // A session that starts at 01:00 belongs to the night before, and the cash desk and
+        // wallet desk have always read it that way. This screen read midnight-to-midnight UTC,
+        // which is 05:30 IST - so late-night takings landed on the wrong day here and the right
+        // day everywhere else, and the two screens disagreed about the same money.
+        var (dayStart, dayEnd) = IndiaTime.BusinessDayRange(DateOnly.FromDateTime(startOfDay.UtcDateTime.Date));
+
         // Fetch Bills
         var bills = await _unitOfWork.Repository<Bill>().Query()
-            .Where(b => b.BranchId == branchId && b.Status == BillStatus.Completed && b.CompletedAt >= startOfDay && b.CompletedAt < endOfDay)
+            .Where(b => b.BranchId == branchId && b.Status == BillStatus.Completed && b.CompletedAt >= dayStart && b.CompletedAt < dayEnd)
             .ToListAsync();
         var completedBills = bills;
 
         // Fetch Payments
         var payments = await _unitOfWork.Repository<Payment>().Query()
-            .Where(p => p.BranchId == branchId && p.CreatedAt >= startOfDay && p.CreatedAt < endOfDay)
+            .Where(p => p.BranchId == branchId && p.CreatedAt >= dayStart && p.CreatedAt < dayEnd)
             .ToListAsync();
 
         // Fetch Registers
@@ -100,7 +119,7 @@ public class EodService : IEodService
             .ToListAsync();
 
         var walletTxs = await _unitOfWork.Repository<WalletTransaction>().Query()
-            .Where(w => w.BranchId == branchId && w.CreatedAt >= startOfDay && w.CreatedAt < endOfDay)
+            .Where(w => w.BranchId == branchId && w.CreatedAt >= dayStart && w.CreatedAt < dayEnd)
             .ToListAsync();
 
         var report = new EodReportDto
@@ -112,7 +131,7 @@ public class EodService : IEodService
 
         // Fetch Credits (for deduction from revenue)
         var credits = await _unitOfWork.Repository<CustomerCredit>().Query()
-            .Where(c => c.BranchId == branchId && ((c.CreatedAt >= startOfDay && c.CreatedAt < endOfDay) || (c.ClearedAt >= startOfDay && c.ClearedAt < endOfDay)))
+            .Where(c => c.BranchId == branchId && ((c.CreatedAt >= dayStart && c.CreatedAt < dayEnd) || (c.ClearedAt >= dayStart && c.ClearedAt < dayEnd)))
             .ToListAsync();
 
         var pendingCredits = credits.Where(c => c.Status == "pending").Sum(c => c.CreditAmount);
@@ -194,10 +213,10 @@ public class EodService : IEodService
         }
 
         // Operational Stats
-        report.Operations.TotalSessions = await _unitOfWork.Repository<Session>().Query().CountAsync(s => s.BranchId == branchId && s.StartTime >= startOfDay && s.StartTime < endOfDay);
-        report.Operations.TotalReservations = await _unitOfWork.Repository<Reservation>().Query().CountAsync(r => r.BranchId == branchId && r.CreatedAt >= startOfDay && r.CreatedAt < endOfDay);
-        report.Operations.TotalFoodOrders = await _unitOfWork.Repository<FoodOrder>().Query().CountAsync(o => o.BranchId == branchId && o.CreatedAt >= startOfDay && o.CreatedAt < endOfDay);
-        report.Operations.NewMembersRegistered = await _unitOfWork.Repository<Member>().Query().CountAsync(m => m.HomeBranchId == branchId && m.CreatedAt >= startOfDay && m.CreatedAt < endOfDay);
+        report.Operations.TotalSessions = await _unitOfWork.Repository<Session>().Query().CountAsync(s => s.BranchId == branchId && s.StartTime >= dayStart && s.StartTime < dayEnd);
+        report.Operations.TotalReservations = await _unitOfWork.Repository<Reservation>().Query().CountAsync(r => r.BranchId == branchId && r.CreatedAt >= dayStart && r.CreatedAt < dayEnd);
+        report.Operations.TotalFoodOrders = await _unitOfWork.Repository<FoodOrder>().Query().CountAsync(o => o.BranchId == branchId && o.CreatedAt >= dayStart && o.CreatedAt < dayEnd);
+        report.Operations.NewMembersRegistered = await _unitOfWork.Repository<Member>().Query().CountAsync(m => m.HomeBranchId == branchId && m.CreatedAt >= dayStart && m.CreatedAt < dayEnd);
 
         // Credit Logs (reuse credits fetched earlier)
         report.CreditLogs = credits.Select(c => new EodCreditLogDto
