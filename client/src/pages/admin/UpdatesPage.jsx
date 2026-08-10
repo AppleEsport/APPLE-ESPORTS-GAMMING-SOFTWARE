@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { apiClient } from '../../services/apiClient';
+import api from '../../config/api';
 import './UpdatesPage.css';
 
 export default function UpdatesPage() {
@@ -23,14 +23,14 @@ export default function UpdatesPage() {
       setLoading(true);
 
       // Get latest approved version
-      const versionRes = await apiClient.get('/api/versions/latest');
+      const versionRes = await api.get('/api/versions/latest');
       if (versionRes.data?.data) {
         setLatestVersion(versionRes.data.data);
       }
 
       if (isSuperAdmin) {
         // Load all branch versions
-        const branchRes = await apiClient.get('/api/versions/all-branches');
+        const branchRes = await api.get('/api/versions/all-branches');
         if (branchRes.data?.data) {
           setBranches(branchRes.data.data);
         }
@@ -38,7 +38,7 @@ export default function UpdatesPage() {
         // Load just this branch's version
         const branchId = user?.branchId;
         if (branchId) {
-          const branchRes = await apiClient.get(`/api/versions/branch/${branchId}`);
+          const branchRes = await api.get(`/api/versions/branch/${branchId}`);
           if (branchRes.data?.data) {
             const branchStatus = branchRes.data.data;
             setBranches([branchStatus]);
@@ -59,7 +59,7 @@ export default function UpdatesPage() {
 
   const handleApproveVersion = async (versionInfoId) => {
     try {
-      await apiClient.post('/api/versions/approve', { versionInfoId });
+      await api.post('/api/versions/approve', { versionInfoId });
       await loadVersionInfo();
     } catch (err) {
       setError('Failed to approve version');
@@ -69,7 +69,7 @@ export default function UpdatesPage() {
 
   const handleToggleAutoUpdate = async (branchId) => {
     try {
-      await apiClient.put(`/api/versions/branch/${branchId}/auto-update`, {
+      await api.put(`/api/versions/branch/${branchId}/auto-update`, {
         autoUpdateEnabled: !autoUpdateEnabled
       });
       setAutoUpdateEnabled(!autoUpdateEnabled);
