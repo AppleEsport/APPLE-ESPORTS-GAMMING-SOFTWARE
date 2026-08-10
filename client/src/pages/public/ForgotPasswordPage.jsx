@@ -17,7 +17,7 @@ export default function ForgotPasswordPage() {
     setError('');
 
     try {
-      await authAPI.forgotPassword(email);
+      await authAPI.forgotPassword(email, 'staff');
       setMessage("If that email exists, a reset link has been sent. Check your inbox.");
     } catch (err) {
       setError(err.response?.data?.error || "Failed to initiate reset.");

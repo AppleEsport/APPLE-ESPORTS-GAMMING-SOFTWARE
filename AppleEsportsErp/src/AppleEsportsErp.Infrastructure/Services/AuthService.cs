@@ -863,12 +863,22 @@ public class AuthService : IAuthService
         return await LoginOperatorAsync(new OperatorLoginDto { BranchId = dto.BranchId, Username = dto.Username, Password = dto.Password });
     }
 
-    public async Task InitiatePasswordResetAsync(string email)
+    public async Task InitiatePasswordResetAsync(string email, string? accountType = null)
     {
         email = email.Trim().ToLowerInvariant();
-        var user = await _db.Users.FirstOrDefaultAsync(u => u.Email == email);
-        var op = await _db.Operators.FirstOrDefaultAsync(o => o.Email == email);
-        var member = await _db.Members.FirstOrDefaultAsync(m => m.Email == email);
+        // Same email can belong to both a Member and a staff (User/Operator) account.
+        // Scope the lookup to whichever screen the request came from so the reset never
+        // lands on the wrong account type.
+        var user = accountType == "member" ? null : await _db.Users.FirstOrDefaultAsync(u => u.Email == email);
+        var op = accountType == "member" ? null : await _db.Operators.FirstOrDefaultAsync(o => o.Email == email);
+        // Members can end up with duplicate rows sharing an email (e.g. abandoned re-registrations).
+        // Prefer the active one so a reset never lands on a stale/suspended duplicate instead of
+        // the account the person is actually trying to log into.
+        var member = accountType == "staff" ? null : await _db.Members
+            .Where(m => m.Email == email)
+            .OrderByDescending(m => m.Status == MemberStatus.Active)
+            .ThenByDescending(m => m.UpdatedAt)
+            .FirstOrDefaultAsync();
 
         if (user == null && op == null && member == null) return; // Silent fail for security
 

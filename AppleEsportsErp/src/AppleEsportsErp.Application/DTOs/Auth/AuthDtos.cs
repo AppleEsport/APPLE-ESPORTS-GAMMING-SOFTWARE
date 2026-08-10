@@ -107,6 +107,11 @@ public class MemberLoginDto
 public class ForgotPasswordDto
 {
     public string Email { get; set; } = null!;
+    // "member" or "staff" — which login screen the request came from. The same email can
+    // belong to both a Member and an Operator/User account, so without this the reset
+    // always landed on whichever account type was checked first, silently resetting the
+    // wrong one. Null falls back to the old any-match behavior for callers that don't send it.
+    public string? AccountType { get; set; }
 }
 
 public class ResetPasswordDto
@@ -114,6 +119,7 @@ public class ResetPasswordDto
     public string Email { get; set; } = null!;
     public string Token { get; set; } = null!;
     public string NewPassword { get; set; } = null!;
+    public string? AccountType { get; set; }
 }
 
 public class ChangeCredentialsDto

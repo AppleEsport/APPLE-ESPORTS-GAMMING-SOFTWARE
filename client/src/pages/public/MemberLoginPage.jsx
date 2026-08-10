@@ -29,7 +29,7 @@ export default function MemberLoginPage() {
     }
     try {
       setIsLoading(true);
-      await api.post('/auth/forgot-password', { email: forgotEmail });
+      await api.post('/auth/forgot-password', { email: forgotEmail, accountType: 'member' });
       setForgotSuccess(true);
       toast.success('Reset link sent! Please check your inbox.');
       setTimeout(() => {

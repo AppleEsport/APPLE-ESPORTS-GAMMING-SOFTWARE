@@ -41,7 +41,7 @@ export const authAPI = {
   checkSetup: () => api.get('/auth/check-setup'),
   setupMaster: (data) => api.post('/auth/setup-master', data),
   setupOperator: (data) => api.post('/auth/setup-operator', data),
-  forgotPassword: (email) => api.post('/auth/forgot-password', { email }),
-  resetPassword: (email, token, newPassword) => api.post('/auth/reset-password', { email, token, newPassword }),
+  forgotPassword: (email, accountType) => api.post('/auth/forgot-password', { email, accountType }),
+  resetPassword: (email, token, newPassword, accountType) => api.post('/auth/reset-password', { email, token, newPassword, accountType }),
   changeCredentials: (data) => api.post('/auth/change-credentials', data),
 };

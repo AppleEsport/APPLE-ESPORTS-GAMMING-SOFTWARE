@@ -88,7 +88,7 @@ export default function PcLockScreen() {
     }
     try {
       setIsSendingReset(true);
-      await axios.post('/api/auth/forgot-password', { email: forgotEmail });
+      await axios.post('/api/auth/forgot-password', { email: forgotEmail, accountType: 'member' });
       setForgotSuccess(true);
       toast.success('Reset link sent! Please check your inbox.');
       setTimeout(() => {

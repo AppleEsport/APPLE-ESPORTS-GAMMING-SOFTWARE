@@ -66,7 +66,7 @@ public interface IAuthService
     Task<LoginResponseDto> SetupOperatorAccountAsync(SetupOperatorDto dto);
 
     // Password Reset Methods
-    Task InitiatePasswordResetAsync(string email);
+    Task InitiatePasswordResetAsync(string email, string? accountType = null);
     Task CompletePasswordResetAsync(ResetPasswordDto dto);
 
     /// <summary>Change credentials for any user (Admin/SuperAdmin functionality)</summary>

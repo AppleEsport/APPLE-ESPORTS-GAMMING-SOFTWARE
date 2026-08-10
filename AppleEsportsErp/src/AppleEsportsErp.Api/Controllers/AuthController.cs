@@ -163,7 +163,7 @@ public class AuthController : ControllerBase
     [AllowAnonymous]
     public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordDto dto)
     {
-        await _authService.InitiatePasswordResetAsync(dto.Email);
+        await _authService.InitiatePasswordResetAsync(dto.Email, dto.AccountType);
         return Ok(ApiResponse<object>.Ok(new { message = "If that email exists, a reset link has been sent." }));
     }
 
