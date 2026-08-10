@@ -1,8 +1,9 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using AppleEsportsErp.Application.Interfaces;
 using AppleEsportsErp.Domain.Entities;
+using AppleEsportsErp.Infrastructure.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace AppleEsportsErp.Infrastructure.Services;
@@ -19,7 +20,7 @@ public class EmailQueueService : IEmailQueueService
         _unitOfWork = unitOfWork;
         _configuration = configuration;
         _logger = logger;
-        _isHeadOffice = bool.TryParse(configuration["Deployment:IsHeadOffice"], out var isHO) && isHO;
+        _isHeadOffice = configuration.IsHeadOffice();
     }
 
     public async Task<bool> IsHeadOfficeAsync()

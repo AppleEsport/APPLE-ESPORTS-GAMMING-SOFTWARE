@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Net;
 using System.Net.Mail;
 using System.Text.Json;
@@ -9,6 +9,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.EntityFrameworkCore;
 using AppleEsportsErp.Application.Interfaces;
 using AppleEsportsErp.Domain.Entities;
+using AppleEsportsErp.Infrastructure.Configuration;
 
 namespace AppleEsportsErp.Infrastructure.Services
 {
@@ -24,7 +25,7 @@ namespace AppleEsportsErp.Infrastructure.Services
             _unitOfWork = unitOfWork;
             _logger = logger;
             _configuration = configuration;
-            _isHeadOffice = bool.TryParse(configuration["Deployment:IsHeadOffice"], out var isHO) && isHO;
+            _isHeadOffice = configuration.IsHeadOffice();
         }
 
         public async Task SendEmailAsync(string to, string subject, string body)

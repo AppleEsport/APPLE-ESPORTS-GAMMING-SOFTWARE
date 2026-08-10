@@ -59,3 +59,6 @@ docker-compose.override.yml
 
 # Build output, not source
 dist/
+
+# Publish output — build artefacts, and the agent exe alone is 156 MB
+**/publish/

@@ -5,6 +5,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using AppleEsportsErp.Application.Services;
+using AppleEsportsErp.Infrastructure.Configuration;
 using AppleEsportsErp.Infrastructure.Data;
 using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
@@ -44,7 +45,7 @@ public class SyncCourierService : BackgroundService
         // this it polled every 30 seconds forever and logged a warning per branch each time,
         // which is noise on the one instance whose logs matter most — and it buries the very
         // warning that means something on a branch that genuinely cannot reach Head Office.
-        if (string.IsNullOrWhiteSpace(_configuration["Sync:HeadOfficeUrl"]))
+        if (_configuration.IsHeadOffice())
         {
             _logger.LogInformation(
                 "No Sync:HeadOfficeUrl configured, so this instance is Head Office. " +
