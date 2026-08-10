@@ -4,8 +4,10 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using AppleEsportsErp.Application.Services;
 using AppleEsportsErp.Infrastructure.Data;
 using AppleEsportsErp.Domain.Entities;
+using AppleEsportsErp.Domain.Enums;
 
 namespace AppleEsportsErp.Api.Services;
 
@@ -17,6 +19,11 @@ public class SyncCourierService : BackgroundService
     private readonly int _pollIntervalSeconds = 30;
     private readonly int _maxAttempts = 5;
     private readonly int _batchSize = 100;
+
+    // When each branch's link to Head Office was first seen to be down, so the outage can be
+    // reported with a start time rather than just "it failed again". Cleared on the first
+    // successful delivery, which is the moment the link came back.
+    private readonly Dictionary<Guid, DateTimeOffset> _offlineSince = new();
 
     public SyncCourierService(
         ILogger<SyncCourierService> logger,
@@ -127,6 +134,10 @@ public class SyncCourierService : BackgroundService
                         entry.AttemptCount++;
                     }
 
+                    // The link is back. Close off the outage before saving, so the record and
+                    // the delivery land in the same write.
+                    await CloseInternetOutageAsync(context, branchId, cancellationToken);
+
                     await context.SaveChangesAsync(cancellationToken);
                     _logger.LogInformation("Successfully synced {Count} entries from branch {BranchId}", entries.Count, branchId);
                 }
@@ -140,11 +151,15 @@ public class SyncCourierService : BackgroundService
         }
         catch (HttpRequestException ex)
         {
+            // Cannot reach Head Office at all — this is the internet being down, as opposed
+            // to Head Office answering with an error.
+            MarkInternetDown(branchId);
             HandleSyncFailure(context, entries, $"Network error: {ex.Message}");
             _logger.LogWarning(ex, "Network error syncing branch {BranchId}", branchId);
         }
         catch (TaskCanceledException ex)
         {
+            MarkInternetDown(branchId);
             HandleSyncFailure(context, entries, $"Request timeout: {ex.Message}");
             _logger.LogWarning(ex, "Timeout syncing branch {BranchId}", branchId);
         }
@@ -153,6 +168,65 @@ public class SyncCourierService : BackgroundService
             HandleSyncFailure(context, entries, $"Unexpected error: {ex.Message}");
             _logger.LogError(ex, "Unexpected error syncing branch {BranchId}", branchId);
         }
+    }
+
+    /// <summary>
+    /// Notes the first moment this branch's link went down. Only the first failure sets the
+    /// clock — a link that has been down for an hour should read as one hour-long outage, not
+    /// a hundred and twenty separate thirty-second ones.
+    /// </summary>
+    private void MarkInternetDown(Guid branchId)
+    {
+        if (!_offlineSince.ContainsKey(branchId))
+        {
+            _offlineSince[branchId] = DateTimeOffset.UtcNow;
+            _logger.LogWarning("Branch {BranchId} has lost its link to Head Office.", branchId);
+        }
+    }
+
+    /// <summary>
+    /// Records a completed internet outage once delivery succeeds again.
+    ///
+    /// Written only on recovery, because until then we do not know when it ended. Very short
+    /// blips are discarded: a single missed poll is normal on any connection, and filling the
+    /// owner's report with thirty-second entries would bury the outages that actually mattered.
+    ///
+    /// Deliberately separate from a power cut. Play was never interrupted here — the branch
+    /// ran perfectly on its own and no customer noticed — so nothing is credited back. It is
+    /// recorded so the owner knows why a branch's figures arrived late.
+    /// </summary>
+    private async Task CloseInternetOutageAsync(AppDbContext context, Guid branchId, CancellationToken cancellationToken)
+    {
+        if (!_offlineSince.TryGetValue(branchId, out var since)) return;
+        _offlineSince.Remove(branchId);
+
+        var now = DateTimeOffset.UtcNow;
+        var seconds = (int)(now - since).TotalSeconds;
+
+        const int worthReportingSeconds = 120;
+        if (seconds < worthReportingSeconds)
+        {
+            _logger.LogInformation("Branch {BranchId} link restored after {Seconds}s — too brief to report.", branchId, seconds);
+            return;
+        }
+
+        context.DowntimeEvents.Add(new DowntimeEvent
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            Kind = DowntimeKind.InternetOffline,
+            StartedAt = since,
+            EndedAt = now,
+            DurationSeconds = seconds,
+            SessionsAffected = 0,   // nobody's game was interrupted
+            BusinessDay = IndiaTime.BusinessDayOf(since),
+            Notes = "Branch could not reach Head Office. Play continued normally; data was queued and has now been delivered.",
+            CreatedAt = now,
+        });
+
+        _logger.LogInformation(
+            "Branch {BranchId} link restored after {Minutes:N0} minutes offline ({From} to {To} IST) — recorded for the day's report.",
+            branchId, seconds / 60.0, IndiaTime.Format(since), IndiaTime.Format(now));
     }
 
     private void HandleSyncFailure(AppDbContext context, List<SyncOutboxEntry> entries, string errorMsg)

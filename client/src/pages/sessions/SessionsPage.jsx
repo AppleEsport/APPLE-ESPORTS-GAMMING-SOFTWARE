@@ -19,6 +19,7 @@ import { markMaintenanceAsync, resolveMaintenance } from '../../api/maintenanceL
 import { logActivity } from '../../utils/sessionLog';
 import { roundBillTotal } from '../../utils/billRounding';
 import { useNavigate } from 'react-router-dom';
+import InterruptedSessionsBanner from '../../components/sessions/InterruptedSessionsBanner';
 
 export default function SessionsPage() {
   const { isSuperAdmin, user } = useAuth();
@@ -398,6 +399,11 @@ export default function SessionsPage() {
           borderColor="border-neon-orange/20"
         />
       </div>
+
+      {/* ── Sessions held after a power cut ──
+          Above everything else: these have stopped clocks and unused paid time, and only
+          someone at the counter can say whether the customer is still in the building. */}
+      <InterruptedSessionsBanner onChanged={fetchPcs} />
 
       {/* ── Instruction strip ── */}
       <p className="text-text-3 text-xs font-mono">
