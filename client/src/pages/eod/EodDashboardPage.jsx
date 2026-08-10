@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { ShieldCheck, AlertTriangle, FileText, CheckCircle, Lock, Monitor, Utensils, Clock, Printer, Download, Wrench, Clock as ClockIcon } from 'lucide-react';
+import { ShieldCheck, AlertTriangle, FileText, CheckCircle, Lock, Monitor, Utensils, Clock, Printer, Download, Wrench, ZapOff, Clock as ClockIcon } from 'lucide-react';
 import { printBill } from '../../utils/printBill';
 import { useAuth } from '../../contexts/AuthContext';
 import { useBranch } from '../../contexts/BranchContext';
@@ -26,6 +26,9 @@ export default function EodDashboardPage() {
 
   const [pcs, setPcs] = useState([]);
   const [allBills, setAllBills] = useState([]);
+  // Power cuts and lost connections for the day — shown beside the money because they
+  // explain it. A thin evening reads very differently once you can see the branch was dark.
+  const [downtime, setDowntime] = useState([]);
   const [maintenanceLogs, setMaintenanceLogs] = useState([]);
   const [selectedPcId, setSelectedPcId] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(Date.now());
@@ -90,6 +93,7 @@ export default function EodDashboardPage() {
       ]);
       setPcs(pcsRes.data?.data || []);
       setAllBills(billsRes.data?.data?.allBills || []);
+      setDowntime(billsRes.data?.data?.downtime || []);
 
       // Fetch maintenance logs separately so it doesn't break EOD if it fails
       try {
@@ -566,6 +570,64 @@ export default function EodDashboardPage() {
                 <div className="text-[10px] uppercase font-bold text-text-3 tracking-widest mt-1">Food Orders</div>
               </div>
             </div>
+          </div>
+
+          {/* ── Power cuts & connection losses ──
+              Deliberately above the billing log: it is the context for the numbers below. */}
+          <div className="card bg-bg-2 border border-border p-6 rounded-xl shadow-lg mt-8">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="font-heading font-extrabold text-sm uppercase tracking-wider text-text flex items-center gap-2">
+                <ZapOff className="w-4.5 h-4.5 text-accent" />
+                Power &amp; Connection Interruptions ({targetDate})
+              </h2>
+              {downtime.length > 0 && (
+                <span className="text-xs font-mono text-neon-orange">
+                  {downtime.reduce((sum, d) => sum + (d.minutes || 0), 0)} min total
+                </span>
+              )}
+            </div>
+
+            {downtime.length === 0 ? (
+              <div className="text-center text-text-3 text-xs italic py-6 border border-dashed border-border rounded-lg">
+                No power cuts or connection losses recorded on this day.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs whitespace-nowrap">
+                  <thead>
+                    <tr className="border-b border-border text-text-3 uppercase tracking-wider font-bold text-[10px]">
+                      <th className="py-3 px-4">What happened</th>
+                      <th className="py-3 px-4">From</th>
+                      <th className="py-3 px-4">Back at</th>
+                      <th className="py-3 px-4 text-right">Minutes</th>
+                      <th className="py-3 px-4 text-center">PCs affected</th>
+                      <th className="py-3 px-4">Effect on customers</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {downtime.map((d) => {
+                      const isPowerCut = d.kind !== 'Internet offline';
+                      return (
+                        <tr key={d.id} className="border-b border-border/50 hover:bg-bg-3/50">
+                          <td className="py-2.5 px-4">
+                            <span className={`badge ${isPowerCut ? 'badge-offline' : 'badge-awaiting'}`}>
+                              {d.kind}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-4 font-mono">{d.from}</td>
+                          <td className="py-2.5 px-4 font-mono">{d.to}</td>
+                          <td className="py-2.5 px-4 text-right font-mono font-bold">{d.minutes}</td>
+                          <td className="py-2.5 px-4 text-center font-mono">
+                            {isPowerCut ? d.sessionsAffected : '—'}
+                          </td>
+                          <td className="py-2.5 px-4 text-text-2">{d.impact}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
 
           {/* ── Complete Billing Audit Logs ── */}
