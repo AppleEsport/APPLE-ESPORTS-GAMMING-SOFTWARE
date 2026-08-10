@@ -21,21 +21,15 @@ namespace AppleEsportsErp.Api.Controllers;
 public class SessionsController : ControllerBase
 {
     private readonly ISessionService _sessionService;
-    private readonly Microsoft.AspNetCore.SignalR.IHubContext<AppleEsportsErp.Api.Hubs.PcOverlayHub> _pcOverlayHub;
-    private readonly AppleEsportsErp.Application.Interfaces.IBillingService _billingService;
     private readonly ISessionActivityService _activityService;
     private readonly AppleEsportsErp.Infrastructure.Data.AppDbContext _db;
 
     public SessionsController(
         ISessionService sessionService,
-        Microsoft.AspNetCore.SignalR.IHubContext<AppleEsportsErp.Api.Hubs.PcOverlayHub> pcOverlayHub,
-        AppleEsportsErp.Application.Interfaces.IBillingService billingService,
         ISessionActivityService activityService,
         AppleEsportsErp.Infrastructure.Data.AppDbContext db)
     {
         _sessionService = sessionService;
-        _pcOverlayHub = pcOverlayHub;
-        _billingService = billingService;
         _activityService = activityService;
         _db = db;
     }
@@ -124,37 +118,12 @@ public class SessionsController : ControllerBase
     [HttpPost("{id}/stop")]
     public async Task<IActionResult> StopSession(Guid id, [FromBody] StopSessionDto? dto = null)
     {
-        Console.WriteLine($"[SessionsController] StopSession called for {id}. dto is null? {dto == null}. DeferPayment: {dto?.DeferPayment}");
+        // Member wallet sessions are now deducted synchronously inside StopSessionAsync —
+        // no separate wallet-approval overlay step for this path (that overlay flow
+        // remains, unchanged, for other wallet-payable bills such as mid-session food orders).
         var result = await _sessionService.StopSessionAsync(GetBranchId(), (await this.GetOperatorIdAsync()), id, dto?.DeferPayment ?? false);
         AppleEsportsErp.Api.Hubs.PcOverlayHub.PendingWalkinRequests.TryRemove(result.PcId.ToString(), out _);
         AppleEsportsErp.Api.Hubs.PcOverlayHub.PendingWalkinRequests.TryRemove(result.PcName, out _);
-
-        // Auto-trigger wallet approval request for members
-        if (result.MemberId != null)
-        {
-            var bill = await _billingService.GetBillAsync(GetBranchId(), result.BillId);
-            if (bill != null && bill.Status != AppleEsportsErp.Domain.Enums.BillStatus.Completed && bill.TotalAmount > 0)
-            {
-                var approvalToken = Guid.NewGuid();
-                var pendingRequest = new AppleEsportsErp.Application.DTOs.Billing.PendingWalletApproval
-                {
-                    BillId = result.BillId,
-                    OperatorId = await this.GetOperatorIdAsync(),
-                    ShiftId = await this.GetShiftIdAsync(),
-                    BranchId = GetBranchId(),
-                    Amount = bill.TotalAmount
-                };
-
-                BillingController.PendingApprovals.TryAdd(approvalToken, pendingRequest);
-
-                await _pcOverlayHub.Clients.Group($"pc:{result.PcId}").SendAsync("ReceiveWalletApprovalRequest", new
-                {
-                    billId = result.BillId,
-                    amount = bill.TotalAmount,
-                    approvalToken = approvalToken
-                });
-            }
-        }
 
         return Ok(ApiResponse<SessionDto>.Ok(result));
     }

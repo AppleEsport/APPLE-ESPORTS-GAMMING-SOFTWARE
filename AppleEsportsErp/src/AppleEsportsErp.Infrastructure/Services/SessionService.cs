@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Common;
 using AppleEsportsErp.Application.DTOs.Sessions;
+using AppleEsportsErp.Application.DTOs.Wallets;
 using AppleEsportsErp.Application.Exceptions;
 using AppleEsportsErp.Application.Interfaces;
 using AppleEsportsErp.Application.Services;
@@ -333,6 +334,7 @@ public class SessionService : ISessionService
                     .ThenInclude(p => p.PricingProfile)
                 .Include(s => s.Bills)
                     .ThenInclude(b => b.Items)
+                .Include(s => s.Member)
                 .FirstOrDefaultAsync(s => s.Id == sessionId && s.BranchId == branchId);
 
             if (session == null)
@@ -418,10 +420,54 @@ public class SessionService : ISessionService
                 bill.Status = BillStatus.Completed;
             }
 
-            // 2. Wallet Deduction for Members is now handled manually via Overlay Approval
-            // The session goes to Completed, bill stays Pending, PC goes to AwaitingBilling.
-
             var pc = session.Pc!;
+
+            // 2. Member sessions are paid straight out of the wallet at stop time — no
+            // separate manual "approve wallet payment" step for this path (that overlay
+            // flow remains for other wallet-payable bills, e.g. mid-session food orders).
+            decimal walletDeducted = 0m;
+            decimal walletShortfall = 0m;
+
+            if (session.MemberId != null && session.Member != null && bill != null
+                && bill.Status != BillStatus.Completed && bill.TotalAmount > 0)
+            {
+                var member = session.Member;
+                decimal gamingOwed = bill.GamingAmount;
+                decimal foodOwed = bill.FoodAmount;
+
+                decimal gamingDeduct = Math.Min(member.GamingBalance, gamingOwed);
+                decimal foodDeduct = Math.Min(member.FoodBalance, foodOwed);
+
+                if (gamingDeduct > 0)
+                {
+                    await _walletService.DeductWalletAsync(branchId, operatorId, session.ShiftId, member.Id, new DeductWalletDto
+                    {
+                        TargetWallet = WalletType.Gaming,
+                        Amount = gamingDeduct,
+                        Reason = $"Session Stop ({pc.PcNumber})",
+                        BillId = bill.Id
+                    }, commit: false);
+                }
+
+                if (foodDeduct > 0)
+                {
+                    await _walletService.DeductWalletAsync(branchId, operatorId, session.ShiftId, member.Id, new DeductWalletDto
+                    {
+                        TargetWallet = WalletType.Food,
+                        Amount = foodDeduct,
+                        Reason = $"Session Stop ({pc.PcNumber})",
+                        BillId = bill.Id
+                    }, commit: false);
+                }
+
+                walletDeducted = gamingDeduct + foodDeduct;
+                walletShortfall = (gamingOwed - gamingDeduct) + (foodOwed - foodDeduct);
+
+                // Bill is settled from the wallet's point of view either way — fully paid,
+                // or partially paid with the rest tracked as a CustomerCredit for later collection.
+                bill.IsDeferred = walletShortfall > 0;
+                bill.Status = BillStatus.Completed;
+            }
 
             var hasUnpaidBill = session.Bills.Any(b => b.Status != BillStatus.Completed);
 
@@ -457,6 +503,27 @@ public class SessionService : ISessionService
                     CreatedAt = DateTimeOffset.UtcNow
                 };
                 await _uow.Repository<CustomerCredit>().AddAsync(customerCredit);
+            }
+            else if (walletShortfall > 0 && bill != null)
+            {
+                // Wallet didn't fully cover the bill — record only the unpaid remainder for
+                // later collection, not the whole bill amount (part was already collected
+                // from the wallet just now).
+                var walletShortfallCredit = new CustomerCredit
+                {
+                    BranchId = branchId,
+                    OperatorId = operatorId,
+                    BillId = bill.Id,
+                    CustomerName = session.CustomerName ?? session.Member?.Username ?? "Member",
+                    CustomerPhone = session.Member?.MobileNumber ?? "N/A",
+                    PcNumber = pc.PcNumber ?? "N/A",
+                    OriginalBillAmount = bill.TotalAmount,
+                    AmountPaidInitially = walletDeducted,
+                    CreditAmount = walletShortfall,
+                    Status = "pending",
+                    CreatedAt = DateTimeOffset.UtcNow
+                };
+                await _uow.Repository<CustomerCredit>().AddAsync(walletShortfallCredit);
             }
 
             pc.CurrentSessionId = null;
@@ -534,7 +601,10 @@ public class SessionService : ISessionService
                 ExpectedAmount = session.TotalAmount,
                 PackageName = session.GamingType,
                 Status = session.State,
-                BillId = session.Bills.FirstOrDefault()?.Id ?? Guid.Empty
+                BillId = session.Bills.FirstOrDefault()?.Id ?? Guid.Empty,
+                MemberId = session.MemberId,
+                WalletDeductedAmount = walletDeducted > 0 ? walletDeducted : (decimal?)null,
+                WalletShortfallAmount = walletShortfall > 0 ? walletShortfall : (decimal?)null
             };
         }
         catch

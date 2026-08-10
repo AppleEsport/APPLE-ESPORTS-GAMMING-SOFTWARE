@@ -23,6 +23,9 @@ public class SessionDto
     
     public SessionState Status { get; set; }
     public Guid BillId { get; set; }
+
+    public decimal? WalletDeductedAmount { get; set; }
+    public decimal? WalletShortfallAmount { get; set; }
 }
 
 public class SessionStartDto

@@ -49,6 +49,7 @@ public class OpenSessionMonitorService : BackgroundService
         // Find active open sessions for members
         var openSessions = await db.Sessions
             .Include(s => s.Pc)
+                .ThenInclude(p => p.PricingProfile)
             .Where(s => s.State == SessionState.Active && s.PlannedDurationMin == null && s.MemberId != null)
             .ToListAsync(stoppingToken);
 
@@ -62,21 +63,25 @@ public class OpenSessionMonitorService : BackgroundService
 
             // Excludes any downtime already credited back, so a power cut never burns
             // through a member's wallet balance while nobody was playing.
-            var actualDurationMin = (double)SessionTimeCalculator.ElapsedMinutes(
+            var actualDurationMin = SessionTimeCalculator.ElapsedMinutes(
                 session.StartTime, session.PausedSeconds, now);
-            decimal ratePerHour = 80m; // Member rate
-            decimal hours = Math.Max((decimal)actualDurationMin / 60m, 1m / 60m);
-            decimal accruedCost = Math.Round(hours * ratePerHour, 2);
+
+            // Rate comes from the PC's own Pricing Profile, same as StopSessionAsync uses to
+            // bill — each branch/PC can charge differently, so a hardcoded rate here would
+            // trigger this safety net too early or too late depending on the branch.
+            decimal ratePerHour = session.Pc?.PricingProfile?.BaseHourlyRate ?? SessionPricingCalculator.DefaultRatePerHour;
+            int bufferMinutes = session.Pc?.PricingProfile?.BufferMinutes ?? SessionPricingCalculator.DefaultBufferMinutes;
+            decimal accruedCost = SessionPricingCalculator.CalculateGamingAmount(ratePerHour, bufferMinutes, actualDurationMin);
 
             // If accrued cost >= their balance, terminate session forcefully!
             if (accruedCost >= member.GamingBalance)
             {
-                _logger.LogWarning("Forcefully stopping Open Session {SessionId} due to insufficient wallet balance. Accrued: {Cost}, Wallet: {Wallet}", 
+                _logger.LogWarning("Forcefully stopping Open Session {SessionId} due to insufficient wallet balance. Accrued: {Cost}, Wallet: {Wallet}",
                     session.Id, accruedCost, member.GamingBalance);
 
                 try
                 {
-                    // Stop Session - this will automatically do the deduction because of our previous changes
+                    // StopSessionAsync deducts the wallet (and logs any shortfall) itself.
                     await sessionService.StopSessionAsync(session.BranchId, session.OperatorId, session.Id);
                 }
                 catch (Exception ex)

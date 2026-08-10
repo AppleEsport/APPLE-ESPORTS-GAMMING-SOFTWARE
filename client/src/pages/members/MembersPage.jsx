@@ -18,14 +18,25 @@ import { logActivity } from '../../utils/sessionLog';
 
 const TOPUP_PRESETS = [200, 500, 1000, 2000, 5000];
 
-function ActionBadge({ action }) {
+// `action` is the raw WalletAction enum from the backend (Recharge, DeductionGaming,
+// DeductionFood, Correction, RewardRedemption, Bonus) — "Correction" is used for both
+// bill/session-stop deductions and admin balance corrections, so it can go either way;
+// `isCredit` (derived from balanceBefore/balanceAfter, the only reliable source of
+// direction) breaks the tie for it and for any future/unknown action value.
+function ActionBadge({ action, isCredit }) {
   const map = {
-    TopUp:     { label: 'Top-Up',   cls: 'text-neon-blue   bg-neon-blue/10   border-neon-blue/20' },
-    Deduction: { label: 'Deducted', cls: 'text-neon-red    bg-neon-red/10    border-neon-red/20' },
-    Bonus:     { label: 'Bonus',    cls: 'text-neon-orange bg-neon-orange/10 border-neon-orange/20' },
-    Refund:    { label: 'Refund',   cls: 'text-neon-purple bg-neon-purple/10 border-neon-purple/20' },
+    Recharge:         { label: 'Top-Up',           cls: 'text-neon-blue   bg-neon-blue/10   border-neon-blue/20' },
+    DeductionGaming:  { label: 'Gaming Deduction',  cls: 'text-neon-red    bg-neon-red/10    border-neon-red/20' },
+    DeductionFood:    { label: 'Food Deduction',    cls: 'text-neon-red    bg-neon-red/10    border-neon-red/20' },
+    Bonus:            { label: 'Bonus',             cls: 'text-neon-orange bg-neon-orange/10 border-neon-orange/20' },
+    RewardRedemption: { label: 'Reward Redemption', cls: 'text-neon-purple bg-neon-purple/10 border-neon-purple/20' },
+    Correction:       isCredit
+      ? { label: 'Added',    cls: 'text-neon-green bg-neon-green/10 border-neon-green/20' }
+      : { label: 'Deducted', cls: 'text-neon-red   bg-neon-red/10   border-neon-red/20' },
   };
-  const { label, cls } = map[action] ?? { label: action, cls: 'text-text-2 bg-bg-3 border-border' };
+  const { label, cls } = map[action] ?? (isCredit
+    ? { label: action, cls: 'text-neon-green bg-neon-green/10 border-neon-green/20' }
+    : { label: action, cls: 'text-neon-red   bg-neon-red/10   border-neon-red/20' });
   return (
     <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold border uppercase tracking-wider ${cls}`}>
       {label}
@@ -1123,23 +1134,27 @@ function MemberDetailPanel({ member, onEdit, onTopUp, onDiscount, onEditValues, 
             <div className="text-center py-8 text-text-3 text-sm bg-bg-3 border border-border rounded-xl">No transactions yet</div>
           ) : (
             <div className="space-y-1.5">
-              {txHistory.slice(0, 25).map(tx => (
+              {txHistory.slice(0, 25).map(tx => {
+                // Action alone can't tell credit from debit ("Correction" covers both bill
+                // deductions and admin balance fixes) — balanceBefore/After is ground truth.
+                const isCredit = tx.balanceAfter >= tx.balanceBefore;
+                return (
                 <div key={tx.id} className="flex items-center justify-between bg-bg-3 border border-border rounded-lg px-3 py-2">
                   <div className="flex items-center gap-2.5 min-w-0">
-                    <div className={`p-1 rounded ${tx.action === 'Deduction' ? 'bg-neon-red/10' : 'bg-neon-green/10'}`}>
-                      {tx.action === 'Deduction'
-                        ? <ArrowDownRight className="w-3.5 h-3.5 text-neon-red" />
-                        : <ArrowUpRight className="w-3.5 h-3.5 text-neon-green" />
+                    <div className={`p-1 rounded ${isCredit ? 'bg-neon-green/10' : 'bg-neon-red/10'}`}>
+                      {isCredit
+                        ? <ArrowUpRight className="w-3.5 h-3.5 text-neon-green" />
+                        : <ArrowDownRight className="w-3.5 h-3.5 text-neon-red" />
                       }
                     </div>
                     <div className="min-w-0">
-                      <ActionBadge action={tx.action} />
+                      <ActionBadge action={tx.action} isCredit={isCredit} />
                       {tx.reason && <p className="text-[10px] text-text-3 truncate mt-0.5">{tx.reason}</p>}
                     </div>
                   </div>
                   <div className="text-right shrink-0 ml-2">
-                    <p className={`font-mono font-bold text-sm ${tx.action === 'Deduction' ? 'text-neon-red' : 'text-neon-green'}`}>
-                      {tx.action === 'Deduction' ? '−' : '+'}₹{tx.amount + (tx.bonusAmount || 0)}
+                    <p className={`font-mono font-bold text-sm ${isCredit ? 'text-neon-green' : 'text-neon-red'}`}>
+                      {isCredit ? '+' : '−'}₹{tx.amount + (tx.bonusAmount || 0)}
                     </p>
                     {tx.bonusAmount > 0 && (
                       <p className="text-[10px] text-neon-green font-mono">
@@ -1151,7 +1166,8 @@ function MemberDetailPanel({ member, onEdit, onTopUp, onDiscount, onEditValues, 
                     </p>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
