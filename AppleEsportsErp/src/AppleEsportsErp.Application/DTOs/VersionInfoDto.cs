@@ -10,6 +10,16 @@ public class VersionInfoDto
     public DateTime? ApprovedAt { get; set; }
     public string ApprovedByUserId { get; set; }
     public int BranchesApprovedCount { get; set; }
+
+    /// <summary>
+    /// Whether there is actually something for a branch to download and run.
+    ///
+    /// The page uses this to decide whether to offer "Update Now" at all. Without it the button
+    /// would sit there on an approved version that has no installer behind it yet, and pressing
+    /// it would appear to do nothing — which reads as a broken dashboard rather than as a part
+    /// of the system that is not finished.
+    /// </summary>
+    public bool HasInstaller { get; set; }
 }
 
 public class BranchVersionStatusDto
@@ -25,6 +35,12 @@ public class BranchVersionStatusDto
     public DateTime LastUpdated { get; set; }
     public int GamingPcsUpToDateCount { get; set; }
     public int GamingPcsTotalCount { get; set; }
+
+    // How an update is going right now, straight from the branch. Null stage = nothing running.
+    public string? UpdateStage { get; set; }
+    public int UpdateProgressPercent { get; set; }
+    public string? UpdateMessage { get; set; }
+    public DateTime? UpdateStageChangedAt { get; set; }
 }
 
 public class ApproveUpdateDto

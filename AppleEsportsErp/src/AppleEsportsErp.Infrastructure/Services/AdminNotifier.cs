@@ -65,6 +65,47 @@ public class AdminNotifier : IAdminNotifier
         }
     }
 
+    public async Task NotifyOperatorsAsync(string subject, string htmlBody, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            // Real addresses only. Operators created without one are given
+            // "<username>@appleesports.local", which is not a mailbox anywhere - sending to it
+            // just earns a bounce, and on some providers enough bounces cost you the ability
+            // to send at all. So those are skipped rather than attempted.
+            var operators = await _db.Operators.AsNoTracking()
+                .Where(o => o.Status == OperatorStatus.Active && !o.Email.EndsWith(".local"))
+                .Select(o => o.Email)
+                .ToListAsync(cancellationToken);
+
+            var admins = await ResolveRecipientsAsync(cancellationToken);
+
+            var recipients = operators.Concat(admins)
+                .Select(e => e.Trim())
+                .Where(e => e.Length > 0 && e.Contains('@'))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (recipients.Count == 0)
+            {
+                _logger.LogWarning(
+                    "No operator or admin has a real email address, so \"{Subject}\" reached nobody.",
+                    subject);
+                return;
+            }
+
+            await _emailService.SendEmailAsync(string.Join(",", recipients), subject, htmlBody);
+
+            _logger.LogInformation("Notified {Count} operator(s)/admin(s): \"{Subject}\".",
+                recipients.Count, subject);
+        }
+        catch (Exception ex)
+        {
+            // Same reasoning as above: approving an update must not fail because the mail did.
+            _logger.LogError(ex, "Could not tell the operators about \"{Subject}\".", subject);
+        }
+    }
+
     private async Task<List<string>> ResolveRecipientsAsync(CancellationToken ct)
     {
         var found = new List<string>();

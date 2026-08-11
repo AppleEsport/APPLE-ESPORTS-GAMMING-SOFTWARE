@@ -39,7 +39,8 @@ const PERMISSION_KEYS = [
   { id: 'reports', label: 'Reports', desc: 'Reconciliation reports, shift summaries and revenue data' },
   { id: 'credits', label: 'Credits', desc: 'Manage unpaid bills and settle customer tabs' },
   { id: 'eod', label: 'End of Day', desc: 'Review shifts summaries and register snapshot reports' },
-  { id: 'settings', label: 'Settings', desc: 'Configure operators, branches, and logs' }
+  { id: 'settings', label: 'Settings', desc: 'Configure operators, branches, and logs' },
+  { id: 'updates', label: 'Updates', desc: 'See what changed in each update and whether this branch has it' }
 ];
 
 export default function SettingsPage() {

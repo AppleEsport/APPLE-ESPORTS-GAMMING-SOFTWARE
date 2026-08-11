@@ -29,7 +29,8 @@ public class Operator
         ""main_dashboard"": true,
         ""pc_status"": false,
         ""eod"": false,
-        ""settings"": false
+        ""settings"": false,
+        ""updates"": true
     }";
 
     /// <summary>Snapshot of DashboardPermissions taken just before promotion to Global Admin — restored on demotion</summary>

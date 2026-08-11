@@ -202,7 +202,11 @@ export function AuthProvider({ children }) {
     // Operator dashboards that Admins should implicitly have access to
     const operatorDashboards = [
       'billing_counter', 'sessions', 'reservations', 'food_orders', 
-      'cash_register', 'cash_desk', 'online_desk', 'wallet_desk', 'credits', 'eod'
+      'cash_register', 'cash_desk', 'online_desk', 'wallet_desk', 'credits', 'eod',
+      // Everyone can see Updates. It is where you find out what changed and whether this
+      // branch took it; an operator who cannot see that has no way to answer "are you on the
+      // new version?" except by guessing.
+      'updates'
     ];
 
     if (role === ROLES.ADMIN) {

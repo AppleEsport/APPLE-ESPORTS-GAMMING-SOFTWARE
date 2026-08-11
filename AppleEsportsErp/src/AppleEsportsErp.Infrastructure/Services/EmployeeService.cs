@@ -118,7 +118,10 @@ public class EmployeeService : IEmployeeService
                 { "pc_status", false },
                 { "eod", false },
                 { "settings", false },
-                { "employee_forms", false }
+                { "employee_forms", false },
+                // On, for both operators and admins. Whoever is at the branch when an update
+                // arrives has to be able to read what is in it.
+                { "updates", true }
             };
 
             if (isGlobalAdmin)

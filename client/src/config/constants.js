@@ -61,6 +61,7 @@ export const DASHBOARDS = {
   SETTINGS: 'settings',
   REPORTS: 'reports',
   EMPLOYEE_FORMS: 'employee_forms',
+  UPDATES: 'updates',
 };
 
 // PC State color mapping (matches tailwind.config.js)

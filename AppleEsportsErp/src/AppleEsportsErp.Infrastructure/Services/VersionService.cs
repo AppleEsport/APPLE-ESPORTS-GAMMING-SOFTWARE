@@ -8,10 +8,12 @@ namespace AppleEsportsErp.Infrastructure.Services;
 public class VersionService : IVersionService
 {
     private readonly IUnitOfWork _unitOfWork;
+    private readonly IAdminNotifier _notifier;
 
-    public VersionService(IUnitOfWork unitOfWork)
+    public VersionService(IUnitOfWork unitOfWork, IAdminNotifier notifier)
     {
         _unitOfWork = unitOfWork;
+        _notifier = notifier;
     }
 
     public async Task<VersionInfoDto?> GetLatestVersionAsync()
@@ -73,6 +75,23 @@ public class VersionService : IVersionService
         return dto;
     }
 
+    /// <summary>
+    /// Every version ever published, newest first.
+    ///
+    /// Kept permanently and never trimmed. An operator who wants to know what changed - or the
+    /// owner asking "when did that behaviour arrive?" - has nowhere else to look; the answer
+    /// would otherwise only exist in a commit log nobody at a branch can read.
+    /// </summary>
+    public async Task<List<VersionInfoDto>> GetVersionHistoryAsync()
+    {
+        var versions = await _unitOfWork.Repository<VersionInfo>()
+            .Query()
+            .OrderByDescending(v => v.CreatedAt)
+            .ToListAsync();
+
+        return versions.Select(MapToVersionInfoDto).ToList();
+    }
+
     public async Task<VersionInfoDto> CreateVersionAsync(string version, string releaseNotes)
     {
         var versionInfo = new VersionInfo
@@ -99,6 +118,12 @@ public class VersionService : IVersionService
         if (version == null)
             throw new Exception($"Version {versionInfoId} not found");
 
+        // Approving twice would send the branches a second "an update is waiting" email about
+        // an update they already have. Harmless to the data, but it teaches people to ignore
+        // the emails, which is the one thing this mechanism cannot afford.
+        if (version.ApprovedForRollout)
+            return MapToVersionInfoDto(version);
+
         version.ApprovedForRollout = true;
         version.ApprovedAt = DateTime.UtcNow;
         version.ApprovedByUserId = userId;
@@ -106,7 +131,46 @@ public class VersionService : IVersionService
         _unitOfWork.Repository<VersionInfo>().Update(version);
         await _unitOfWork.CommitTransactionAsync();
 
+        // After the commit, on purpose. If the email were sent first and the save then failed,
+        // every branch would have been told about an update the system does not consider
+        // approved. Told-late is recoverable; told-wrongly is not.
+        await NotifyBranchesOfApprovedUpdateAsync(version);
+
         return MapToVersionInfoDto(version);
+    }
+
+    /// <summary>
+    /// Tells the branches an update is waiting. Plain English throughout - the person reading
+    /// this is behind a counter, not at a keyboard, and "artefact", "rollout" and "deployment"
+    /// mean nothing to them.
+    /// </summary>
+    private async Task NotifyBranchesOfApprovedUpdateAsync(VersionInfo version)
+    {
+        var notes = string.IsNullOrWhiteSpace(version.ReleaseNotes)
+            ? "No details were written for this update."
+            : version.ReleaseNotes.Trim();
+
+        var rows = new List<(string Label, string Value)>
+        {
+            ("New version", version.CurrentVersion),
+            ("", ""),
+            ("What is in it", notes),
+        };
+
+        var body = AdminEmailTemplate.Compose(
+            heading: "A new update is ready for your branch",
+            accent: AdminEmailTemplate.Green,
+            summary: "The owner has approved a new version of the Apple Esports software. " +
+                     "If your branch is set to update by itself, it will install on its own and " +
+                     "you do not need to do anything. If not, open the Updates page and press " +
+                     "Update Now when the shop is quiet.",
+            rows: rows,
+            headline: "Version " + version.CurrentVersion,
+            footnote: "Nothing will interrupt a customer who is playing. You can read the full " +
+                      "list of what changed on the Updates page in your dashboard.");
+
+        await _notifier.NotifyOperatorsAsync(
+            $"Apple Esports update {version.CurrentVersion} is ready for your branch", body);
     }
 
     public async Task UpdateBranchAutoUpdateAsync(Guid branchId, bool autoUpdateEnabled)
@@ -151,7 +215,10 @@ public class VersionService : IVersionService
             {
                 BranchId = branchId,
                 CurrentVersion = currentVersion,
-                AutoUpdateEnabled = false,
+                // AutoUpdateEnabled is deliberately not set here. The entity defaults it to
+                // ON, and this is the line a branch takes the very first time it reports in -
+                // setting it false here switched automatic updates off for every branch at
+                // the moment it appeared, which is exactly the opposite of the default.
                 LastCheckedForUpdates = DateTime.UtcNow,
                 LastUpdated = DateTime.UtcNow,
                 GamingPcsUpToDateCount = upToDateCount,
@@ -172,6 +239,41 @@ public class VersionService : IVersionService
         await _unitOfWork.CommitTransactionAsync();
     }
 
+    public async Task ReportUpdateProgressAsync(Guid branchId, string stage, int progressPercent, string? message)
+    {
+        var status = await _unitOfWork.Repository<BranchVersionStatus>()
+            .Query()
+            .FirstOrDefaultAsync(s => s.BranchId == branchId);
+
+        // A branch reporting progress before it has ever reported a version would be odd, but
+        // dropping the report would leave the operator watching a bar that never moves.
+        if (status == null)
+        {
+            status = new BranchVersionStatus { BranchId = branchId, CurrentVersion = "unknown" };
+            await _unitOfWork.Repository<BranchVersionStatus>().AddAsync(status);
+        }
+
+        var normalised = (stage ?? string.Empty).Trim().ToLowerInvariant();
+
+        // Only the stage changing counts as a change of stage. Percent moving within a download
+        // is not, or the "nothing has happened for twenty minutes" check could never fire.
+        if (status.UpdateStage != normalised)
+            status.UpdateStageChangedAt = DateTime.UtcNow;
+
+        status.UpdateStage = normalised;
+        status.UpdateProgressPercent = Math.Clamp(progressPercent, 0, 100);
+        status.UpdateMessage = message;
+
+        if (normalised == "done")
+        {
+            status.UpdateProgressPercent = 100;
+            status.LastUpdated = DateTime.UtcNow;
+        }
+
+        _unitOfWork.Repository<BranchVersionStatus>().Update(status);
+        await _unitOfWork.CommitTransactionAsync();
+    }
+
     private VersionInfoDto MapToVersionInfoDto(VersionInfo version)
     {
         return new VersionInfoDto
@@ -183,7 +285,13 @@ public class VersionService : IVersionService
             CreatedAt = version.CreatedAt,
             ApprovedAt = version.ApprovedAt,
             ApprovedByUserId = version.ApprovedByUserId,
-            BranchesApprovedCount = version.BranchesApprovedCount
+            BranchesApprovedCount = version.BranchesApprovedCount,
+
+            // Both, not just the file name. A recorded installer with no hash is refused by the
+            // branch anyway, so offering Update Now for one would produce a failure rather than
+            // an update.
+            HasInstaller = !string.IsNullOrWhiteSpace(version.InstallerFileName)
+                        && !string.IsNullOrWhiteSpace(version.InstallerSha256)
         };
     }
 
@@ -200,7 +308,11 @@ public class VersionService : IVersionService
             LastCheckedForUpdates = status.LastCheckedForUpdates,
             LastUpdated = status.LastUpdated,
             GamingPcsUpToDateCount = status.GamingPcsUpToDateCount,
-            GamingPcsTotalCount = status.GamingPcsTotalCount
+            GamingPcsTotalCount = status.GamingPcsTotalCount,
+            UpdateStage = status.UpdateStage,
+            UpdateProgressPercent = status.UpdateProgressPercent,
+            UpdateMessage = status.UpdateMessage,
+            UpdateStageChangedAt = status.UpdateStageChangedAt
         };
     }
 }

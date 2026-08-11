@@ -249,7 +249,7 @@ export default function App() {
                   <Route
                     path="updates"
                     element={
-                      <ProtectedRoute allowedRoles={[ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.OPERATOR]}>
+                      <ProtectedRoute allowedRoles={[ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.OPERATOR]} dashboardKey={DASHBOARDS.UPDATES}>
                         <UpdatesPage />
                       </ProtectedRoute>
                     }
