@@ -203,3 +203,64 @@ branch has no credentials until that call gives it one. Operators who already ex
 same username keep working; a newly created one would not.
 
 This needs an authenticated identity sync. It is not built, and it is not in Phase 2.
+
+---
+
+# Updates and versions
+
+Agreed with the owner, 11 August 2026.
+
+Updates carry bug fixes and changes to both the branch EXE and the server. The owner approves
+one; every branch then takes it.
+
+## What already exists
+
+The **tracking** half is built and working:
+
+- create a version, approve it for all branches
+- see every branch's current version, and how many of its PCs are up to date
+- a per-branch auto-update switch
+- an Updates page in the dashboard
+
+## What does not exist
+
+**Delivery.** Nothing packages a build into a downloadable release, nothing hosts it, and
+nothing on a branch fetches or installs it. That part lived in the desktop client, which is out
+of the repository until Phase 2. So today the dashboard can say "2.2.0 is ready" and pressing
+Update Now would have nothing to fetch.
+
+Updates therefore cannot be finished before Phase 2 — only alongside it.
+
+## Phase 1 — what to build now (server and dashboard)
+
+- **Email the operators** when the owner approves a version, telling them an update is waiting.
+- **Update history**, kept permanently: version, when it was approved, and **what is in it** in
+  plain words, so an operator can read what is changing before they apply it.
+- **A progress bar** while an update installs: downloading, installing, restarting, done. The
+  owner asked for this specifically — during a slow download, silence looks like a failure.
+- **Auto-update tick, on by default** for operators and admins.
+- **The Updates page shown by default** to operators, admins and the super admin, and added to
+  the operator and admin menu permissions.
+- **Every word in plain English**, on the page and in the email. No version jargon, no
+  "artefact", no "deployment".
+
+## Phase 2 — delivery
+
+- Package a build into a release and host it where a branch can reach it.
+- The branch downloads the approved version and installs it.
+- The branch then passes the same update to its own gaming PCs over the shop network.
+
+**Installed instantly, in the background, without spoiling anyone's game.** The owner was
+explicit: the update should apply straight away rather than waiting for a quiet moment, but a
+customer must not notice. That is achievable because a session lives in the database rather
+than in the running program, and the gaming-PC agent already reconnects by itself — so the new
+version can be brought up before traffic moves to it, and a brief reconnect passes unseen.
+
+Waiting for no active sessions, and waiting for the day to close, were both considered and
+rejected: an urgent bug fix should not sit unapplied for hours.
+
+## Care needed
+
+An update mechanism is the one piece of software that can break every branch at once. It needs
+a way to fail safely — a branch that cannot install an update must carry on running the version
+it has, and say so, rather than ending up with neither.
