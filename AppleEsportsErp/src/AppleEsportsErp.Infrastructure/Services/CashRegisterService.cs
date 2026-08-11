@@ -53,15 +53,31 @@ public class CashRegisterService : ICashRegisterService
     {
         var today = IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow);
 
-        var existing = await _unitOfWork.Repository<CashRegister>().Query()
-            .FirstOrDefaultAsync(r => r.BranchId == branchId
-                                   && r.BusinessDay == today
-                                   && r.Status == CashRegisterStatus.Open);
+        // The most recent drawer for today, whatever state it is in. Matching only on Open was
+        // the bug: an operator who ended their shift and logged back in found nothing open, was
+        // asked for a fresh float, and got a SECOND drawer for the same till. One held Rs 100
+        // and one held Rs 0, the end-of-day screen read one and the lock screen the other, and
+        // nothing compared them.
+        //
+        // In the branch EXE this needs no reload to happen. The prompt is remembered in
+        // sessionStorage, which is wiped whenever the app closes - so it returns after every
+        // restart, which means after every power cut.
+        var lastToday = await _unitOfWork.Repository<CashRegister>().Query()
+            .Where(r => r.BranchId == branchId && r.BusinessDay == today)
+            .OrderByDescending(r => r.OpenedAt)
+            .FirstOrDefaultAsync();
 
-        // Deliberately not an error for a second login: the drawer for today already exists,
-        // so hand it back rather than refusing or opening a rival one with its own float.
-        if (existing != null)
-            return MapToDto(existing);
+        // Still open: hand back the same drawer rather than opening a rival to it.
+        if (lastToday != null && lastToday.Status == CashRegisterStatus.Open)
+            return MapToDto(lastToday);
+
+        // A branch has ONE drawer and it runs through the trading day. Only the first shift
+        // puts money in; a later one inherits what the last shift left. What was counted is
+        // preferred over what was expected - the count is what is physically there.
+        var openingBalance = lastToday is null
+            ? dto.OpeningBalance
+            : (lastToday.PhysicalCashCounted ?? lastToday.ExpectedDrawerCash);
+
 
         var register = new CashRegister
         {
@@ -69,8 +85,8 @@ public class CashRegisterService : ICashRegisterService
             OperatorId = operatorId,
             ShiftId = shiftId,
             BusinessDay = today,
-            OpeningBalance = dto.OpeningBalance,
-            ExpectedDrawerCash = dto.OpeningBalance, // Only opening balance affects drawer cash initially
+            OpeningBalance = openingBalance,
+            ExpectedDrawerCash = openingBalance,
             TotalCashSales = 0,
             TotalSplitCash = 0,
             Status = CashRegisterStatus.Open,
