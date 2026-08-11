@@ -175,11 +175,19 @@ export default function BillDetailsPanel({ bill, onBillUpdate, onPaymentSuccess,
         payload = { paymentType: 'Online', cashAmount: 0, onlineAmount: total, walletAmount: 0, cashReceived: 0 };
 
       } else if (payMethod === 'wallet') {
-        if (!bill.memberId || !bill.pcId) { setPayError('No member or PC linked to this bill.'); setProcessing(false); return; }
-        // Wallet payment will now be handled via handleWalletRequest instead of handleComplete.
-        // If handleComplete is somehow clicked (should be hidden for Wallet), we just return.
-        setProcessing(false);
-        return;
+        // Charged straight away. This used to bail out and hand the job to handleWalletRequest,
+        // which messaged the gaming PC and waited for the member to tap Approve before the
+        // server charged anything. The operator is standing in front of the member - asking
+        // permission through a second screen adds nothing and stalls the counter.
+        //
+        // Same payload the approval route built on the server, so the money moves exactly as
+        // it did before; only the asking is gone. The split across the gaming and food wallets
+        // is worked out by the billing service from the bill itself.
+        //
+        // No pcId needed any more either: that was only required to know which screen to send
+        // the request to, so a bill not tied to a live PC could not be paid by wallet at all.
+        if (!bill.memberId) { setPayError('No member linked to this bill.'); setProcessing(false); return; }
+        payload = { paymentType: 'Wallet', cashAmount: 0, onlineAmount: 0, walletAmount: total, cashReceived: 0 };
 
       } else if (payMethod === 'split') {
         const sc = parseFloat(splitCash) || 0;
@@ -565,23 +573,23 @@ export default function BillDetailsPanel({ bill, onBillUpdate, onPaymentSuccess,
                     )}
                   </div>
                   
-                  {walletWaiting ? (
-                    <div className="w-full py-2.5 rounded-lg border border-accent/40 bg-accent/10 flex flex-col items-center justify-center gap-2">
-                      <div className="w-4 h-4 rounded-full border-2 border-accent border-t-transparent animate-spin" />
-                      <span className="text-[11px] font-bold text-accent uppercase tracking-wider">Waiting for Member on PC...</span>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={handleWalletRequest}
-                      disabled={!canComplete || !bill.pcId}
-                      className="w-full py-2.5 rounded-lg bg-accent border border-accent/80 text-white text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 hover:bg-accent-dark transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-[0_0_10px_rgba(255,51,102,0.3)]"
-                    >
-                      <Smartphone className="w-4 h-4" /> Request PC Approval
-                    </button>
-                  )}
-                  {!bill.pcId && (
-                     <p className="text-neon-orange text-[10px] font-bold">This bill is not linked to an active PC to receive the approval request.</p>
-                  )}
+                  {/* Charges the wallet on the spot. Was "Request PC Approval", which messaged
+                      the gaming PC and waited for the member to tap Approve - a second screen
+                      standing between the operator and a payment they are already taking face
+                      to face. It also refused to work at all unless the bill was tied to a
+                      live PC, so a member settling up after their session had ended could not
+                      pay from their own wallet. */}
+                  <button
+                    onClick={handleComplete}
+                    disabled={!canComplete || processing}
+                    className="w-full py-2.5 rounded-lg bg-accent border border-accent/80 text-white text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 hover:bg-accent-dark transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-[0_0_10px_rgba(255,51,102,0.3)]"
+                  >
+                    {processing ? (
+                      <div className="w-4 h-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
+                    ) : (
+                      <><Wallet className="w-4 h-4" /> Deduct From Wallet</>
+                    )}
+                  </button>
                 </div>
               ) : (
                 <div className="text-text-3 text-xs flex items-center gap-2">
