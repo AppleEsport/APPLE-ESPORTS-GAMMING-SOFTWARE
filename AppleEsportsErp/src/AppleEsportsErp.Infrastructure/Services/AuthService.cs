@@ -739,6 +739,40 @@ public class AuthService : IAuthService
             shift.Status = ShiftStatus.ForceClosed;
         }
 
+        // A cash register must never outlive the shift that opened it. Closing the shift and
+        // leaving the drawer open strands it: no shift owns it, so nobody can count it, and it
+        // is still "open" so the next operator's End Shift picks up the previous operator's
+        // takings as though they were their own. Their count then cannot balance, through no
+        // fault of theirs.
+        //
+        // Closed as NOT counted, deliberately. Nobody counted this cash - the shift was ended
+        // administratively, with no one at the drawer. Writing in a figure would invent a count
+        // that never happened; leaving it empty keeps the money visibly unreconciled, which is
+        // the truth and the thing somebody should follow up.
+        //
+        // Matched on the operator rather than only on the shifts closed just now, so a drawer
+        // already stranded by an earlier force-logout is cleared up by the next one.
+        var strandedRegisters = await _db.CashRegisters
+            .Where(r => r.OperatorId == operatorId && r.Status == CashRegisterStatus.Open)
+            .ToListAsync();
+
+        foreach (var register in strandedRegisters)
+        {
+            register.Status = CashRegisterStatus.Closed;
+            register.ClosedAt = DateTimeOffset.UtcNow;
+            register.MismatchReason = string.IsNullOrWhiteSpace(register.MismatchReason)
+                ? "Drawer was never counted - the shift was ended by an admin, with nobody at the till."
+                : register.MismatchReason;
+        }
+
+        if (strandedRegisters.Count > 0)
+        {
+            _logger.LogWarning(
+                "Force logout of {Operator} closed {Count} cash register(s) that were never counted, " +
+                "holding Rs {Amount} between them.",
+                op.FullName, strandedRegisters.Count, strandedRegisters.Sum(r => r.ExpectedDrawerCash));
+        }
+
         // Set operator status to logged_out
         op.Status = OperatorStatus.LoggedOut;
         op.IsOnline = false;
