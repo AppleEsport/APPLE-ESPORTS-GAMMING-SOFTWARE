@@ -98,3 +98,56 @@ somebody other than its own operator.
 rule has to be per machine, and the server has no reliable machine identity — a browser is
 not a PC. It belongs in Phase 2 with the EXE, where each counter has a real identity. Building
 it now on a guessable signal would look enforced and not be.
+
+---
+
+# When a member's wallet runs out mid-game
+
+Agreed with the owner, 11 August 2026. Not yet built.
+
+## What already works
+
+`OpenSessionMonitorService` checks every open session once a minute. When the amount owed
+passes what is in the wallet, it force-stops the session, and stopping it deducts the wallet
+and settles the bill.
+
+So a member with ₹10 at Adajan (₹60/hour) does get stopped after about nine minutes, and does
+get charged correctly.
+
+## What is missing
+
+**The member is told nothing.** Nothing is pushed to the gaming PC — the session simply stops.
+From the seat it looks as though the machine has failed.
+
+**There is no warning while they can still act.** It only reacts once the money has gone.
+
+**The check runs once a minute**, so play can overrun by up to a minute and the wallet can end
+slightly below zero.
+
+## To build
+
+**A warning a few minutes before the money runs out**, on the member's own screen:
+
+> About 9 minutes of play left. Top up at the counter to keep going.
+
+**A message the moment it runs out**, with an OK button:
+
+> Your balance is finished. The time you played has been charged. Top up at the counter to
+> play more.
+
+**The session stops immediately** — the owner's decision, over giving a grace period. The
+member pays for exactly what they played and never ends up owing anything, and they have
+already had the warning. Grace minutes were rejected precisely because they push the wallet
+below zero.
+
+**The session stops whether or not OK is pressed.** An unpressed dialog must not mean free
+play.
+
+**Billing is automatic** — that part already happens on stop.
+
+## Care needed
+
+This touches session stopping and wallet deduction at once: the two places where a mistake
+either gives away free play or overcharges a customer. Meet's commit 6109844 also changed
+wallet deduction on session stop, in the same file as the fix for online top-ups being counted
+as cash. That commit should be read against those changes before this is built.
