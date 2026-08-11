@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Cash;
 using AppleEsportsErp.Application.Exceptions;
@@ -27,8 +27,13 @@ public class CashDeskService : ICashDeskService
 
     public async Task StartVerificationAsync(Guid branchId, Guid operatorId, Guid shiftId)
     {
+        // Worked out here, not inside the query. EF Core has to turn the predicate into SQL
+        // and has no idea what BusinessDayOf is, so having it inline threw on every call -
+        // which meant an operator could not count the drawer, and so could not end a shift.
+        var today = IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow);
+
         var register = await _unitOfWork.Repository<CashRegister>().Query()
-            .FirstOrDefaultAsync(r => r.BranchId == branchId && r.BusinessDay == IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow) && r.Status == CashRegisterStatus.Open)
+            .FirstOrDefaultAsync(r => r.BranchId == branchId && r.BusinessDay == today && r.Status == CashRegisterStatus.Open)
             ?? throw new NotFoundException("No open cash register found to verify.");
 
         register.Status = CashRegisterStatus.Verifying;
@@ -52,11 +57,16 @@ public class CashDeskService : ICashDeskService
 
     public async Task<DenominationCountDto> SubmitDenominationsAsync(Guid branchId, Guid operatorId, Guid shiftId, SubmitDenominationDto dto)
     {
+        // Worked out here, not inside the query. EF Core has to turn the predicate into SQL
+        // and has no idea what BusinessDayOf is, so having it inline threw on every call -
+        // which meant an operator could not count the drawer, and so could not end a shift.
+        var today = IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow);
+
         await _unitOfWork.BeginTransactionAsync();
         try
         {
             var register = await _unitOfWork.Repository<CashRegister>().Query()
-                .FirstOrDefaultAsync(r => r.BranchId == branchId && r.BusinessDay == IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow) && r.Status == CashRegisterStatus.Verifying)
+                .FirstOrDefaultAsync(r => r.BranchId == branchId && r.BusinessDay == today && r.Status == CashRegisterStatus.Verifying)
                 ?? throw new NotFoundException("No verifying cash register found. Must start verification first.");
 
             decimal countedTotal = 

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Security.Claims;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
@@ -87,7 +87,15 @@ public static class ControllerExtensions
                 return operatorShift.Id;
 
             // If no operator shift found, throw error with clear message
-            throw new AppException("No active shift found for this operator. Please log in through the proper login flow.");
+            // A recognisable code, because the browser can still be holding a perfectly valid
+            // session whose shift has since been closed - by an admin force-logout, or by the
+            // shift being ended somewhere else. The login itself is fine, so a 401 is wrong:
+            // the client would refresh the token, succeed, retry, and loop. With no Logout
+            // button for operators any more, that traps them on a dead screen with no way out.
+            throw new AppException(
+                "Your shift has been closed. Please sign in again to start a new one.",
+                System.Net.HttpStatusCode.Conflict,
+                "SHIFT_CLOSED");
         }
 
         // For SuperAdmin/Admin, find or create active shift for branch

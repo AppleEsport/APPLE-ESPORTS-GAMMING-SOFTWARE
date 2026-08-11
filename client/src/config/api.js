@@ -59,6 +59,18 @@ api.interceptors.response.use(
       return Promise.reject(error);
     }
 
+    // The session is valid but the shift behind it is gone - closed by an admin, or ended
+    // elsewhere. Not a 401: refreshing the token would succeed and the retry would loop.
+    // Operators have no Logout button any more, so without this they are stuck on a dead
+    // screen with no way back to the login page.
+    if (error.response?.data?.code === 'SHIFT_CLOSED') {
+      localStorage.removeItem('user');
+      localStorage.removeItem('activeBranchId');
+      sessionStorage.clear();
+      window.location.href = '/';
+      return Promise.reject(error);
+    }
+
     // Token expired — attempt refresh (cookies are sent automatically)
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
