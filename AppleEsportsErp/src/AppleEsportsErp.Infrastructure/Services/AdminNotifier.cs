@@ -69,12 +69,22 @@ public class AdminNotifier : IAdminNotifier
     {
         try
         {
+            // Everyone still employed here — which is NOT the same as OperatorStatus.Active.
+            //
+            // In this schema Active means "logged in right now" and LoggedOut means "went home",
+            // so filtering on Active would have sent this to whoever happened to be at a counter
+            // at that second: one operator out of twelve on the live system. The people who most
+            // need to know an update is waiting are precisely the ones not logged in. Only
+            // Suspended and Disabled mean do not contact.
+            //
             // Real addresses only. Operators created without one are given
             // "<username>@appleesports.local", which is not a mailbox anywhere - sending to it
             // just earns a bounce, and on some providers enough bounces cost you the ability
             // to send at all. So those are skipped rather than attempted.
             var operators = await _db.Operators.AsNoTracking()
-                .Where(o => o.Status == OperatorStatus.Active && !o.Email.EndsWith(".local"))
+                .Where(o => o.Status != OperatorStatus.Suspended
+                         && o.Status != OperatorStatus.Disabled
+                         && !o.Email.EndsWith(".local"))
                 .Select(o => o.Email)
                 .ToListAsync(cancellationToken);
 
@@ -140,8 +150,13 @@ public class AdminNotifier : IAdminNotifier
             .ToListAsync(ct));
 
         // 3. Operators marked as global admins, for installations that use that flag.
+        //    Not filtered on Active — see NotifyOperatorsAsync above. An admin who has gone home
+        //    for the night is still the person who needs to hear that cash is missing; in fact
+        //    an alert at 2am is precisely the one they are not logged in for.
         found.AddRange(await _db.Operators.AsNoTracking()
-            .Where(o => o.IsGlobalAdmin && o.Status == OperatorStatus.Active)
+            .Where(o => o.IsGlobalAdmin
+                     && o.Status != OperatorStatus.Suspended
+                     && o.Status != OperatorStatus.Disabled)
             .Select(o => o.Email)
             .ToListAsync(ct));
 
