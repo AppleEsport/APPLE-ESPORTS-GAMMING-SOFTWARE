@@ -26,7 +26,15 @@ export default function CashDeskPage() {
   // a handover between shifts is the ordinary case and wrongly closing the day would send half
   // a day's figures as though they were the whole day's.
   const [closesTradingDay, setClosesTradingDay] = useState(false);
+
+  // Stock is shown, not asserted. A tick box saying "I have checked the stock" with nothing to
+  // check it against is decoration: it teaches staff to tick without looking, and then the one
+  // night something really is missing, that gets ticked too.
   const [stockChecked, setStockChecked] = useState(false);
+  const [inventory, setInventory] = useState(null);
+  const [counted, setCounted] = useState({});
+  const [stockBusy, setStockBusy] = useState(false);
+  const [stockError, setStockError] = useState('');
   const [isCancelling, setIsCancelling] = useState(false);
 
   const targetBranchId = isSuperAdmin ? activeBranch?.id : user?.branchId;
@@ -69,6 +77,46 @@ export default function CashDeskPage() {
       setError(err.response?.data?.error || err.response?.data?.message || 'Failed to lock register for verification.');
     } finally {
       setIsLocking(false);
+    }
+  };
+
+  // Loaded once the cash is counted, which is when this screen reaches the stock step.
+  useEffect(() => {
+    if (register?.status !== 'Verified' || isSuperAdmin || inventory !== null) return;
+    let alive = true;
+    (async () => {
+      try {
+        const { data } = await api.get('/inventory');
+        const items = data?.data?.items || data?.data || [];
+        if (!alive) return;
+        setInventory(items);
+        const seed = {};
+        items.forEach((i) => { seed[i.id] = String(i.currentStock ?? i.CurrentStock ?? 0); });
+        setCounted(seed);
+      } catch (err) {
+        if (alive) setStockError(err.response?.data?.error || 'Could not load the stock list.');
+      }
+    })();
+    return () => { alive = false; };
+  }, [register?.status, isSuperAdmin, inventory]);
+
+  // Only items whose count the operator actually changed get written back.
+  const confirmStock = async () => {
+    setStockBusy(true);
+    setStockError('');
+    try {
+      for (const item of inventory || []) {
+        const was = Number(item.currentStock ?? item.CurrentStock ?? 0);
+        const now = Number(counted[item.id]);
+        if (!Number.isNaN(now) && now !== was) {
+          await api.patch('/inventory/' + item.id + '/stock', { currentStock: now });
+        }
+      }
+      setStockChecked(true);
+    } catch (err) {
+      setStockError(err.response?.data?.error || 'Could not save the stock counts.');
+    } finally {
+      setStockBusy(false);
     }
   };
 
@@ -240,20 +288,73 @@ export default function CashDeskPage() {
               is the last moment the operator is still standing at the counter. */}
           {!isSuperAdmin && (
             <div className="w-full max-w-md mb-6 space-y-3 text-left">
-              <label className="flex items-start gap-3 bg-bg-3 border border-border rounded-xl p-4 cursor-pointer hover:border-accent/40 transition-colors">
-                <input
-                  type="checkbox"
-                  checked={stockChecked}
-                  onChange={(e) => setStockChecked(e.target.checked)}
-                  className="mt-0.5 w-4 h-4 accent-accent cursor-pointer flex-shrink-0"
-                />
-                <span>
-                  <span className="block text-text text-sm font-bold">I have checked the stock</span>
-                  <span className="block text-text-3 text-[11px] mt-1 leading-relaxed">
-                    Food and drinks on the shelf match what the system says is left.
-                  </span>
-                </span>
-              </label>
+              <div className="bg-bg-3 border border-border rounded-xl p-4">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-text text-sm font-bold">Check the stock</span>
+                  {stockChecked && <span className="text-neon-green text-[11px] font-bold">CONFIRMED</span>}
+                </div>
+                <p className="text-text-3 text-[11px] mb-3 leading-relaxed">
+                  Count what is actually on the shelf. Change any number that does not match, then confirm.
+                </p>
+
+                {inventory === null && !stockError && (
+                  <p className="text-text-3 text-xs">Loading the stock list...</p>
+                )}
+
+                {inventory !== null && inventory.length === 0 && (
+                  <p className="text-text-3 text-xs">Nothing is stocked at this branch, so there is nothing to count.</p>
+                )}
+
+                {inventory !== null && inventory.length > 0 && (
+                  <div className="max-h-56 overflow-auto -mx-1 px-1">
+                    <table className="w-full text-xs">
+                      <thead className="text-text-3 text-[10px] uppercase tracking-wider">
+                        <tr>
+                          <th className="text-left font-normal pb-2">Item</th>
+                          <th className="text-right font-normal pb-2">System says</th>
+                          <th className="text-right font-normal pb-2 w-24">On the shelf</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {inventory.map((item) => {
+                          const was = Number(item.currentStock ?? item.CurrentStock ?? 0);
+                          const now = Number(counted[item.id]);
+                          const differs = !Number.isNaN(now) && now !== was;
+                          return (
+                            <tr key={item.id} className="border-t border-border/60">
+                              <td className="py-2 text-text-2">{item.itemName || item.ItemName || item.name}</td>
+                              <td className="py-2 text-right font-mono text-text-3">{was}</td>
+                              <td className="py-2 text-right">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={counted[item.id] ?? ''}
+                                  onChange={(e) => { setCounted({ ...counted, [item.id]: e.target.value }); setStockChecked(false); }}
+                                  className={differs
+                                    ? 'w-20 bg-bg-2 border border-neon-orange text-neon-orange rounded px-2 py-1 text-right font-mono text-xs'
+                                    : 'w-20 bg-bg-2 border border-border text-text rounded px-2 py-1 text-right font-mono text-xs'}
+                                />
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {stockError && <p className="text-neon-red text-[11px] mt-2">{stockError}</p>}
+
+                {!stockChecked && inventory !== null && (
+                  <button
+                    onClick={confirmStock}
+                    disabled={stockBusy}
+                    className="w-full mt-3 py-2 rounded-lg text-xs font-bold uppercase tracking-wider bg-accent/10 border border-accent/40 text-accent hover:bg-accent/20 transition-colors disabled:opacity-50"
+                  >
+                    {stockBusy ? 'Saving...' : 'Confirm these counts'}
+                  </button>
+                )}
+              </div>
 
               <label className="flex items-start gap-3 bg-bg-3 border border-border rounded-xl p-4 cursor-pointer hover:border-neon-red/40 transition-colors">
                 <input
@@ -287,7 +388,7 @@ export default function CashDeskPage() {
           </button>
 
           {!isSuperAdmin && !stockChecked && (
-            <p className="text-text-3 text-[11px] mt-3">Check the stock before you can finish.</p>
+            <p className="text-text-3 text-[11px] mt-3">Confirm the stock counts before you can finish.</p>
           )}
         </div>
       )}
