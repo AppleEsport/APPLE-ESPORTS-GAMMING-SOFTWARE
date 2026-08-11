@@ -297,7 +297,7 @@ npm run dev
 ### First-Time Setup
 
 On first launch, the system auto-seeds (password for every seeded account is **`12345`** — change these before any real/public deployment):
-- **SuperAdmin account** — `admin@appleesports.com`
+- **SuperAdmin account** — `harshalparekh40@gmail.com`
 - **4 Branches** — Adajan, Citylight, Katargam, Varachha
 - **106 Gaming PCs** — with zone assignments and pricing profiles
 - **8 Operators** — 2 per branch with branch-locked access (e.g. `ankur_adajan`)

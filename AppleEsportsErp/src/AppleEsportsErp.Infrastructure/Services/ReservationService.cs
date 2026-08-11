@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Common;
 using AppleEsportsErp.Application.DTOs.Reservations;
@@ -351,7 +351,7 @@ public class ReservationService : IReservationService
             reservation.State = ReservationState.Overridden;
             
             var adminUser = await _unitOfWork.Repository<User>().Query()
-                .FirstOrDefaultAsync(u => u.Role == Roles.SuperAdmin || u.Email == "admin@appleesports.com");
+                .FirstOrDefaultAsync(u => u.Role == Roles.SuperAdmin);
             reservation.OverrideBy = adminUser?.Id;
 
             reservation.OverrideReason = dto.Reason;

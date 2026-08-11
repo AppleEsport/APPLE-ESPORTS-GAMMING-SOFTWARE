@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
 using AppleEsportsErp.Infrastructure.Data;
@@ -19,7 +19,7 @@ public static class DataSeeder
 
         if (adminRoleUserId == Guid.Empty)
         {
-            await db.Database.ExecuteSqlRawAsync("INSERT INTO users (\"Email\", \"PasswordHash\", \"FullName\", \"Role\", \"Status\", \"CreatedAt\", \"UpdatedAt\") VALUES ('admin@appleesports.com', {0}, 'System Admin', 'super_admin', 'active', NOW(), NOW())", defaultPassword);
+            await db.Database.ExecuteSqlRawAsync("INSERT INTO users (\"Email\", \"PasswordHash\", \"FullName\", \"Role\", \"Status\", \"CreatedAt\", \"UpdatedAt\") VALUES ('harshalparekh40@gmail.com', {0}, 'System Admin', 'super_admin', 'active', NOW(), NOW())", defaultPassword);
             adminRoleUserId = (await db.Users.FirstOrDefaultAsync(u => u.Role == "super_admin"))?.Id ?? Guid.Empty;
         }
 
