@@ -231,23 +231,63 @@ Update Now would have nothing to fetch.
 
 Updates therefore cannot be finished before Phase 2 — only alongside it.
 
-## Phase 1 — what to build now (server and dashboard)
+## Phase 1 — built and live (server and dashboard)
 
-- **Email the operators** when the owner approves a version, telling them an update is waiting.
-- **Update history**, kept permanently: version, when it was approved, and **what is in it** in
-  plain words, so an operator can read what is changing before they apply it.
-- **A progress bar** while an update installs: downloading, installing, restarting, done. The
-  owner asked for this specifically — during a slow download, silence looks like a failure.
-- **Auto-update tick, on by default** for operators and admins.
-- **The Updates page shown by default** to operators, admins and the super admin, and added to
-  the operator and admin menu permissions.
-- **Every word in plain English**, on the page and in the email. No version jargon, no
-  "artefact", no "deployment".
+Deployed 11 August 2026 as `00400e9` and `a4fa10f`.
+
+- **The Updates page rewritten in plain English**, for the owner, admins and operators, each
+  seeing their own scope. The owner can add an update and approve it; a branch sees what it is
+  running, what is waiting, and what changed.
+- **Release notes are required** when adding an update. They are the only thing an operator can
+  read before deciding whether to apply one during a busy evening, and "various fixes" tells
+  them nothing.
+- **Update history**, kept permanently and readable by any operator — every version, newest
+  first, with what was in it.
+- **Approving emails every operator**, in plain words, saying an update is waiting and that
+  nobody playing will be interrupted.
+- **The auto-update tick works and is on by default.**
+- **Updates is now a real permission**, on by default for operators and admins, listed with the
+  others an admin can manage, and checked on the route. It had been in the sidebar with no
+  permission key at all.
+- **A progress bar driven by what the branch actually reports** — stage, percent and message are
+  columns a branch writes to, with a stuck stage called out after twenty minutes.
+
+### Three bugs found while building it
+
+**Automatic updates were switched off for every branch at the moment it first reported in.** The
+entity defaults the flag on; the line creating the row on first contact set it to `false`, so the
+default could never take effect. The owner would have had to turn it on manually for all four
+branches without ever being told why it was off.
+
+**The update email would have reached one operator out of twelve.** `OperatorStatus.Active` means
+"logged in right now" — `LoggedOut` is where an operator sits after going home. Filtering on
+Active would have mailed only whoever happened to be at a counter that second, skipping seven
+real addresses. Backwards, too: the people who most need telling are the ones not logged in. The
+same mistake was already in the admin recipient list, latent because no operator carries the
+global-admin flag; fixed alongside.
+
+**Updates was ungoverned.** In the menu, absent from the permission list, unchecked on the route.
+
+### What was deliberately not faked
+
+The progress bar could have been animated on a timer when somebody presses Update Now. It would
+have looked identical while working and lied outright when a download stalled — a full bar and a
+finished update are not the same thing, and the first time an operator trusts one that was
+pretending, the page is finished as a source of truth. So it renders only reported state, and
+where installing is not possible yet the page says so instead of offering a button that does
+nothing.
 
 ## Phase 2 — delivery
 
 - Package a build into a release and host it where a branch can reach it.
-- The branch downloads the approved version and installs it.
+- The branch downloads the approved version and installs it, **reporting progress to
+  `POST /api/versions/branch/{branchId}/progress`** as it goes — stage, percent and a plain
+  message. That endpoint and its columns are already live; nothing writes to them yet, which is
+  the only reason the bar has nothing to show.
+- Record the installer's name and its SHA-256 against the version. `HasInstaller` on the version
+  is what makes "Update Now" appear at all, and a recorded installer with no hash is refused by
+  the branch rather than trusted — branches talk to Head Office over plain HTTP, so that hash is
+  currently the only thing standing between a branch and running a program somebody else chose.
 - The branch then passes the same update to its own gaming PCs over the shop network.
 
 **Installed instantly, in the background, without spoiling anyone's game.** The owner was
