@@ -121,8 +121,12 @@ From the seat it looks as though the machine has failed.
 
 **There is no warning while they can still act.** It only reacts once the money has gone.
 
-**The check runs once a minute**, so play can overrun by up to a minute and the wallet can end
-slightly below zero.
+**The check asks the wrong question.** It runs once a minute and asks "has he gone over?", so
+it only notices *after* he has. At Rs 1 a minute, Rs 10 buys ten minutes - but the check that
+catches it fires at minute eleven, by which point Rs 11 is owed against Rs 10. The member ends
+up owing Rs 1 that was never there.
+
+That shortfall is created entirely by waiting to catch him instead of stopping him on time.
 
 ## To build
 
@@ -135,10 +139,17 @@ slightly below zero.
 > Your balance is finished. The time you played has been charged. Top up at the counter to
 > play more.
 
-**The session stops immediately** — the owner's decision, over giving a grace period. The
-member pays for exactly what they played and never ends up owing anything, and they have
-already had the warning. Grace minutes were rejected precisely because they push the wallet
-below zero.
+**Stop at the moment the money is used up, not after.** The rate and the balance are both
+known, so the end time can be worked out up front - Rs 10 at Rs 60/hour is exactly ten minutes -
+and the session stopped precisely there, the same way a fixed-duration session already is.
+Nothing is owed, nothing goes below zero, and there is no rounding to argue about with a
+customer.
+
+The owner pushed back on an earlier version of this that accepted up to a minute of overrun,
+and was right to: there is no reason for a member to owe anything when the exact stopping point
+is known in advance.
+
+Grace minutes were considered and rejected for the same reason.
 
 **The session stops whether or not OK is pressed.** An unpressed dialog must not mean free
 play.
