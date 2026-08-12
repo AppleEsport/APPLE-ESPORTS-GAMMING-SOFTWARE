@@ -104,6 +104,63 @@ A written pass over each restored behaviour against the live server, then tag th
 
 ---
 
+## Phase 1 — where it actually stands, 12 August 2026
+
+Restoring the rolled-back work is done. So is everything the owner raised while testing it.
+
+### Live and verified on the server
+
+| Built | Proven by |
+|---|---|
+| Dashboard password gate, cookie auth | 401 without credentials, 200 with, from outside |
+| Money on the 06:00–06:00 trading day | all four branches reconcile |
+| Emails actually sending | real mail delivered |
+| Five EOD money bugs | figures agree with the End of Day screen |
+| End Shift flow — cash count, real stock list, last-shift tick | owner confirmed the EOD mail matched |
+| Direct wallet deduction, no member approval | owner confirmed |
+| Updates dashboard, history, operator email, `updates` permission | endpoints answered, 12 operators backfilled |
+| Wallet runs out — stops on time, warns, tells the member | 6688 billing cases, none leaving a debt |
+| Cash difference emails the owner | — |
+| The trading day closes itself when nobody ticks "last shift" | closed 11 Aug on live data, mail arrived |
+
+### The two things left
+
+**1. B takes over A's abandoned shift.** The next build, specified in `CASH_HANDOVER_DESIGN.md`.
+Login only ever looks for an active shift belonging to *the same* operator, so somebody else's
+abandoned shift is invisible and simply dangles. It plugs into the `ResumedShift` /
+`UnattendedMinutes` fields the login response already returns, and copies the `ShiftGapModal`
+blocking-screen pattern.
+
+The trap, worth repeating: **who closed it must be stored separately from whose shift it was**, or
+a shortfall lands on the wrong operator's name.
+
+Not urgent, because the automatic day close already stops an abandoned shift dangling for ever —
+it gets closed and reported. What is missing is the better version, where the incoming operator
+counts at the moment of handover rather than the system closing an uncounted drawer hours later.
+
+**2. Verify, tag, freeze.** Ends Phase 1.
+
+### Decisions waiting on the owner
+
+- **₹1 buys ten free minutes, repeatedly** — the minimum to start is ₹1 and the first ten minutes
+  are free, so a session can be restarted indefinitely without paying. Predates this work.
+  Closing it changes what customers are charged.
+- **An operator created at Head Office cannot log in at a branch** — see the known gap at the end
+  of this document.
+- **Before handover:** the seeder has the owner's personal Gmail compiled into it.
+
+### How money bugs were actually found
+
+Worth recording, because it held every time: **each one was caught by running the code against the
+real billing path, never by reading it.** The wallet stop-time maths looked right and left members
+in debt in 3339 of 5016 cases. The automatic day close correctly closed the day and silently
+emailed nobody. An update email would have reached one operator out of twelve.
+
+All three read as correct. For anything touching money, drive the real functions with realistic
+inputs and check the outcome — not that the step ran.
+
+---
+
 ## Phase 2 — the operator EXE
 
 One installer, run on the counter PC, producing a complete shop:
