@@ -124,17 +124,19 @@ Restoring the rolled-back work is done. So is everything the owner raised while 
 | The trading day closes itself when nobody ticks "last shift" | closed 11 Aug on live data, mail arrived |
 | B takes over A's abandoned shift — blind count, drawer and stock, closed by somebody else | 95 checks against a real database, real login, real drawer |
 
-### Phase 1 is closed
+### Phase 1 is closed — a restore point, not a freeze
 
-**Frozen 12 August 2026** at `f4dc789`, tagged **`phase1-server-frozen`**. That tag is the commit
-the branch EXE is built against.
+**12 August 2026, `f4dc789`, tagged `phase1-server-frozen`.** That is the commit the branch EXE is
+built against, and the one the server can always be put back to.
 
-From here the server changes only through a deliberate, tested, versioned release. Not because it
-is finished, but because Phase 2 builds a branch database from these same migrations, and a schema
-that moves while the EXE is built against it is close to what went wrong last time.
+**It was originally called a freeze, and that was wrong.** The owner pointed out why: Phase 2 needs
+server changes — provisioning has to hand a branch its identity, sync needs endpoints — and a server
+change has to be tested against a server. Declaring the server frozen and then editing it every
+week is worse than never claiming it, because then nobody knows which rule is real.
 
-The freeze is a discipline, not a lock. Everything on the open list below is still fixable — it
-just gets a version number.
+So the guarantee changes shape. Not *"the server will not change"*, which was never going to hold,
+but **"the server can always be put back"**. That is a promise that survives Phase 2, and the next
+section is what makes it true.
 
 **Verified before freezing:** the real services driven against a real database with the real
 migrations, 123 checks; plus a walkthrough on the live server — a shift left open four hours, taken
@@ -227,9 +229,9 @@ the end of it, from a file that was not being changed.
 
 ---
 
-## How Phase 2 is kept away from the server
+## Getting back, if Phase 2, 3 or 4 goes wrong
 
-Agreed 12 August 2026, and this is the part that actually matters.
+Agreed 12 August 2026. This is the part that actually matters, and it replaces the freeze.
 
 **What happened last time:** the installer work and the server work shared one history. Undoing the
 installer meant rewinding the branch, and the rewind took **27 server commits** with it — the
@@ -237,31 +239,71 @@ password gate, the cookie auth, the trading day, the power-cut pause. The dashbo
 the open internet as a side effect of abandoning an EXE. Nobody decided that; the shape of the
 repository decided it.
 
-**So it is not allowed to be possible again.** Three things, in order of how much they matter:
+Four rules, in the order of how much they matter.
 
-**1. The EXE never commits to `main`.** Phase 2 lives on its own branch, `phase2-exe`. Abandoning
-Phase 2 then means deleting a branch, and the server cannot notice. This is the whole fix — the
-other two are only there for when somebody forgets it.
+### 1. Each phase lives on its own branch
 
-**2. The frozen server is held by three independent refs.** Any one of them can restore it:
+`phase2-exe`, `phase3-user-exe`, `phase4-sync`. Removing a phase is deleting a branch, and nothing
+on `main` notices. This is the whole fix; the rest is for when somebody forgets it.
+
+### 2. Server changes are additive only
+
+**This is the rule that decides whether "just remove Phase 2" actually works, and it is the easy one
+to break without noticing.**
+
+Rolling back code does not roll back the database. A migration that renames a column, drops one, or
+changes a type leaves the old code facing a schema it does not recognise — and then going back is
+not a checkout, it is restoring a database dump and losing every transaction since. On a system
+holding real takings that is not a rollback anyone will actually perform.
+
+A migration that only **adds** is invisible to the old code, which ignores what it does not know
+about. Then going back really is one command, and the spare columns sit there harmlessly.
+
+So for Phases 2, 3 and 4: **add, never rename, never drop, never change a type.** If something
+genuinely has to change shape, add the new form alongside it, move everything over, and remove the
+old one in a later release once nothing reads it.
+
+### 3. Test on the local stack, not on the branches' server
+
+The same `docker compose` stack runs on the development machine — the same images, the same
+migrations, the API on `5016`, the password-gated dashboard on `8081`, PostgreSQL on `5433`. That is
+a real rehearsal, not an approximation, and it is where a provisioning or sync endpoint gets driven
+until it works.
+
+The Oracle box is where a change goes **after** that. It is the machine four branches trade on;
+it is not a workbench.
+
+Backups exist on top of this: the `db-backup` container writes a daily gzipped dump, kept per day
+with a `latest` symlink. Verified present 12 August 2026.
+
+### 4. The last known-good server is held by three independent refs
 
 | Ref | |
 |---|---|
-| `phase1-server-frozen` | annotated tag — a force-push to a branch does not touch it |
+| `phase1-server-frozen` | annotated tag — a force-push to a branch cannot touch it |
 | `phase1-frozen` | a branch, so it is easy to check out and deploy from |
-| `main` | where development continues |
+| `main` | where work continues |
 
-A rewind of `main` no longer loses anything, because the other two do not move. Deleting all three
-takes three deliberate, separate commands.
+A rewind of `main` loses nothing, because the other two do not move. Removing all three takes three
+deliberate, separate commands. Before any rewind, rebase or force-push, `git tag --contains` and
+`git branch --contains` say what is about to move.
 
-**3. The server is deployed from a named ref, not from wherever `main` happens to point.** While
-Phase 2 is in progress `main` is a moving target. Updating the live server means checking out the
-tag or `phase1-frozen`, never pulling whatever landed on `main` this afternoon.
+### Going back, concretely
 
-**Server code changed during Phase 2 gets its own commit on `main` and its own release.** If the
-EXE turns out to need something from the server — and it will, for provisioning and sync — that
-change is a server change. It is made deliberately, tested, versioned, and it does **not** ride
-along inside installer work where rolling one back rolls back the other.
+```bash
+# remove a phase entirely
+git push new-origin --delete phase2-exe
+git branch -D phase2-exe
+
+# put the live server back to the last known-good build
+ssh <server> 'cd APPLE-ESPORTS-GAMMING-SOFTWARE-new \
+  && git fetch origin --tags \
+  && git checkout phase1-server-frozen \
+  && docker compose up -d --build'
+```
+
+The database keeps whatever the removed phase added to it. That is harmless — provided rule 2 held.
+It is the only rule whose breach cannot be undone by a checkout.
 
 ---
 
