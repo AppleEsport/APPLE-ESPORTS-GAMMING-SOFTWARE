@@ -103,7 +103,15 @@ it now on a guessable signal would look enforced and not be.
 
 # When a member's wallet runs out mid-game
 
-Agreed with the owner, 11 August 2026. Not yet built.
+Agreed 11 August 2026. **Built and deployed 12 August 2026 as `c1ac575`.**
+
+What was built: the stop point is calculated up front from the balance and the rate, so the
+session ends when the money runs out rather than after; the member is warned five minutes ahead
+and told before the PC locks rather than after; and the overlay and the server now share one
+stopping rule instead of holding two that disagree.
+
+The rounding was the part that mattered and it is recorded below, because it is not obvious and
+it will catch the next person too.
 
 ## What already works
 
@@ -156,9 +164,37 @@ play.
 
 **Billing is automatic** — that part already happens on stop.
 
-## Care needed
+## What made this harder than it looked
 
-This touches session stopping and wallet deduction at once: the two places where a mistake
-either gives away free play or overcharges a customer. Meet's commit 6109844 also changed
-wallet deduction on session stop, in the same file as the fix for online top-ups being counted
-as cash. That commit should be read against those changes before this is built.
+**The bill is rounded to the nearest ₹10 before the wallet is deducted**, down for a remainder of
+0–5 and up for 6–9. So "stop when the balance is spent" still creates debts: a member with ₹16
+stopped at exactly ₹16 of play is billed ₹20 and walks away owing ₹4, having been stopped for
+running out of money. The first version did precisely that.
+
+Found by a throwaway harness that stops at the calculated minute and then bills it the way
+`SessionService` does. First run: **3339 of 5016 cases left the member in debt** — the obvious
+answer parks the stop exactly on a rounding boundary, where a few seconds of lateness moves the
+bill a whole ₹10. Adding headroom left 228, all small balances against the free buffer.
+
+**The free buffer ends in a cliff.** The instant it expires the *whole* elapsed time becomes
+billable, not just the part beyond it — at ₹60/hour with a 10 minute buffer, ten minutes costs
+nothing and ten minutes and one second costs ₹10. A member who cannot afford that first
+chargeable moment has to be stopped short of the edge, not on it. Final: 6688 cases, none in
+debt, nobody losing more than 12% of their balance.
+
+`AffordableMinutes` asks `RoundBillTotal` what each candidate would actually be charged rather
+than reimplementing the rounding, so it cannot drift out of step with billing.
+
+**The overlay had the same defect**, and it was nearly missed: it already warned and auto-stopped
+client-side on "remaining balance under ₹1", walking into the same trap. Both sides now share one
+rule — the overlay stops the session while the PC is running, the server monitor is the backstop
+for when it is closed or off the network. If they disagree, whichever fires first decides and one
+of them is wrong.
+
+## Still open here
+
+**A member with ₹1 can start a session and play the free buffer for nothing, repeatedly.** The
+minimum balance to start is ₹1 and the buffer is 10 minutes, so ₹1 buys ten free minutes, again
+and again. This predates the work above and was not introduced by it. Fixing it means either
+raising the minimum to cover the first chargeable moment, or charging only for time beyond the
+buffer. Not touched, because it changes what customers are charged and that is the owner's call.
