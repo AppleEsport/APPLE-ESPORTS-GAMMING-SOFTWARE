@@ -164,6 +164,22 @@ count with an uncounted drawer at the end of it.
   of this document.
 - **Before handover:** the seeder has the owner's personal Gmail compiled into it.
 
+- **Every operator's email address is invented, and the domain is not ours.** `DataSeeder.cs`
+  builds them as `name_branch@appleesports.com`; all eight live operators have one. That domain
+  resolves to Amazon parking addresses — it is registered, it is not this business's, and it is
+  not accepting the mail. Seen as a Gmail bounce on 12 August 2026.
+
+  Two consequences. Every operator-facing email — update approvals, low stock, lockouts — goes
+  nowhere, so the "reaches all twelve operators" fix reaches none of them. And the account
+  lockout after five wrong passwords **automatically emails a working password-reset link** to
+  that address, so anyone who ever runs mail on `appleesports.com` can lock out an operator and
+  collect the link.
+
+  **Left as-is deliberately while testing**, on the owner's decision — no real operators are
+  using the system and nothing has been delivered (Gmail is deferring, not accepting). It must
+  not cross the freeze line: real addresses in, or reset mail refused to any address nobody has
+  confirmed. This is a data fix plus one guard, not a redesign.
+
 ### How money bugs were actually found
 
 Worth recording, because it held every time: **each one was caught by running the code against the
