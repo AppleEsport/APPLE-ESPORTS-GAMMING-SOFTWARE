@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using AppleEsportsErp.Infrastructure.Configuration;
 using AppleEsportsErp.Infrastructure.Data;
 
 namespace AppleEsportsErp.Api;
@@ -143,7 +144,29 @@ ADD COLUMN IF NOT EXISTS ""PhotoDataUrl"" text,
 ADD COLUMN IF NOT EXISTS ""AadharDataUrl"" text;
 ");
 
-        // Execute data seeding for branches, PCs, operators, etc.
-        DataSeeder.SeedBranchesAsync(db).GetAwaiter().GetResult();
+        // Seed the four branches, their PCs, pricing and operators — at HEAD OFFICE ONLY.
+        //
+        // A branch must never run this. Its database starts empty, so nothing here would stop
+        // it: the guard inside only skips when Adajan or Citylight already exist, and on a
+        // freshly installed counter PC they do not. Every branch would therefore invent its own
+        // copy of all four branches with its own identifiers — which is precisely the fault that
+        // broke sync last time and which Phase 2 exists to prevent. It would also put eight
+        // operators with invented email addresses and the password "12345" on the machine, and
+        // insert the owner's personal Gmail as super admin on every till in the business.
+        //
+        // A branch gets its identity from Head Office instead, through /api/provisioning/adopt,
+        // with Head Office's identifiers. Empty until then is the correct state, and an empty
+        // branch is a branch that has not been adopted yet — which is visible, unlike a branch
+        // quietly running on records it made up.
+        if (app.Configuration.IsHeadOffice())
+        {
+            DataSeeder.SeedBranchesAsync(db).GetAwaiter().GetResult();
+        }
+        else
+        {
+            app.Logger.LogInformation(
+                "Branch instance: skipping the Head Office seed. This database stays empty until " +
+                "the branch is adopted and takes Head Office's identifiers.");
+        }
     }
 }
