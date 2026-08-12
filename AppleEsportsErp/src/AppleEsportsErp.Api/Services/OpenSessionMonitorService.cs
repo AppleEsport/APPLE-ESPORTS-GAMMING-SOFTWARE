@@ -6,10 +6,38 @@ using AppleEsportsErp.Infrastructure.Data;
 
 namespace AppleEsportsErp.Api.Services;
 
+/// <summary>
+/// Stops a pay-as-you-go member the moment their wallet is used up — and tells them first.
+///
+/// This used to ask "has he gone over?" once a minute, which by definition only notices once he
+/// has: ₹10 buys ten minutes, the check fired at minute eleven, and the member was left owing ₹1
+/// that was never there. The stopping point is arithmetic, known the moment the session starts,
+/// so it is now worked out in advance and the session stopped there.
+///
+/// It also said nothing to the member. From the seat, a session that ends by itself is
+/// indistinguishable from a machine that has died.
+/// </summary>
 public class OpenSessionMonitorService : BackgroundService
 {
+    /// <summary>
+    /// Three times a minute. Frequent enough that the stop lands close to the calculated moment,
+    /// and the safety margin below covers the rest — being a little late must not cost the member
+    /// anything, so the two are set together.
+    /// </summary>
+    private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(20);
+
+    /// <summary>Long enough to walk to the counter and top up.</summary>
+    private const int WarnWhenMinutesLeft = 5;
+
     private readonly IServiceProvider _services;
     private readonly ILogger<OpenSessionMonitorService> _logger;
+
+    /// <summary>
+    /// Sessions already warned, so the member gets one message rather than one every twenty
+    /// seconds for five minutes. Held in memory on purpose: the cost of forgetting after a
+    /// restart is one repeated warning, which is not worth a database column.
+    /// </summary>
+    private readonly HashSet<Guid> _warned = new();
 
     public OpenSessionMonitorService(IServiceProvider services, ILogger<OpenSessionMonitorService> logger)
     {
@@ -32,7 +60,7 @@ public class OpenSessionMonitorService : BackgroundService
                 _logger.LogError(ex, "Error occurred executing CheckOpenSessionsAsync.");
             }
 
-            await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
+            await Task.Delay(TickInterval, stoppingToken);
         }
 
         _logger.LogInformation("OpenSessionMonitorService is stopping.");
@@ -43,6 +71,7 @@ public class OpenSessionMonitorService : BackgroundService
         using var scope = _services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var sessionService = scope.ServiceProvider.GetRequiredService<ISessionService>();
+        var hub = scope.ServiceProvider.GetRequiredService<IHubNotificationService>();
 
         var now = DateTimeOffset.UtcNow;
 
@@ -71,24 +100,68 @@ public class OpenSessionMonitorService : BackgroundService
             // trigger this safety net too early or too late depending on the branch.
             decimal ratePerHour = session.Pc?.PricingProfile?.BaseHourlyRate ?? SessionPricingCalculator.DefaultRatePerHour;
             int bufferMinutes = session.Pc?.PricingProfile?.BufferMinutes ?? SessionPricingCalculator.DefaultBufferMinutes;
-            decimal accruedCost = SessionPricingCalculator.CalculateGamingAmount(ratePerHour, bufferMinutes, actualDurationMin);
 
-            // If accrued cost >= their balance, terminate session forcefully!
-            if (accruedCost >= member.GamingBalance)
+            // Headroom for this loop being a little late — at least a rupee, and at a dearer PC
+            // a whole minute of play, since a minute costs more there. Deliberately derived from
+            // the tick interval: if that is ever lengthened, the margin follows it rather than
+            // silently becoming too small and putting members into debt.
+            decimal safetyRupees = Math.Max(1m, ratePerHour / 60m * (decimal)(TickInterval.TotalSeconds * 3 / 60));
+
+            // When their money runs out, worked out up front rather than discovered afterwards.
+            decimal stopAtMinutes = SessionPricingCalculator.AffordableMinutes(
+                ratePerHour, bufferMinutes, member.GamingBalance, safetyRupees);
+
+            // A PC with no rate configured bills nothing, so there is no limit to enforce.
+            if (stopAtMinutes == decimal.MaxValue) continue;
+
+            var minutesLeft = stopAtMinutes - actualDurationMin;
+
+            if (minutesLeft <= 0m)
             {
-                _logger.LogWarning("Forcefully stopping Open Session {SessionId} due to insufficient wallet balance. Accrued: {Cost}, Wallet: {Wallet}",
-                    session.Id, accruedCost, member.GamingBalance);
+                _logger.LogInformation(
+                    "Stopping session {SessionId}: wallet spent. Balance was {Wallet}, played {Played:0.#}m of an affordable {Affordable:0.#}m.",
+                    session.Id, member.GamingBalance, actualDurationMin, stopAtMinutes);
 
                 try
                 {
-                    // StopSessionAsync deducts the wallet (and logs any shortfall) itself.
+                    // Told before the PC locks. Afterwards the message would arrive on a screen
+                    // the member can no longer see, which is the whole complaint being fixed.
+                    if (session.PcId != Guid.Empty)
+                        await hub.SendWalletFinishedToAgentAsync(session.PcId);
+
+                    // StopSessionAsync deducts the wallet and settles the bill itself.
                     await sessionService.StopSessionAsync(session.BranchId, session.OperatorId, session.Id);
+
+                    _warned.Remove(session.Id);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Failed to forcefully stop session {SessionId}", session.Id);
+                    _logger.LogError(ex, "Failed to stop session {SessionId} whose wallet ran out", session.Id);
+                }
+
+                continue;
+            }
+
+            // Warned once, while they can still do something about it.
+            if (minutesLeft <= WarnWhenMinutesLeft && _warned.Add(session.Id))
+            {
+                try
+                {
+                    if (session.PcId != Guid.Empty)
+                        await hub.SendWalletRunningOutToAgentAsync(
+                            session.PcId, (int)Math.Floor(minutesLeft), member.GamingBalance);
+                }
+                catch (Exception ex)
+                {
+                    // A warning that cannot be delivered must not stop the session being stopped
+                    // on time further down the line.
+                    _logger.LogError(ex, "Could not warn the member on session {SessionId}", session.Id);
+                    _warned.Remove(session.Id);
                 }
             }
         }
+
+        // Sessions that have since ended must not accumulate here for the life of the process.
+        _warned.RemoveWhere(id => openSessions.All(s => s.Id != id));
     }
 }

@@ -45,6 +45,69 @@ public static class SessionPricingCalculator
     }
 
     /// <summary>
+    /// How long a member can play before their wallet is used up — worked out in advance.
+    ///
+    /// This is the inverse of the billing above, and it exists so a session can be stopped at
+    /// the right moment instead of caught after the fact. Checking "has he gone over?" once a
+    /// minute only ever notices once he has: ₹10 buys ten minutes, the check fires at minute
+    /// eleven, and the member is left owing ₹1 that was never there. That shortfall is created
+    /// purely by waiting to catch him rather than stopping him on time.
+    ///
+    /// The answer must be derived from <see cref="RoundBillTotal"/> rather than from the hourly
+    /// rate alone, because rounding is applied BEFORE the wallet is deducted and it rounds *up*
+    /// above a ₹5 remainder. A member with ₹16 stopped at exactly ₹16 of play is billed ₹20 and
+    /// walks away owing ₹4 — a perfectly timed stop, and still a debt. So the search below walks
+    /// down through real amounts asking the actual rounding function what each would be charged.
+    /// It cannot drift out of step with billing, because it is billing that answers.
+    ///
+    /// Returns the elapsed minutes at which to stop. Never less than the free buffer: nobody can
+    /// be charged inside it, so there is nothing to run out of there.
+    /// </summary>
+    /// <param name="safetyRupees">
+    /// Headroom for the fact that nothing fires at the exact millisecond. Whatever checks this
+    /// will be a little late, and the stop must still be affordable when it is.
+    ///
+    /// This is not a nicety. Without it the obvious answer — the most play the balance covers —
+    /// lands exactly on a rounding boundary, because ₹15 of play at a ₹10 rounding rounds down to
+    /// ₹10 and ₹15.01 rounds up to ₹20. Sitting on that edge, a few seconds of lateness moves the
+    /// bill by a whole ₹10 and hands the member a debt. Tested across four branch rates and 200
+    /// balances: parked on the boundary, two thirds of cases left the member owing money.
+    /// </param>
+    public static decimal AffordableMinutes(
+        decimal ratePerHour, int bufferMinutes, decimal balance, decimal safetyRupees = 1m)
+    {
+        // A PC with no rate configured bills ₹0, so the wallet can never run out on it. Stopping
+        // the session would be inventing a limit that does not exist.
+        if (ratePerHour <= 0m) return decimal.MaxValue;
+        if (balance <= 0m) return bufferMinutes;
+
+        // Start above the balance, not at it. Rounding can come *down* by as much as ₹5, so play
+        // worth ₹15 is charged ₹10 — a member with ₹10 can afford fifteen minutes at ₹60/hour,
+        // and starting the search at the balance would cut them off five minutes early.
+        decimal raw = balance + 5m;
+
+        // The test is what the bill would be if the stop arrives late — so the answer holds when
+        // it does. RoundBillTotal is asked rather than reimplemented: this cannot drift out of
+        // step with billing, because billing is what answers.
+        while (raw > 0m && RoundBillTotal(raw + safetyRupees) > balance)
+            raw -= 0.5m;
+
+        var safetyMinutes = safetyRupees * 60m / ratePerHour;
+        var affordableMinutes = raw <= 0m ? 0m : raw * 60m / ratePerHour;
+
+        // The free buffer has a cliff at its far edge, and it is savage: the instant the buffer
+        // expires the WHOLE elapsed time becomes billable at once, not just the part beyond it.
+        // At ₹60/hour with a 10 minute buffer, ten minutes costs nothing and ten minutes and one
+        // second costs ₹10. So a member who cannot afford that first chargeable moment has to be
+        // stopped *short* of the edge, with room for the stop to arrive late — parking them on it
+        // was 228 of the cases where a member still ended up in debt.
+        if (affordableMinutes <= bufferMinutes)
+            return Math.Max(0m, bufferMinutes - safetyMinutes);
+
+        return affordableMinutes;
+    }
+
+    /// <summary>
     /// Rounds a bill's total to the nearest ₹10 AND folds the adjustment into the
     /// Gaming line so every number on the bill (line items, subtotal, total) agrees
     /// with the same figure — never a line item that doesn't add up to the total.

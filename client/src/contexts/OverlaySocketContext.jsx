@@ -2,10 +2,10 @@ import React, { createContext, useContext, useEffect, useState, useRef, useCallb
 import { HubConnectionBuilder, LogLevel } from '@microsoft/signalr';
 import api from '../config/api';
 import {
-  AUTO_STOP_REMAINING_BALANCE,
   FIRST_REMINDER_REMAINING_BALANCE,
   SECOND_REMINDER_REMAINING_BALANCE,
-  minutesRemainingFor
+  minutesRemainingFor,
+  affordableMinutes
 } from '../utils/memberWalletRules';
 
 const OverlaySocketContext = createContext(null);
@@ -299,9 +299,21 @@ export function OverlaySocketProvider({ children, pcId, isMinimized: initialMini
             clearWarning = true;
           }
 
-          // The session must stop the instant the wallet can no longer cover the next rupee,
-          // so the member is never billed more than they hold.
-          if (remaining < AUTO_STOP_REMAINING_BALANCE && !autoCheckoutRef.current.triggered) {
+          // Stopped at the minute their money actually runs out, worked out from the balance and
+          // the rate rather than by watching the remaining figure approach zero.
+          //
+          // Watching it approach zero is not the same thing, because the bill is rounded to the
+          // nearest 10 rupees before the wallet is touched: a member with Rs 27 stopped at Rs 26
+          // of play is billed Rs 30, and is left owing Rs 3 having been stopped for running out
+          // of money. affordableMinutes asks the rounding function itself where the safe stop is.
+          const stopAtMinutes = prev.sessionStart
+            ? affordableMinutes(prev.ratePerHour, prev.bufferMinutes ?? 10, prev.gamingBalance)
+            : Infinity;
+          const elapsedMinutes = prev.sessionStart
+            ? (Date.now() - new Date(prev.sessionStart).getTime()) / (1000 * 60)
+            : 0;
+
+          if (elapsedMinutes >= stopAtMinutes && !autoCheckoutRef.current.triggered) {
             autoCheckoutRef.current.triggered = true;
             shouldAutoCheckout = true;
             checkoutSessionId = prev.sessionId;
@@ -421,6 +433,29 @@ export function OverlaySocketProvider({ children, pcId, isMinimized: initialMini
 
     newConnection.on('ReceiveWalletApprovalRequest', (data) => {
       setWalletApprovalRequest(data);
+    });
+
+    // ── Sent by the server's session monitor ──
+    //
+    // The overlay does its own warning and stopping while it is running, and normally gets there
+    // first. These exist for when it does not: the PC was asleep, the app was closed, the network
+    // dropped. In that case the server stops the session, and without these the member's screen
+    // would simply go dead — which is the complaint. Both are written so that arriving on top of
+    // the overlay's own warning is harmless rather than contradictory.
+
+    newConnection.on('WalletRunningOut', ({ minutesLeft, balance }) => {
+      setLowBalanceWarning(prev => prev ?? {
+        remaining: balance,
+        minutes: minutesLeft,
+        isFinal: true,
+      });
+    });
+
+    newConnection.on('WalletFinished', () => {
+      // Read by PcLockScreen once the session clears, so the lock screen says why it locked
+      // rather than just locking.
+      localStorage.setItem('walletEmptyAlert', 'true');
+      setLowBalanceWarning(null);
     });
 
     // When PC status changes to Idle (e.g. after wallet payment completes), clear the overlay

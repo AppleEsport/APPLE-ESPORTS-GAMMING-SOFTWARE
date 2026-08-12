@@ -179,6 +179,24 @@ public class HubNotificationService : IHubNotificationService
         });
     }
 
+    public async Task SendWalletRunningOutToAgentAsync(Guid pcId, int minutesLeft, decimal balance)
+    {
+        await _pcStatusHub.Clients.Group($"agent:{pcId}").SendAsync("WalletRunningOut", new
+        {
+            MinutesLeft = minutesLeft,
+            Balance = balance,
+            Timestamp = DateTimeOffset.UtcNow
+        });
+    }
+
+    public async Task SendWalletFinishedToAgentAsync(Guid pcId)
+    {
+        await _pcStatusHub.Clients.Group($"agent:{pcId}").SendAsync("WalletFinished", new
+        {
+            Timestamp = DateTimeOffset.UtcNow
+        });
+    }
+
     public async Task SendLockCommandToAgentAsync(Guid pcId)
     {
         await _pcStatusHub.Clients.Group($"agent:{pcId}").SendAsync("LockSession", new

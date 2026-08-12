@@ -12,5 +12,15 @@ public interface IHubNotificationService
     Task BroadcastPricingProfileUpdateAsync(Guid branchId);
     Task SendUnlockCommandToAgentAsync(Guid pcId, int durationMinutes, string? customerName);
     Task SendLockCommandToAgentAsync(Guid pcId);
+
+    /// <summary>Warns the member at this PC that their balance is nearly used up.</summary>
+    Task SendWalletRunningOutToAgentAsync(Guid pcId, int minutesLeft, decimal balance);
+
+    /// <summary>
+    /// Tells the member their balance is finished and the session has ended. Sent before the
+    /// session is stopped, so the explanation is on screen before the PC locks — otherwise the
+    /// machine simply goes dead in front of them and looks broken.
+    /// </summary>
+    Task SendWalletFinishedToAgentAsync(Guid pcId);
     Task TriggerDashboardRefreshAsync();
 }
