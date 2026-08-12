@@ -122,23 +122,38 @@ Restoring the rolled-back work is done. So is everything the owner raised while 
 | Wallet runs out — stops on time, warns, tells the member | 6688 billing cases, none leaving a debt |
 | Cash difference emails the owner | — |
 | The trading day closes itself when nobody ticks "last shift" | closed 11 Aug on live data, mail arrived |
+| B takes over A's abandoned shift — blind count, drawer and stock, closed by somebody else | 95 checks against a real database, real login, real drawer |
 
-### The two things left
+### The one thing left
 
-**1. B takes over A's abandoned shift.** The next build, specified in `CASH_HANDOVER_DESIGN.md`.
-Login only ever looks for an active shift belonging to *the same* operator, so somebody else's
-abandoned shift is invisible and simply dangles. It plugs into the `ResumedShift` /
-`UnattendedMinutes` fields the login response already returns, and copies the `ShiftGapModal`
-blocking-screen pattern.
+**Verify, tag, freeze.** Ends Phase 1.
 
-The trap, worth repeating: **who closed it must be stored separately from whose shift it was**, or
-a shortfall lands on the wrong operator's name.
+### B takes over A's abandoned shift — built 12 August 2026
 
-Not urgent, because the automatic day close already stops an abandoned shift dangling for ever —
-it gets closed and reported. What is missing is the better version, where the incoming operator
-counts at the moment of handover rather than the system closing an uncounted drawer hours later.
+Specified in `CASH_HANDOVER_DESIGN.md`, which now records what was built.
 
-**2. Verify, tag, freeze.** Ends Phase 1.
+The order is enforced rather than drawn: **login issues no shift at all** while somebody else's
+uncounted drawer is open at that branch. The handover issues it. A blocking screen alone can be
+refreshed past; withholding the shift cannot.
+
+The count is blind — the expected figures are never sent to the counting screen — and it is
+written down before the comparison is revealed, so it cannot be revised to agree. The trap held:
+**who closed it is stored separately from whose shift it was** (`shifts.ClosedByOperatorId`,
+`cash_register.CountedByOperatorId`, and a `shift_handovers` row holding both sides). The
+incoming operator opens on **what they counted**, so a shortfall found on arrival never follows
+them into their own shift.
+
+A shift counts as abandoned after **two hours** with nothing recorded — no session, no bill, no
+cash movement, no audited action. Deliberately generous: branches run up to three counters and
+one shift per counter is not enforced until Phase 2, so too short a threshold closes a live
+colleague out or blocks the second counter from opening, while too long simply falls back to the
+automatic day close that already exists. One constant if the owner wants it moved.
+
+Two things came with it, because the flow is incoherent without them: the opening prompt is now
+the two questions the design called for (a float for the first shift of the day, the inherited
+figure for every shift after), and `SHIFT_CLOSED` no longer signs an operator out when a handover
+is the reason they have no shift — that would have looped them between the login screen and the
+count with an uncounted drawer at the end of it.
 
 ### Decisions waiting on the owner
 
@@ -158,6 +173,13 @@ emailed nobody. An update email would have reached one operator out of twelve.
 
 All three read as correct. For anything touching money, drive the real functions with realistic
 inputs and check the outcome — not that the step ran.
+
+It held once more on the takeover. Reading the shift-takeover code gives no hint that the client
+would sign the operator out the moment it ran: any page behind the blocking screen calls a
+shift-scoped endpoint, which correctly answers `SHIFT_CLOSED` because there is deliberately no
+shift, and the response interceptor treats that as a dead session and returns to the login
+screen — where logging in produces the same handover again. A loop with an uncounted drawer at
+the end of it, from a file that was not being changed.
 
 ---
 

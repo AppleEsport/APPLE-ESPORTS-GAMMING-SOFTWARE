@@ -1,6 +1,9 @@
 # Cash handover between shifts
 
-Agreed with the owner, 11 August 2026. Not yet built — this is the specification.
+Agreed with the owner, 11 August 2026. Specified here; **the abandoned-shift half was built on
+12 August 2026** — see "Built, 12 August 2026" further down. The blind count, the handover record
+and the two opening questions came with it. What remains unbuilt is the *planned* handover, where
+A closes properly and B counts against A's declared figure rather than against the system's.
 
 ---
 
@@ -96,7 +99,7 @@ somebody other than its own operator.
 
 # A shift nobody closed
 
-Agreed with the owner, 12 August 2026. **Not yet built — this is the next piece of work.**
+Agreed with the owner, 12 August 2026. **Both built — see "Built, 12 August 2026" below.**
 
 Two faults, one cause: the system depends on an operator doing something, and sometimes nobody
 does. Building them together because the answer is the same.
@@ -144,6 +147,78 @@ Both close someone else's shift and someone else's drawer, and write a cash coun
 being recorded against a person who is not present to confirm it, so who closed it and who
 counted it must be stored separately from whose shift it was — otherwise a shortfall lands on the
 wrong operator's name.
+
+---
+
+# Built, 12 August 2026
+
+Both halves above are now in the code.
+
+## The order the login enforces
+
+The incoming operator's shift is **not created at login** while a handover is outstanding. They
+get credentials and nothing to trade with; the handover itself issues the shift once the money is
+on record. A blocking screen alone would not have done it — a screen can be refreshed past,
+closed, or never reach the browser, and the one thing that must not happen is a second shift
+trading over an uncounted drawer.
+
+## The count is blind, and it is written down before it is checked
+
+Nothing on the counting screen carries the expected cash or the expected stock. The figures are
+submitted, recorded, and only then is the comparison shown. Submitting a second count does not
+overwrite the first — it hands the first one back. Without that, an operator shown "the system
+says ₹5,240" would type 5,240, and the count would be a tick-box.
+
+A handover interrupted half way (browser closed, PC restarted) resumes at the explanation, never
+back at the count.
+
+## Where a shortfall lands
+
+| Column | Holds |
+|---|---|
+| `shifts.OperatorId` | whose shift it was |
+| `shifts.ClosedByOperatorId` | who closed it — null on every normal close |
+| `cash_register.OperatorId` | who opened the drawer |
+| `cash_register.CountedByOperatorId` | who physically counted it |
+| `shift_handovers` | both sides, both figures, the difference, the reason, the time |
+
+The incoming operator then starts from **what they counted**, not from what the system expected —
+so a shortfall found on arrival stays on the shift it happened in and is never inherited.
+
+## When a shift counts as abandoned
+
+**Two hours** with nothing recorded at all: no session touched, no bill, no cash movement, no
+audited action anywhere. The number is deliberately generous, because the two mistakes cost very
+different amounts. Katargam and Varachha run three counters each and one shift per counter is not
+enforced until Phase 2, so "another operator's shift is open" cannot mean "abandoned" — too short
+a threshold closes a live colleague out, or stops a branch opening its second counter at all. Too
+long, and an abandoned shift waits for the automatic day close at 06:00, which already happens
+today and already reports. Only one of those stops the shop.
+
+Worth revisiting with the owner if it proves wrong in either direction; it is one constant,
+`ShiftTakeoverService.AbandonedAfter`.
+
+## The opening prompt, now actually two questions
+
+The server has inherited the drawer between shifts since the register was made idempotent, but
+the screen still asked every operator for a float and then quietly discarded what they typed.
+It now asks the first shift of the day for a float, and tells every shift after it what the last
+one left.
+
+## What it was tested with
+
+A throwaway harness driving the real services against a real Postgres with the real migrations —
+the login, the handover, the drawer, the stock, the emails — asserting the rows that ended up in
+the database rather than that the calls returned. 95 checks, including: a counter idle 95 minutes
+is left alone; a second count cannot revise the first; the shortfall sits on the outgoing shift
+while the incoming operator opens on the counted figure; yesterday's drawer is the one counted at
+06:30; two dangling shifts close on one count; and a second operator racing for the same handover
+is turned away rather than counting it twice.
+
+## Still not part of this
+
+**One shift per counter PC**, as below. Until each counter has a real identity, the two-hour
+silence is the only signal available for telling an empty chair from a quiet one.
 
 ---
 
