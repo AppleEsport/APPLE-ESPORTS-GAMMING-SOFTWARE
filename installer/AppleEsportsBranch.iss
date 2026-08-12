@@ -1,0 +1,272 @@
+; ============================================================================
+;  Apple Esports ERP - branch installer
+;
+;  One file, two kinds of machine:
+;
+;    Operator counter PC  - database, API and dashboard, all local. The branch
+;                           trades with no internet at all.
+;    Customer gaming PC   - the agent that locks and unlocks the screen.
+;
+;  Build:  pwsh installer\build-branch-installer.ps1
+;  (stages everything first, then compiles this)
+; ============================================================================
+
+#define AppName        "Apple Esports"
+#define AppVersion     "2.1.0"
+#define AppPublisher   "Apple Esports"
+#define Staging        "branch\staging"
+
+[Setup]
+; Same AppId as the client-only build on purpose: a branch that already has the
+; thin client installed upgrades in place rather than ending up with two entries
+; in Programs and Features and two icons that do different things.
+AppId={{7C4F1E62-9A3B-4D58-8E11-2F6A0B93C4D7}
+
+AppName={#AppName}
+AppVersion={#AppVersion}
+AppVerName={#AppName} {#AppVersion}
+AppPublisher={#AppPublisher}
+VersionInfoVersion={#AppVersion}
+
+DefaultDirName={autopf}\{#AppName}
+DefaultGroupName={#AppName}
+DisableProgramGroupPage=yes
+
+; Registers Windows services and writes to Program Files.
+PrivilegesRequired=admin
+
+OutputDir=..\dist
+OutputBaseFilename=AppleEsports-Branch-Setup-{#AppVersion}
+SetupIconFile=..\desktop-client\appicon.ico
+UninstallDisplayIcon={app}\AppleEsports.exe
+UninstallDisplayName={#AppName} {#AppVersion}
+
+Compression=lzma2/max
+SolidCompression=yes
+WizardStyle=modern
+ArchitecturesInstallIn64BitMode=x64compatible
+ArchitecturesAllowed=x64compatible
+
+[Languages]
+Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Types]
+Name: "operator"; Description: "Operator counter PC  -  runs the branch (database + dashboard)"
+Name: "gaming";   Description: "Customer gaming PC  -  locked screen only"
+
+[Components]
+Name: "core";   Description: "Apple Esports dashboard";     Types: operator gaming; Flags: fixed
+Name: "server"; Description: "Branch database and services"; Types: operator
+Name: "agent";  Description: "Gaming PC screen lock";        Types: gaming
+
+[Files]
+; -- Always --
+Source: "..\desktop-client\publish\AppleEsports.exe"; DestDir: "{app}"; Components: core; Flags: ignoreversion
+Source: "..\SHORTCUT_KEYS.md";                        DestDir: "{app}"; Components: core; Flags: ignoreversion
+; NOTE: AppleEsports.config.json is deliberately NOT shipped. It is written by
+; WriteClientConfig below, per machine, because what belongs in it depends on which kind
+; of PC this is. The version in the repo is a developer's, pointed at a public server and
+; carrying the dashboard gate password in plain text - it must never reach a branch.
+
+; -- Operator counter PC: the whole branch --
+Source: "{#Staging}\api\*";   DestDir: "{app}\api";   Components: server; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#Staging}\pgsql\*"; DestDir: "{app}\pgsql"; Components: server; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "branch\setup-database.ps1"; DestDir: "{app}"; Components: server; Flags: ignoreversion
+Source: "branch\stop-services.ps1"; Flags: dontcopy
+Source: "branch\setup-api.ps1";      DestDir: "{app}"; Components: server; Flags: ignoreversion
+
+; -- Customer gaming PC --
+Source: "..\AppleEsportsErp\src\AppleEsportsErp.ClientAgent\publish\AppleEsportsAgent.exe"; DestDir: "{app}"; Components: agent; Flags: ignoreversion
+
+[Dirs]
+; Created up front so the setup scripts are never the first thing to touch them.
+Name: "{app}\backups"; Components: server
+
+[Icons]
+Name: "{group}\{#AppName}";              Filename: "{app}\AppleEsports.exe"
+Name: "{group}\Keyboard shortcuts";      Filename: "{app}\SHORTCUT_KEYS.md"
+Name: "{group}\Uninstall {#AppName}";    Filename: "{uninstallexe}"
+Name: "{autodesktop}\{#AppName}";        Filename: "{app}\AppleEsports.exe"
+
+[Run]
+; The branch setup is NOT run from here. A [Run] step that fails is ignored, and the
+; wizard still reports success - which is exactly how an install ends up looking fine
+; while the branch has no database and can never start. It runs from CurStepChanged
+; instead, where the exit code can be checked and a failure actually reported.
+Filename: "{app}\AppleEsports.exe"; Description: "Set up this PC now"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+; Services must go before the files they point at, or Windows is left with entries
+; referencing an executable that no longer exists and the names cannot be reused.
+Filename: "sc.exe"; Parameters: "stop AppleEsportsApi";   Flags: runhidden; RunOnceId: "StopApi"
+Filename: "sc.exe"; Parameters: "delete AppleEsportsApi"; Flags: runhidden; RunOnceId: "DelApi"
+Filename: "sc.exe"; Parameters: "stop AppleEsportsDb";    Flags: runhidden; RunOnceId: "StopDb"
+Filename: "sc.exe"; Parameters: "delete AppleEsportsDb";  Flags: runhidden; RunOnceId: "DelDb"
+
+[UninstallDelete]
+Type: filesandordirs; Name: "{localappdata}\AppleEsports"
+Type: filesandordirs; Name: "{userappdata}\AppleEsports"
+; NOTE: {commonappdata}\Apple Esports is deliberately NOT listed. That folder now holds
+; the branch's database - its takings, sessions and members. Uninstalling the software
+; must never destroy the business records. Retiring a machine for good is a decision
+; someone makes deliberately, not a side effect of clicking Uninstall.
+; UNINSTALL-EVERYTHING.ps1 removes it when a genuinely clean slate is wanted.
+
+[Code]
+function WebView2Installed(): Boolean;
+var
+  Version: String;
+begin
+  Result :=
+    RegQueryStringValue(HKLM, 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', Version) or
+    RegQueryStringValue(HKLM, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', Version);
+end;
+
+{ Runs before a single file is copied.
+
+  On an upgrade the API is running as a service with its own DLLs open, so the copy fails
+  with "DeleteFile failed; code 5" partway through and leaves the install half replaced.
+  Stopping first is the difference between an upgrade over a working branch succeeding and
+  needing a full uninstall. setup-api.ps1 starts everything again at the end. }
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+begin
+  Result := '';
+
+  if not IsComponentSelected('server') then
+    Exit;
+
+  ExtractTemporaryFile('stop-services.ps1');
+
+  { Deliberately not treated as fatal. If something cannot be stopped, the copy hits the
+    same lock and Inno offers Retry/Skip/Cancel - a better place to decide than here, with
+    the file that is actually stuck named on screen. }
+  Exec('powershell.exe',
+    '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{tmp}\stop-services.ps1') + '"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+function InitializeSetup(): Boolean;
+var
+  ErrorCode: Integer;
+begin
+  Result := True;
+
+  if not WebView2Installed() then
+  begin
+    if MsgBox(
+      'Apple Esports needs the Microsoft Edge WebView2 Runtime, which is not installed on this PC.' + #13#10#13#10 +
+      'It is a free Microsoft component and takes about a minute to install.' + #13#10#13#10 +
+      'Open the download page now? (Choose No to carry on installing anyway.)',
+      mbConfirmation, MB_YESNO) = IDYES then
+    begin
+      ShellExec('open', 'https://developer.microsoft.com/microsoft-edge/webview2/#download', '', '', SW_SHOW, ewNoWait, ErrorCode);
+      Result := False;
+    end;
+  end;
+end;
+
+{ Runs a setup script and returns its exit code, so a failure can be reported rather
+  than swallowed. }
+function RunSetupScript(const ScriptName, Description: String): Boolean;
+var
+  ResultCode: Integer;
+begin
+  WizardForm.StatusLabel.Caption := Description;
+
+  Result := Exec('powershell.exe',
+    '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\') + ScriptName + '"' +
+    ' -InstallDir "' + ExpandConstant('{app}') + '"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  if Result and (ResultCode <> 0) then
+    Result := False;
+end;
+
+{ Writes the client's settings so the app knows, before anyone opens it, what kind of PC
+  this is and where its branch server is.
+
+  This is what makes the shop work with the internet off. The address below is the BRANCH -
+  this machine on the counter PC, the counter PC on a gaming PC - never Head Office. Head
+  Office is reached only by the branch's own background sync. }
+procedure WriteClientConfig();
+var
+  Path, Server, Role: String;
+  Lines: TArrayOfString;
+begin
+  Path := ExpandConstant('{app}\AppleEsports.config.json');
+
+  { Never overwritten on an upgrade or repair: it carries the admin PIN and the seat this
+    machine was claimed as, and losing those would un-configure a working PC. }
+  if FileExists(Path) then
+    Exit;
+
+  if IsComponentSelected('server') then
+  begin
+    { The branch database and API are installed on this machine, so there is nothing to
+      ask - the answer cannot be anything else. }
+    { 127.0.0.1, not localhost: localhost resolves to IPv6 first and anything else
+      holding that port answers instead of the branch. }
+    Server := 'http://127.0.0.1:5016';
+    Role := 'operator';
+  end
+  else
+  begin
+    { Only someone standing in the shop knows the counter PC's address, so it is left empty
+      and the first-run wizard asks. A guess here would be wrong at three branches in four. }
+    Server := '';
+    Role := 'user';
+  end;
+
+  SetArrayLength(Lines, 5);
+  Lines[0] := '{';
+  Lines[1] := '  "ServerUrl": "' + Server + '",';
+  Lines[2] := '  "Role": "' + Role + '",';
+  Lines[3] := '  "StartMaximized": true';
+  Lines[4] := '}';
+
+  SaveStringsToFile(Path, Lines, False);
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep <> ssPostInstall then
+    Exit;
+
+  { Both kinds of PC need this, so it runs before the operator-only work below. }
+  WriteClientConfig();
+
+  if not IsComponentSelected('server') then
+    Exit;
+
+  if not RunSetupScript('setup-database.ps1', 'Setting up the branch database (this takes a minute)...') then
+  begin
+    MsgBox(
+      'The branch database could not be set up.' + #13#10#13#10 +
+      'The rest of the software installed, but this PC cannot run the branch until the '
+      + 'database is working.' + #13#10#13#10 +
+      'What went wrong was written to:' + #13#10 +
+      ExpandConstant('{commonappdata}\Apple Esports\logs\setup-database.log'),
+      mbCriticalError, MB_OK);
+    Exit;
+  end;
+
+  if not RunSetupScript('setup-api.ps1', 'Starting the branch system...') then
+  begin
+    MsgBox(
+      'The database is ready, but the branch system did not start.' + #13#10#13#10 +
+      'What went wrong was written to:' + #13#10 +
+      ExpandConstant('{commonappdata}\Apple Esports\logs\setup-api.log'),
+      mbCriticalError, MB_OK);
+    Exit;
+  end;
+
+  MsgBox(
+    'This PC now runs the branch itself.' + #13#10#13#10 +
+    'The database and dashboard start automatically with Windows, so the shop works ' +
+    'even with no internet at all. The internet is only used to report to Head Office ' +
+    'and to receive updates.' + #13#10#13#10 +
+    'Point the gaming PCs at this machine when you set them up.',
+    mbInformation, MB_OK);
+end;
