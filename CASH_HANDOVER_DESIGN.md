@@ -92,6 +92,61 @@ somebody other than its own operator.
 
 ---
 
+---
+
+# A shift nobody closed
+
+Agreed with the owner, 12 August 2026. **Not yet built — this is the next piece of work.**
+
+Two faults, one cause: the system depends on an operator doing something, and sometimes nobody
+does. Building them together because the answer is the same.
+
+## 1. The day only closes if somebody ticks a box
+
+"This is the last shift of the day" sets a flag on the shift and sends the end-of-day email.
+Nothing else depends on it, and nothing notices when it does not happen.
+
+**Ticked by mistake:** the owner gets an early email with partial figures. The drawer is
+untouched, the next operator logs in normally, and the real last shift sends a correct email
+afterwards. One confusing email, recoverable.
+
+**Forgotten:** no end-of-day email at all; the register is never closed and stays open past 06:00;
+the next morning is a new trading day, so a fresh register opens and asks for a float while
+yesterday's stays open indefinitely. This is where the **30 stale registers** already cleared off
+the live system came from.
+
+Forgetting is much the more likely of the two, because it requires doing nothing.
+
+**Decided: stop depending on the tick.** Shortly after 06:00, any branch whose previous trading
+day is still open gets closed by the system — the register closed with its figures preserved, the
+end-of-day email sent, and the email saying plainly that nobody marked the last shift. The tick
+stays as a convenience for closing early; it stops being the only thing holding the day together.
+
+A tired operator at 3am should not be able to cost the owner a day's report.
+
+## 2. An operator who never closed their shift
+
+Power cut, or they simply walked out. Login only ever looks for an active shift belonging to *the
+same operator*, so another operator's abandoned shift is invisible: the next person logs in, a
+second shift opens alongside the first, and the abandoned one dangles.
+
+**Decided, in the owner's words:** *"B will close A's shift and count all the things and then B
+will log in."*
+
+So when an operator logs in and finds another operator's shift still active at that branch, they
+are asked to close it first: they count the drawer and the stock, that count becomes the closing
+figure for the abandoned shift, it is recorded as closed by somebody other than its own operator,
+the owner is emailed, and only then does the new shift start.
+
+## Care needed
+
+Both close someone else's shift and someone else's drawer, and write a cash count. That is money
+being recorded against a person who is not present to confirm it, so who closed it and who
+counted it must be stored separately from whose shift it was — otherwise a shortfall lands on the
+wrong operator's name.
+
+---
+
 ## Deliberately not part of this
 
 **One shift per counter PC.** Katargam and Varachha have three counter machines each, so the
