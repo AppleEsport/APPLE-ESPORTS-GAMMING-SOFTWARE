@@ -664,8 +664,9 @@ public class AuthService : IAuthService
                 }
 
                 // No shift was left open — the operators logged out properly and simply nobody
-                // ticked the box. The day still needs its report, so it is attributed to the last
-                // shift that ran on it.
+                // ticked the box. That is the common case, not the exception, so the report must
+                // still go out. Any shift of this branch will do: it is only read for its branch,
+                // and the day being reported on is passed in separately below.
                 closingShift ??= await _db.Shifts
                     .Where(s => s.BranchId == branchDay.Key.BranchId && s.LogoutTime != null)
                     .OrderByDescending(s => s.LogoutTime)
@@ -679,11 +680,21 @@ public class AuthService : IAuthService
                     branchDay.Key.BusinessDay, branchDay.Key.BranchId,
                     branchDay.Count(), branchDay.Sum(r => r.ExpectedDrawerCash));
 
-                if (closingShift != null &&
-                    IndiaTime.BusinessDayOf(closingShift.LogoutTime ?? DateTimeOffset.UtcNow) == branchDay.Key.BusinessDay)
-                {
-                    await SendDaySummaryAsync(closingShift, closedAutomatically: true);
-                }
+                // Midday IST on the day being closed - unambiguously inside its 06:00-to-06:00
+                // window, whichever shift the report ends up attributed to. Passing this rather
+                // than letting the day be inferred from a logout time is the whole fix: the first
+                // version compared the two and sent nothing when they disagreed, which is exactly
+                // the case that needs a report.
+                var dayAnchor = new DateTimeOffset(
+                    branchDay.Key.BusinessDay.Year, branchDay.Key.BusinessDay.Month, branchDay.Key.BusinessDay.Day,
+                    12, 0, 0, TimeSpan.FromHours(5.5));
+
+                if (closingShift != null)
+                    await SendDaySummaryAsync(closingShift, closedAutomatically: true, anchor: dayAnchor);
+                else
+                    _logger.LogWarning(
+                        "Closed trading day {Day} for branch {Branch} but sent no report: the branch has no shift on record.",
+                        branchDay.Key.BusinessDay, branchDay.Key.BranchId);
 
                 closedDays++;
             }
@@ -698,12 +709,21 @@ public class AuthService : IAuthService
         return closedDays;
     }
 
-    private async Task SendDaySummaryAsync(Shift shift, bool closedAutomatically = false)
+    /// <param name="anchor">
+    /// Any moment inside the trading day being reported on. Given explicitly when the day is
+    /// closed automatically, because the shift it is attributed to may well have finished on a
+    /// later day — an operator who logged out properly and simply never ticked the box. Inferring
+    /// the day from that shift's logout time reports on the wrong day, and guarding against that
+    /// by refusing to send means no report at all, which is what happened on the first run.
+    /// </param>
+    private async Task SendDaySummaryAsync(
+        Shift shift, bool closedAutomatically = false, DateTimeOffset? anchor = null)
     {
         try
         {
-            var (dayStart, dayEnd) = IndiaTime.BusinessDayRangeFor(shift.LogoutTime ?? DateTimeOffset.UtcNow);
-            var businessDay = IndiaTime.BusinessDayOf(shift.LogoutTime ?? DateTimeOffset.UtcNow);
+            var reportOn = anchor ?? shift.LogoutTime ?? DateTimeOffset.UtcNow;
+            var (dayStart, dayEnd) = IndiaTime.BusinessDayRangeFor(reportOn);
+            var businessDay = IndiaTime.BusinessDayOf(reportOn);
             var branchName = await _db.Branches.Where(b => b.Id == shift.BranchId)
                 .Select(b => b.Name).FirstOrDefaultAsync() ?? "Unknown branch";
 
@@ -725,7 +745,9 @@ public class AuthService : IAuthService
                 ("Branch", branchName),
                 ("Day", $"{businessDay:dd MMM yyyy}"),
                 ("Counted from", "6 in the morning to 6 the next morning"),
-                ("Shop closed at", IndiaTime.Format(shift.LogoutTime ?? DateTimeOffset.UtcNow)),
+                ("Shop closed at", closedAutomatically
+                    ? "6 in the morning - closed by the system, not by an operator"
+                    : IndiaTime.Format(shift.LogoutTime ?? DateTimeOffset.UtcNow)),
                 ("", ""),
                 ("Total money taken", $"Rs {total:0.00}"),
                 ("  Cash", $"Rs {payments.Sum(p => p.CashAmount):0.00}"),
