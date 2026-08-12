@@ -62,3 +62,9 @@ dist/
 
 # Publish output — build artefacts, and the agent exe alone is 156 MB
 **/publish/
+
+# Branch installer build output. The PostgreSQL binaries alone are ~120 MB of
+# third-party build output, and staging/ is another 300 MB rebuilt from source
+# on every run. Neither belongs in git; build-branch-package.ps1 recreates both.
+installer/branch/staging/
+installer/branch/.cache/
