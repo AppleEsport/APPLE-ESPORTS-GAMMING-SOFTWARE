@@ -227,6 +227,44 @@ the end of it, from a file that was not being changed.
 
 ---
 
+## How Phase 2 is kept away from the server
+
+Agreed 12 August 2026, and this is the part that actually matters.
+
+**What happened last time:** the installer work and the server work shared one history. Undoing the
+installer meant rewinding the branch, and the rewind took **27 server commits** with it — the
+password gate, the cookie auth, the trading day, the power-cut pause. The dashboard went back onto
+the open internet as a side effect of abandoning an EXE. Nobody decided that; the shape of the
+repository decided it.
+
+**So it is not allowed to be possible again.** Three things, in order of how much they matter:
+
+**1. The EXE never commits to `main`.** Phase 2 lives on its own branch, `phase2-exe`. Abandoning
+Phase 2 then means deleting a branch, and the server cannot notice. This is the whole fix — the
+other two are only there for when somebody forgets it.
+
+**2. The frozen server is held by three independent refs.** Any one of them can restore it:
+
+| Ref | |
+|---|---|
+| `phase1-server-frozen` | annotated tag — a force-push to a branch does not touch it |
+| `phase1-frozen` | a branch, so it is easy to check out and deploy from |
+| `main` | where development continues |
+
+A rewind of `main` no longer loses anything, because the other two do not move. Deleting all three
+takes three deliberate, separate commands.
+
+**3. The server is deployed from a named ref, not from wherever `main` happens to point.** While
+Phase 2 is in progress `main` is a moving target. Updating the live server means checking out the
+tag or `phase1-frozen`, never pulling whatever landed on `main` this afternoon.
+
+**Server code changed during Phase 2 gets its own commit on `main` and its own release.** If the
+EXE turns out to need something from the server — and it will, for provisioning and sync — that
+change is a server change. It is made deliberately, tested, versioned, and it does **not** ride
+along inside installer work where rolling one back rolls back the other.
+
+---
+
 ## Phase 2 — the operator EXE
 
 One installer, run on the counter PC, producing a complete shop:
