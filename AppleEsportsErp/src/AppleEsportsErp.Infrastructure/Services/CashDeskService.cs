@@ -14,15 +14,18 @@ public class CashDeskService : ICashDeskService
     private readonly IUnitOfWork _unitOfWork;
     private readonly IAuditService _auditService;
     private readonly IHubNotificationService _hubNotification;
+    private readonly IAdminNotifier _notifier;
 
     public CashDeskService(
         IUnitOfWork unitOfWork,
         IAuditService auditService,
-        IHubNotificationService hubNotification)
+        IHubNotificationService hubNotification,
+        IAdminNotifier notifier)
     {
         _unitOfWork = unitOfWork;
         _auditService = auditService;
         _hubNotification = hubNotification;
+        _notifier = notifier;
     }
 
     public async Task StartVerificationAsync(Guid branchId, Guid operatorId, Guid shiftId)
@@ -136,6 +139,12 @@ public class CashDeskService : ICashDeskService
             await _unitOfWork.CommitTransactionAsync();
             await _hubNotification.BroadcastCashRegisterUpdateAsync(branchId, register.Id);
 
+            // After the commit, and only when the money is actually wrong. The count is the one
+            // moment a shortfall is visible while anyone still remembers the evening; left to the
+            // end-of-day figures it becomes an unexplained number nobody can account for.
+            if (!isVerified)
+                await NotifyOwnerOfCashDifferenceAsync(branchId, operatorId, register, countedTotal, difference, dto.MismatchReason);
+
             return MapToDto(countRecord);
         }
         catch
@@ -172,6 +181,65 @@ public class CashDeskService : ICashDeskService
 
         await _unitOfWork.CommitTransactionAsync();
         await _hubNotification.BroadcastCashRegisterUpdateAsync(branchId, register.Id);
+    }
+
+    /// <summary>
+    /// Tells the owner the drawer did not match, with both figures and the operator's reason.
+    ///
+    /// Short by more than it should be, or over — both are sent. Extra cash in a till is not good
+    /// news: it usually means a sale went unrecorded, which is the same hole in the takings seen
+    /// from the other side.
+    /// </summary>
+    private async Task NotifyOwnerOfCashDifferenceAsync(
+        Guid branchId, Guid operatorId, CashRegister register,
+        decimal countedTotal, decimal difference, string? reason)
+    {
+        try
+        {
+            var branch = await _unitOfWork.Repository<Branch>().Query()
+                .FirstOrDefaultAsync(b => b.Id == branchId);
+            var op = await _unitOfWork.Repository<Operator>().Query()
+                .FirstOrDefaultAsync(o => o.Id == operatorId);
+
+            var isShort = difference < 0;
+            var amount = Math.Abs(difference);
+
+            var rows = new List<(string Label, string Value)>
+            {
+                ("Branch", branch?.Name ?? "Unknown branch"),
+                ("Counted by", op?.FullName ?? op?.Username ?? "Unknown operator"),
+                ("", ""),
+                ("Should have been in the drawer", $"Rs {register.ExpectedDrawerCash:N2}"),
+                ("Actually counted", $"Rs {countedTotal:N2}"),
+                (isShort ? "Missing" : "Extra", $"Rs {amount:N2}"),
+                ("", ""),
+                ("Reason given", string.IsNullOrWhiteSpace(reason) ? "None given" : reason.Trim()),
+                ("Counted at", IndiaTime.Now.ToString("dd MMM yyyy, h:mm tt")),
+            };
+
+            var body = AdminEmailTemplate.Compose(
+                heading: isShort ? "Cash is missing from the drawer" : "There is extra cash in the drawer",
+                accent: isShort ? AdminEmailTemplate.Red : AdminEmailTemplate.Amber,
+                summary: isShort
+                    ? "The cash counted at the end of this shift is less than the system expected. " +
+                      "The operator's reason is below."
+                    : "The cash counted at the end of this shift is more than the system expected. " +
+                      "This usually means a sale was not put through the system.",
+                rows: rows,
+                headline: $"Rs {amount:N2} {(isShort ? "short" : "over")}",
+                footnote: "The shift was allowed to finish - the shop is not held up by this. " +
+                          "The figures above are recorded against that shift.");
+
+            await _notifier.NotifyAsync(
+                $"{(isShort ? "Cash short" : "Cash over")} by Rs {amount:N0} at {branch?.Name ?? "a branch"}",
+                body);
+        }
+        catch (Exception ex)
+        {
+            // Never allowed to undo a completed count. The money has been counted and recorded;
+            // failing the whole operation because the mail did would lose the count itself.
+            System.Diagnostics.Debug.WriteLine($"Could not send the cash difference email: {ex.Message}");
+        }
     }
 
     public async Task CancelVerificationAsync(Guid branchId, Guid operatorId, Guid shiftId, Guid cashRegisterId)
