@@ -1,4 +1,6 @@
-﻿namespace AppleEsportsErp.Application.DTOs.Auth;
+﻿using AppleEsportsErp.Application.DTOs.Shift;
+
+namespace AppleEsportsErp.Application.DTOs.Auth;
 
 /// <summary>SOP §6.2: Super Admin Login request</summary>
 public class AdminLoginDto
@@ -42,6 +44,15 @@ public class LoginResponseDto
     /// a power-cut email every morning somebody simply shut the shop without ending a shift.
     /// </summary>
     public bool NeedsGapExplanation { get; set; }
+
+    /// <summary>
+    /// Somebody else's shift, still open at this branch, that has to be closed and counted
+    /// before this operator can start. Null on a normal login.
+    ///
+    /// When this is set, <see cref="UserProfileDto.ShiftId"/> is null: the login succeeded but
+    /// no shift was opened, and none will be until the drawer has been counted.
+    /// </summary>
+    public PendingTakeoverDto? PendingTakeover { get; set; }
 }
 
 /// <summary>User profile — returned on login and GET /me</summary>

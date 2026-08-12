@@ -30,6 +30,17 @@ public class CashRegister
     public decimal? PhysicalCashCounted { get; set; }
     public decimal? CashDifference { get; set; }
     public string? MismatchReason { get; set; }
+
+    /// <summary>
+    /// Who physically counted the money in <see cref="PhysicalCashCounted"/>.
+    ///
+    /// Usually the same person as <see cref="OperatorId"/>, who opened the drawer. Not always:
+    /// when a shift is abandoned the next operator counts the drawer on the way in, and that
+    /// count is theirs. Null means nobody counted it - a drawer closed administratively or by
+    /// the automatic day close, where writing in a figure would invent a count that never
+    /// happened.
+    /// </summary>
+    public Guid? CountedByOperatorId { get; set; }
     public CashRegisterStatus Status { get; set; } = CashRegisterStatus.Open;
     public DateTimeOffset OpenedAt { get; set; }
     public DateTimeOffset? VerifiedAt { get; set; }

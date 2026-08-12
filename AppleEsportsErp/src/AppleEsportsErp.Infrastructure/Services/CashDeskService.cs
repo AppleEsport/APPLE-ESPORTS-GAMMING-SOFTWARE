@@ -118,6 +118,7 @@ public class CashDeskService : ICashDeskService
             // Update Register Status
             register.PhysicalCashCounted = countedTotal;
             register.CashDifference = difference;
+            register.CountedByOperatorId = operatorId;
             register.MismatchReason = dto.MismatchReason;
             register.Status = CashRegisterStatus.Verified;
             register.VerifiedAt = DateTimeOffset.UtcNow;

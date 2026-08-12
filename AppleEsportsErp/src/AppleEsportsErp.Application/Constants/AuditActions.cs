@@ -59,6 +59,9 @@ public static class AuditActions
     // System
     public const string ShiftStart = "shift_start";
     public const string ShiftEnd = "shift_end";
+
+    /// <summary>One operator closed a shift that was left open by another, and counted its drawer.</summary>
+    public const string ShiftTakeover = "shift_takeover";
     public const string EodFinalize = "eod_finalize";
     public const string ForceClose = "force_close";
     public const string SettingsChange = "settings_change";

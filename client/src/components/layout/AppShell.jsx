@@ -13,6 +13,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import ShiftStartModal from '../shift/ShiftStartModal';
 import ShiftEndModal from '../shift/ShiftEndModal';
 import ShiftGapModal from '../shift/ShiftGapModal';
+import ShiftTakeoverModal from '../shift/ShiftTakeoverModal';
 import GlobalFoodOrderListener from './GlobalFoodOrderListener';
 import GlobalNotificationListener from './GlobalNotificationListener';
 
@@ -29,7 +30,7 @@ export default function AppShell() {
     const saved = parseInt(localStorage.getItem(SIDEBAR_WIDTH_KEY), 10);
     return Number.isFinite(saved) ? saved : DEFAULT_SIDEBAR_WIDTH;
   });
-  const { user, isOperator, logout } = useAuth();
+  const { user, isOperator, logout, fetchCurrentUser } = useAuth();
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(sidebarCollapsed));
@@ -70,6 +71,14 @@ export default function AppShell() {
   // the question - a refresh would otherwise be the easiest way to avoid answering it.
   const [pendingGap, setPendingGap] = useState(() => {
     try { return JSON.parse(sessionStorage.getItem('pendingShiftGap') || 'null'); }
+    catch { return null; }
+  });
+
+  // Somebody else's shift, left open, that this operator has to close before they can start.
+  // Held the same way and for the same reason — except this one is also enforced by the server,
+  // which has issued no shift at all until the handover is finished.
+  const [pendingTakeover, setPendingTakeover] = useState(() => {
+    try { return JSON.parse(sessionStorage.getItem('pendingShiftTakeover') || 'null'); }
     catch { return null; }
   });
 
@@ -126,6 +135,16 @@ export default function AppShell() {
     setShowShiftEnd(false);
   }, []);
 
+  // The handover is done and the server has issued this operator a shift at last. The user in
+  // the browser was stored without one, so it is refetched rather than patched — the shift id is
+  // what every shift-scoped call is about to be made with, and guessing it here would be one
+  // more place for it to be wrong.
+  const handleTakeoverCompleted = useCallback(async () => {
+    sessionStorage.removeItem('pendingShiftTakeover');
+    setPendingTakeover(null);
+    await fetchCurrentUser();
+  }, [fetchCurrentUser]);
+
   return (
     <div className="min-h-screen bg-bg flex flex-col">
       {/* Fixed Topbar */}
@@ -146,12 +165,18 @@ export default function AppShell() {
           onWidthChange={setSidebarWidth}
         />
 
-        {/* Main content area */}
+        {/* Main content area.
+
+            Left empty while a handover is outstanding. This operator has no shift yet, so every
+            page behind the modal would fire calls the server is right to refuse, and they would
+            load into a dashboard nobody is meant to be looking at. */}
         <main className="flex-1 min-w-0 overflow-auto">
           <div className="p-3 sm:p-4 max-w-[1600px]">
-            <BranchRequired>
-              <Outlet />
-            </BranchRequired>
+            {!pendingTakeover && (
+              <BranchRequired>
+                <Outlet />
+              </BranchRequired>
+            )}
           </div>
         </main>
       </div>
@@ -168,8 +193,19 @@ export default function AppShell() {
         />
       )}
 
+      {/* ── Somebody else's shift, left open (blocks everything, cannot be dismissed) ──
+          After the gap question, which is about this operator's own last shift, and before the
+          shift-start checklist, which cannot run yet: there is no shift to start until the
+          drawer that is already on the counter has been counted and handed over. */}
+      {isOperator && !pendingGap?.shiftId && pendingTakeover && (
+        <ShiftTakeoverModal
+          pending={pendingTakeover}
+          onCompleted={handleTakeoverCompleted}
+        />
+      )}
+
       {/* ── Shift Start Modal (blocks operator until complete) ── */}
-      {isOperator && !pendingGap?.shiftId && showShiftStart && (
+      {isOperator && !pendingGap?.shiftId && !pendingTakeover && showShiftStart && (
         <ShiftStartModal onComplete={handleShiftStartComplete} />
       )}
 
@@ -181,9 +217,13 @@ export default function AppShell() {
         />
       )}
 
-      {/* Global Background Listeners */}
-      <GlobalFoodOrderListener />
-      <GlobalNotificationListener />
+      {/* Global Background Listeners — off until this operator actually has a shift. */}
+      {!pendingTakeover && (
+        <>
+          <GlobalFoodOrderListener />
+          <GlobalNotificationListener />
+        </>
+      )}
     </div>
   );
 }

@@ -41,10 +41,12 @@ public class AuthService : IAuthService
     private static readonly TimeSpan LockoutDuration = TimeSpan.FromMinutes(15);
 
     private readonly IAdminNotifier _adminNotifier;
+    private readonly IShiftTakeoverService _takeover;
 
-    public AuthService(AppDbContext db, JwtTokenService jwt, IAuditService audit, ILogger<AuthService> logger, ITokenRevocationService tokenRevocation, IEmailService emailService, IConfiguration configuration, IAppUrlProvider appUrls, IAdminNotifier adminNotifier)
+    public AuthService(AppDbContext db, JwtTokenService jwt, IAuditService audit, ILogger<AuthService> logger, ITokenRevocationService tokenRevocation, IEmailService emailService, IConfiguration configuration, IAppUrlProvider appUrls, IAdminNotifier adminNotifier, IShiftTakeoverService takeover)
     {
         _adminNotifier = adminNotifier;
+        _takeover = takeover;
         _db = db;
         _jwt = jwt;
         _audit = audit;
@@ -362,6 +364,13 @@ public class AuthService : IAuthService
             .OrderByDescending(s => s.LoginTime)
             .FirstOrDefaultAsync();
 
+        // 5b. Somebody else's shift, still open and untouched for long enough that nobody can be
+        //     at that counter. It has to be closed and its drawer counted before this operator
+        //     starts trading on top of it — otherwise a second shift opens alongside the first,
+        //     the abandoned one dangles with uncounted takings, and the money in the drawer
+        //     belongs to two shifts at once.
+        var pendingTakeover = await _takeover.GetPendingAsync(dto.BranchId, op.Id);
+
         var resumedShift = shift is not null;
         var gapSinceLastSeen = TimeSpan.Zero;
 
@@ -381,7 +390,7 @@ public class AuthService : IAuthService
                 "Operator {Operator} resumed shift {ShiftId}, which had been unattended for {Gap}.",
                 op.FullName, shift.Id, gapSinceLastSeen);
         }
-        else
+        else if (pendingTakeover is null)
         {
             shift = new Shift
             {
@@ -394,6 +403,17 @@ public class AuthService : IAuthService
             };
             _db.Shifts.Add(shift);
         }
+        // A takeover is waiting, so no shift is opened here. The login succeeds and the operator
+        // gets nothing to trade with: every shift-scoped endpoint refuses them until the drawer
+        // in front of them has been counted, and the takeover itself is what issues the shift.
+        //
+        // A blocking screen alone would not do. It can be refreshed past, closed, or simply
+        // never reach the browser, and the one thing that must not happen is a second shift
+        // trading over an uncounted drawer. Withholding the shift makes the count unavoidable
+        // rather than merely asked for.
+        //
+        // The exception is an operator resuming their OWN open shift, above: that shift already
+        // exists and cannot be taken back. There the blocking screen is all there is.
 
         // 6. Update operator status to active
         op.Status = OperatorStatus.Active;
@@ -411,9 +431,14 @@ public class AuthService : IAuthService
             [ClaimTypes.Role] = Roles.Operator,
             [ClaimTypes.Name] = op.FullName,
             ["branchId"] = op.BranchId.ToString(),
-            ["shiftId"] = shift.Id.ToString(),
             ["dashboardPermissions"] = op.DashboardPermissions ?? "{}",
         };
+
+        // No shift, no claim. The lookup that reads this claim falls back to the operator's
+        // active shift in the database, so the token stays correct once the takeover issues one
+        // and there is nothing to re-sign.
+        if (shift is not null)
+            claims["shiftId"] = shift.Id.ToString();
 
         var accessToken = _jwt.GenerateAccessToken(claims);
         var refreshToken = _jwt.GenerateRefreshToken(claims);
@@ -427,22 +452,36 @@ public class AuthService : IAuthService
             Action = AuditActions.Login,
             BranchId = dto.BranchId,
             BranchName = branch.Name,
-            Details = new { shiftId = shift.Id, loginTime = shift.LoginTime, deviceInfo = dto.DeviceInfo },
+            Details = new { shiftId = shift?.Id, loginTime = shift?.LoginTime, deviceInfo = dto.DeviceInfo },
         });
 
-        // 9. Shift start audit
-        await _audit.LogAsync(new AuditEntry
+        // 9. Shift start audit — only when one actually started. Logging a shift start for a
+        //    login that was held at the door would put a shift in the trail that never existed.
+        if (shift is not null)
         {
-            OperatorId = op.Id,
-            UserRole = Roles.Operator,
-            UserName = op.FullName,
-            Action = AuditActions.ShiftStart,
-            BranchId = dto.BranchId,
-            BranchName = branch.Name,
-            Details = new { shiftId = shift.Id },
-        });
+            await _audit.LogAsync(new AuditEntry
+            {
+                OperatorId = op.Id,
+                UserRole = Roles.Operator,
+                UserName = op.FullName,
+                Action = AuditActions.ShiftStart,
+                BranchId = dto.BranchId,
+                BranchName = branch.Name,
+                Details = new { shiftId = shift.Id },
+            });
+        }
 
-        _logger.LogInformation("Operator logged in: {Name} @ {Branch}", op.FullName, branch.Name);
+        if (pendingTakeover is not null)
+        {
+            _logger.LogWarning(
+                "Operator {Name} logged in at {Branch} to find {Other}'s shift still open after " +
+                "{Minutes} minutes. No shift started until they have counted the drawer.",
+                op.FullName, branch.Name, pendingTakeover.OutgoingOperatorName, pendingTakeover.UnattendedMinutes);
+        }
+        else
+        {
+            _logger.LogInformation("Operator logged in: {Name} @ {Branch}", op.FullName, branch.Name);
+        }
 
         return new LoginResponseDto
         {
@@ -454,13 +493,15 @@ public class AuthService : IAuthService
                 Role = Roles.Operator,
                 BranchId = op.BranchId,
                 BranchName = branch.Name,
-                ShiftId = shift.Id,
+                ShiftId = shift?.Id,
                 DashboardPermissions = op.DashboardPermissions != null
                     ? JsonSerializer.Deserialize<object>(op.DashboardPermissions)
                     : null,
                 Status = op.Status.ToString().ToLowerInvariant(),
                 LastLogin = op.LastLogin,
-                ActiveShift = new ActiveShiftDto { Id = shift.Id, LoginTime = shift.LoginTime },
+                ActiveShift = shift is null
+                    ? null
+                    : new ActiveShiftDto { Id = shift.Id, LoginTime = shift.LoginTime },
             },
             AccessToken = accessToken,
             RefreshToken = refreshToken,
@@ -469,6 +510,7 @@ public class AuthService : IAuthService
             // Ten minutes, so a browser refresh or a quick re-login is not treated as an
             // incident, while a genuine outage or an overnight shutdown always is.
             NeedsGapExplanation = resumedShift && gapSinceLastSeen >= TimeSpan.FromMinutes(10),
+            PendingTakeover = pendingTakeover,
         };
     }
 
@@ -1043,6 +1085,11 @@ public class AuthService : IAuthService
                     : null,
                 Status = op.Status.ToString().ToLowerInvariant(),
                 LastLogin = op.LastLogin,
+                // Also as ShiftId, which is what the dashboard reads. It was only ever set on
+                // the login response, so a page refresh left the browser holding a user with no
+                // shift on it — and after a takeover the shift is issued after login, so this is
+                // the only way the new one reaches the client.
+                ShiftId = activeShift?.Id,
                 ActiveShift = activeShift,
             };
         }

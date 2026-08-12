@@ -49,6 +49,38 @@ public class CashRegisterService : ICashRegisterService
         return MapToDto(register);
     }
 
+    /// <summary>
+    /// Which opening question the shift-start screen should ask.
+    ///
+    /// Reads exactly what <see cref="OpenRegisterAsync"/> will do rather than guessing at it, so
+    /// the figure shown to the operator is the figure the drawer opens with. Two rules that
+    /// disagree is how the branch ended up with two registers for one drawer in the first place.
+    /// </summary>
+    public async Task<RegisterOpeningDto> GetOpeningAsync(Guid branchId)
+    {
+        var today = IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow);
+
+        var lastToday = await _unitOfWork.Repository<CashRegister>().Query()
+            .Where(r => r.BranchId == branchId && r.BusinessDay == today)
+            .OrderByDescending(r => r.OpenedAt)
+            .FirstOrDefaultAsync();
+
+        if (lastToday is null)
+            return new RegisterOpeningDto { IsFirstOfDay = true };
+
+        if (lastToday.Status == CashRegisterStatus.Open)
+            return new RegisterOpeningDto
+            {
+                AlreadyOpen = true,
+                InheritedBalance = lastToday.ExpectedDrawerCash,
+            };
+
+        return new RegisterOpeningDto
+        {
+            InheritedBalance = lastToday.PhysicalCashCounted ?? lastToday.ExpectedDrawerCash,
+        };
+    }
+
     public async Task<CashRegisterDto> OpenRegisterAsync(Guid branchId, Guid operatorId, Guid shiftId, OpenRegisterDto dto)
     {
         var today = IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow);

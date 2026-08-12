@@ -63,7 +63,14 @@ api.interceptors.response.use(
     // elsewhere. Not a 401: refreshing the token would succeed and the retry would loop.
     // Operators have no Logout button any more, so without this they are stuck on a dead
     // screen with no way back to the login page.
-    if (error.response?.data?.code === 'SHIFT_CLOSED') {
+    //
+    // Except when a handover is waiting. Then having no shift is the intended state, not a dead
+    // session: the server withholds one until somebody else's abandoned drawer has been counted.
+    // Signing out here would clear the very question being asked and send the operator back to
+    // the login screen, where logging in would put them straight back into it - a loop with no
+    // way out and an uncounted drawer at the end of it.
+    if (error.response?.data?.code === 'SHIFT_CLOSED'
+        && !sessionStorage.getItem('pendingShiftTakeover')) {
       localStorage.removeItem('user');
       localStorage.removeItem('activeBranchId');
       sessionStorage.clear();

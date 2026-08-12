@@ -69,6 +69,54 @@ public class CashTransactionConfiguration : IEntityTypeConfiguration<CashTransac
     }
 }
 
+/// <summary>
+/// A shift handed over to somebody else, with the drawer counted at the moment of handover.
+///
+/// Restrict on every foreign key, like the rest of the cash tables. A handover is the only
+/// record that a shortfall was found and who found it; letting it disappear because an
+/// operator row was removed would take the evidence with it.
+/// </summary>
+public class ShiftHandoverConfiguration : IEntityTypeConfiguration<ShiftHandover>
+{
+    public void Configure(EntityTypeBuilder<ShiftHandover> builder)
+    {
+        builder.ToTable("shift_handovers");
+        builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).HasDefaultValueSql("uuid_generate_v4()");
+        builder.Property(e => e.ExpectedCash).HasPrecision(10, 2).HasDefaultValue(0m);
+        builder.Property(e => e.CountedCash).HasPrecision(10, 2).HasDefaultValue(0m);
+        builder.Property(e => e.CashDifference).HasPrecision(10, 2).HasDefaultValue(0m);
+        builder.Property(e => e.Reason).HasColumnType("text");
+        builder.Property(e => e.StockDifferences).HasColumnType("jsonb");
+        builder.Property(e => e.Status).HasMaxLength(20).HasDefaultValue(ShiftHandoverStatus.AwaitingReason)
+            .HasConversion(v => v.ToString().ToLowerInvariant().Replace("awaitingreason", "awaiting_reason"),
+                           v => Enum.Parse<ShiftHandoverStatus>(v.Replace("awaiting_reason", "AwaitingReason"), true));
+        builder.Property(e => e.CountedAt).HasDefaultValueSql("NOW()");
+        builder.Property(e => e.CreatedAt).HasDefaultValueSql("NOW()");
+
+        builder.HasIndex(e => e.BranchId).HasDatabaseName("idx_shift_handover_branch");
+        builder.HasIndex(e => e.OutgoingShiftId).HasDatabaseName("idx_shift_handover_outgoing");
+
+        // The one an unfinished handover is looked up by on the next login: who is still
+        // waiting to explain a difference, at which branch.
+        builder.HasIndex(e => new { e.CountedByOperatorId, e.Status })
+               .HasDatabaseName("idx_shift_handover_counted_by_status");
+
+        builder.HasOne<Branch>().WithMany()
+            .HasForeignKey(e => e.BranchId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne<Shift>().WithMany()
+            .HasForeignKey(e => e.OutgoingShiftId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne<Shift>().WithMany()
+            .HasForeignKey(e => e.IncomingShiftId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne<Operator>().WithMany()
+            .HasForeignKey(e => e.OutgoingOperatorId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne<Operator>().WithMany()
+            .HasForeignKey(e => e.CountedByOperatorId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne<CashRegister>().WithMany()
+            .HasForeignKey(e => e.CashRegisterId).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
 /// <summary>SOP §11.1: Denomination Counter — schema.sql L339-362</summary>
 public class DenominationCountConfiguration : IEntityTypeConfiguration<DenominationCount>
 {

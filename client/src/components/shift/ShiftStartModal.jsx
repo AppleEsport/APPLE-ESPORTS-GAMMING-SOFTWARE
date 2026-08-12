@@ -27,6 +27,13 @@ export default function ShiftStartModal({ onComplete }) {
   const [cashError, setCashError] = useState(null);
   const [cashAlreadyOpen, setCashAlreadyOpen] = useState(false);
 
+  // Which of the two opening questions this operator gets. A branch has one drawer and it runs
+  // through the trading day: only the first shift puts money in, and every shift after it
+  // inherits what the last one left. Asking a later shift for a float and then throwing the
+  // answer away — which is exactly what the server does, correctly — had operators typing a
+  // figure that quietly meant nothing.
+  const [opening, setOpening] = useState(null);
+
   // ── Inventory Step ──
   const [inventory, setInventory] = useState([]);
   const [stockUpdates, setStockUpdates] = useState({});
@@ -34,17 +41,24 @@ export default function ShiftStartModal({ onComplete }) {
   const [invFetching, setInvFetching] = useState(false);
   const [invError, setInvError] = useState(null);
 
-  // Check if cash register already open (operator refreshed page mid-shift)
+  // Ask the server what to ask: a float, or nothing at all because the drawer carries over.
   useEffect(() => {
     const checkRegister = async () => {
       try {
-        const { data } = await api.get('/cash/active');
-        if (data.data) {
+        const { data } = await api.get('/cash/opening');
+        const result = data.data;
+        setOpening(result);
+        if (result?.alreadyOpen) {
+          // A drawer is already open for today — a refresh mid-shift, or a re-login. Nothing to
+          // decide, so this step is done.
           setCashAlreadyOpen(true);
           setStep(STEPS.INVENTORY);
         }
       } catch {
-        // 404 = no active register, show cash step normally
+        // Unreachable for any reason: fall back to asking for a float. The server still refuses
+        // to open a second drawer for a day that already has one, so the worst case is a
+        // question that did not need asking, not a duplicate register.
+        setOpening({ isFirstOfDay: true, inheritedBalance: 0 });
       }
     };
     checkRegister();
@@ -75,9 +89,17 @@ export default function ShiftStartModal({ onComplete }) {
     fetchInventory();
   }, [step]);
 
+  // Until the server answers, neither question is asked. Defaulting to the float would flash the
+  // wrong one on screen and invite an operator to start typing into a box about to disappear.
+  const isFirstOfDay = opening?.isFirstOfDay === true;
+
   // ── Step 1: Open Cash Register ──
   const handleOpenCash = async () => {
-    const amount = Number(openingBalance);
+    // Inheriting, so there is no figure to validate: the amount is whatever the last shift left,
+    // and the server decides it. Sent back rather than sent as zero so that if the inheritance
+    // ever stopped happening server-side, the drawer would still open at the right figure
+    // instead of silently at nothing.
+    const amount = isFirstOfDay ? Number(openingBalance) : Number(opening?.inheritedBalance ?? 0);
     if (isNaN(amount) || amount < 0) {
       setCashError('Please enter a valid opening balance (0 or greater).');
       return;
@@ -207,8 +229,14 @@ export default function ShiftStartModal({ onComplete }) {
                     <Banknote className="w-6 h-6 text-neon-green" />
                   </div>
                   <div>
-                    <h3 className="font-bold text-text text-base">Open Cash Register</h3>
-                    <p className="text-text-3 text-xs">Count the physical cash in the drawer and enter the total</p>
+                    <h3 className="font-bold text-text text-base">
+                      {isFirstOfDay ? 'Open the drawer for today' : 'The drawer carries over'}
+                    </h3>
+                    <p className="text-text-3 text-xs">
+                      {isFirstOfDay
+                        ? 'Nobody has opened it yet today — put the float in and enter what you put in'
+                        : 'It has already been counted today, so there is nothing to enter'}
+                    </p>
                   </div>
                 </div>
 
@@ -219,31 +247,56 @@ export default function ShiftStartModal({ onComplete }) {
                   </div>
                 )}
 
-                <div className="space-y-2 mb-6">
-                  <label className="text-xs uppercase tracking-wider font-bold text-text-2">
-                    Opening Balance (Physical Cash in Drawer)
-                  </label>
-                  <div className="relative">
-                    <span className="absolute left-4 top-1/2 -translate-y-1/2 font-mono text-text-3 text-xl">₹</span>
-                    <input
-                      type="number"
-                      min="0"
-                      placeholder="0.00"
-                      value={openingBalance}
-                      onChange={e => setOpeningBalance(e.target.value)}
-                      onKeyDown={e => e.key === 'Enter' && handleOpenCash()}
-                      className="w-full bg-bg-3 border border-border text-text font-mono text-2xl rounded-xl py-4 pl-12 pr-4 focus:border-accent focus:ring-1 focus:ring-accent transition-all outline-none"
-                      autoFocus
-                    />
+                {opening === null ? (
+                  <div className="flex items-center justify-center py-10 gap-3 text-text-3">
+                    <Loader2 className="w-6 h-6 animate-spin" />
+                    <span className="text-sm">Checking the drawer...</span>
                   </div>
-                  <p className="text-[11px] text-text-3 italic">
-                    This will be your shift's opening drawer balance. The system will track all cash movements from this amount.
-                  </p>
-                </div>
+                ) : isFirstOfDay ? (
+                  <div className="space-y-2 mb-6">
+                    <label className="text-xs uppercase tracking-wider font-bold text-text-2">
+                      How much are you putting in the drawer?
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-4 top-1/2 -translate-y-1/2 font-mono text-text-3 text-xl">₹</span>
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder="0.00"
+                        value={openingBalance}
+                        onChange={e => setOpeningBalance(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && handleOpenCash()}
+                        className="w-full bg-bg-3 border border-border text-text font-mono text-2xl rounded-xl py-4 pl-12 pr-4 focus:border-accent focus:ring-1 focus:ring-accent transition-all outline-none"
+                        autoFocus
+                      />
+                    </div>
+                    <p className="text-[11px] text-text-3 italic">
+                      This is the float the day starts on. Every shift after yours inherits the
+                      drawer rather than being asked again — there is one drawer and it runs until
+                      6 tomorrow morning.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3 mb-6">
+                    <div className="p-4 bg-bg-3 rounded-xl border border-border">
+                      <div className="text-[10px] text-text-3 uppercase tracking-wider font-bold mb-2">
+                        What the last shift left in it
+                      </div>
+                      <div className="text-3xl font-mono font-bold text-neon-green">
+                        ₹{Number(opening.inheritedBalance || 0).toLocaleString('en-IN')}
+                      </div>
+                    </div>
+                    <p className="text-[11px] text-text-3 italic">
+                      This money has already been counted once today. You are not being asked to
+                      count it again or to type it in — you carry on from it, and you count the
+                      drawer when your own shift ends.
+                    </p>
+                  </div>
+                )}
 
                 <button
                   onClick={handleOpenCash}
-                  disabled={cashLoading || openingBalance === ''}
+                  disabled={cashLoading || opening === null || (isFirstOfDay && openingBalance === '')}
                   className="w-full py-3.5 rounded-xl text-sm font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all bg-accent/10 border border-accent text-accent hover:bg-accent/20 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {cashLoading ? (
@@ -251,7 +304,7 @@ export default function ShiftStartModal({ onComplete }) {
                   ) : (
                     <>
                       <Banknote className="w-4 h-4" />
-                      Open Shift Register
+                      {isFirstOfDay ? 'Open Shift Register' : 'Take the drawer over'}
                       <ArrowRight className="w-4 h-4" />
                     </>
                   )}

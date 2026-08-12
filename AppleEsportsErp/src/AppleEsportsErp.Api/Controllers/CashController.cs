@@ -32,6 +32,21 @@ public class CashController : ControllerBase
         return Ok(ApiResponse<CashRegisterDto>.Ok(result));
     }
 
+    /// <summary>
+    /// What to ask before opening the drawer: a float from the first shift of the day, nothing
+    /// at all from every shift after it.
+    ///
+    /// Not shift-scoped, deliberately. The drawer belongs to the branch and the trading day, not
+    /// to whoever is standing at it, and an operator whose shift has just been issued by a
+    /// takeover needs this answer straight away.
+    /// </summary>
+    [HttpGet("opening")]
+    public async Task<IActionResult> GetOpening()
+    {
+        var result = await _cashRegisterService.GetOpeningAsync(GetBranchId());
+        return Ok(ApiResponse<RegisterOpeningDto>.Ok(result));
+    }
+
     [HttpPost("open")]
     public async Task<IActionResult> OpenRegister([FromBody] OpenRegisterDto dto)
     {

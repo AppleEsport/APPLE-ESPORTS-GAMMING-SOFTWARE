@@ -24,6 +24,21 @@ public class Shift
     /// </summary>
     public bool ClosedTradingDay { get; set; }
 
+    /// <summary>
+    /// The operator who closed this shift, when it was not its own.
+    ///
+    /// Null on every normal close - the operator ended their own shift and there is nothing to
+    /// say. Set when somebody else closed it: the next person in, who found it abandoned,
+    /// counted the drawer and shut it down.
+    ///
+    /// Kept apart from <see cref="OperatorId"/> deliberately. A shift closed by somebody else
+    /// still records takings against the operator who took them, and a shortfall found at that
+    /// count still belongs to the shift it was found in - but the count itself was made by a
+    /// different person, and reading one as the other puts missing money against the name of
+    /// somebody who was not there.
+    /// </summary>
+    public Guid? ClosedByOperatorId { get; set; }
+
     public string? Summary { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 

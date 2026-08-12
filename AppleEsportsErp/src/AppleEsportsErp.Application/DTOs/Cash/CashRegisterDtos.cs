@@ -40,6 +40,26 @@ public class CashTransactionDto
     public DateTimeOffset CreatedAt { get; set; }
 }
 
+/// <summary>What the shift-start screen needs to know before it asks anything about cash.</summary>
+public class RegisterOpeningDto
+{
+    /// <summary>
+    /// True when nothing has opened a drawer yet today, so this operator is putting the float
+    /// in and is the only person who will be asked for a figure.
+    /// </summary>
+    public bool IsFirstOfDay { get; set; }
+
+    /// <summary>
+    /// What the drawer will open with when it is not the first of the day: what the last shift
+    /// counted, or failing that what the system expected them to have. Nobody is asked to
+    /// confirm or retype it — it is money that has already been counted once.
+    /// </summary>
+    public decimal InheritedBalance { get; set; }
+
+    /// <summary>True when a drawer is already open and this operator simply carries on with it.</summary>
+    public bool AlreadyOpen { get; set; }
+}
+
 public class OpenRegisterDto
 {
     [Required]

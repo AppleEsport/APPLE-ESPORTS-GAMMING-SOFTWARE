@@ -73,7 +73,19 @@ export function AuthProvider({ children }) {
     try {
       setError(null);
       const response = await api.post('/auth/operator/login', { branchId, username, password });
-      const { user: userData, resumedShift, unattendedMinutes, needsGapExplanation } = response.data.data;
+      const {
+        user: userData, resumedShift, unattendedMinutes, needsGapExplanation, pendingTakeover,
+      } = response.data.data;
+
+      // Somebody else's shift was left open here. The server has deliberately not issued a shift
+      // for this login, so there is nothing to trade with until the drawer in front of them has
+      // been counted. Held in sessionStorage for the same reason as the gap question: a refresh
+      // must not lose it.
+      if (pendingTakeover) {
+        sessionStorage.setItem('pendingShiftTakeover', JSON.stringify(pendingTakeover));
+      } else {
+        sessionStorage.removeItem('pendingShiftTakeover');
+      }
 
       // A resumed shift with a hole in it has to be explained before the operator can work.
       // Kept in sessionStorage rather than state so a page refresh cannot lose the question -
@@ -89,7 +101,7 @@ export function AuthProvider({ children }) {
 
       localStorage.setItem('user', JSON.stringify(userData));
       setUser(userData);
-      return { ...userData, resumedShift, unattendedMinutes, needsGapExplanation };
+      return { ...userData, resumedShift, unattendedMinutes, needsGapExplanation, pendingTakeover };
     } catch (err) {
       const message = err.response?.data?.error || 'Login failed';
       setError(message);
@@ -149,6 +161,7 @@ export function AuthProvider({ children }) {
     } finally {
       localStorage.removeItem('user');
       localStorage.removeItem('activeBranchId');
+      sessionStorage.removeItem('pendingShiftTakeover');
       setUser(null);
       setAdminSwitchUser(null);
       setError(null);
@@ -180,6 +193,7 @@ export function AuthProvider({ children }) {
     } finally {
       localStorage.removeItem('user');
       localStorage.removeItem('activeBranchId');
+      sessionStorage.removeItem('pendingShiftTakeover');
       setUser(null);
       setAdminSwitchUser(null);
     }

@@ -316,6 +316,7 @@ builder.Services.AddScoped<ICreditService, CreditService>();
 builder.Services.AddScoped<IFoodOrderService, FoodOrderService>();
 builder.Services.AddScoped<ICashRegisterService, CashRegisterService>();
 builder.Services.AddScoped<ICashDeskService, CashDeskService>();
+builder.Services.AddScoped<IShiftTakeoverService, ShiftTakeoverService>();
 builder.Services.AddScoped<IEodService, EodService>();
 builder.Services.AddScoped<IPcManagementService, PcManagementService>();
 builder.Services.AddScoped<IDashboardService, DashboardService>();

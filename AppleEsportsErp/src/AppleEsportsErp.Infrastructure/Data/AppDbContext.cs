@@ -29,6 +29,7 @@ public class AppDbContext : DbContext
     public DbSet<CashRegister> CashRegisters => Set<CashRegister>();
     public DbSet<CashTransaction> CashTransactions => Set<CashTransaction>();
     public DbSet<DenominationCount> DenominationCounts => Set<DenominationCount>();
+    public DbSet<ShiftHandover> ShiftHandovers => Set<ShiftHandover>();
     public DbSet<InventoryItem> InventoryItems => Set<InventoryItem>();
     public DbSet<InventoryLog> InventoryLogs => Set<InventoryLog>();
     public DbSet<FoodOrder> FoodOrders => Set<FoodOrder>();
