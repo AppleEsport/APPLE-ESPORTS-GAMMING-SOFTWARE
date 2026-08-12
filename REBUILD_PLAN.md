@@ -176,9 +176,20 @@ count with an uncounted drawer at the end of it.
   collect the link.
 
   **Left as-is deliberately while testing**, on the owner's decision — no real operators are
-  using the system and nothing has been delivered (Gmail is deferring, not accepting). It must
-  not cross the freeze line: real addresses in, or reset mail refused to any address nobody has
-  confirmed. This is a data fix plus one guard, not a redesign.
+  using the system and nothing has been delivered (Gmail is deferring, not accepting).
+
+  **The addresses themselves are data, and the freeze does not trap them.** They are editable in
+  Settings (`PUT /api/operators/{id}` writes `Email`), and the seeder cannot undo the edit: it
+  returns early if Adajan or Citylight already exist, so it has run once on this database and
+  will never run again. Fixing them is five minutes in the UI, whenever.
+
+  What *is* code, and therefore does belong on a list:
+
+  - **The seeder still hardcodes the fake domain**, and the owner's personal Gmail as the super
+    admin. That only bites a **fresh** install — a new server, or a branch EXE in Phase 2 — where
+    the seeder does run. Fix it before anything is installed anywhere new.
+  - **Optional guard:** refuse to send a password-reset link to an address nobody has confirmed.
+    Worth having whatever the addresses say, because the lockout path emails one automatically.
 
 ### How money bugs were actually found
 
