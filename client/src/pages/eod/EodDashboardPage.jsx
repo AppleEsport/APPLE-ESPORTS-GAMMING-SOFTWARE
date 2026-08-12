@@ -196,13 +196,28 @@ export default function EodDashboardPage() {
       title, subtitle,
       heading: 'Cash Lifecycle Summary',
       head: ['Metric', 'Amount'],
+      // Same rows as the screen, and for the same reasons. A printed report is the copy that
+      // gets kept and argued over later, so an uncounted drawer must not print as Rs 0 and a
+      // handover shortfall must not vanish from the column it explains.
       body: [
         ['Opening Balance Total', `Rs ${report.cash.totalOpeningBalance}`],
         ['Cash Sales + Wallet TopUps', `Rs ${report.cash.totalCashSales}`],
         ['Petty Expenses', `-Rs ${report.cash.totalPettyExpenses}`],
+        ...(Number(report.cash.differencesFoundEarlier ?? 0) !== 0
+          ? [[
+              Number(report.cash.differencesFoundEarlier) < 0
+                ? 'Missing at an earlier handover'
+                : 'Extra at an earlier handover',
+              `Rs ${Math.abs(Number(report.cash.differencesFoundEarlier)).toFixed(2)}`,
+            ]]
+          : []),
         ['Expected Drawer Total', `Rs ${report.cash.expectedCashInDrawer}`],
-        ['Physically Counted', `Rs ${report.cash.actualPhysicalCashCounted}`],
-        ['Total Difference', `Rs ${report.cash.totalDiscrepancy}`],
+        ['Physically Counted', report.cash.actualPhysicalCashCounted == null
+          ? 'Not counted yet'
+          : `Rs ${report.cash.actualPhysicalCashCounted}`],
+        ['Total Difference', report.cash.totalDiscrepancy == null
+          ? 'Unknown until the drawer is counted'
+          : `Rs ${report.cash.totalDiscrepancy}`],
       ],
     });
 

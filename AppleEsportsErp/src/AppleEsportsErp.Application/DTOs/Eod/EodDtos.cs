@@ -44,8 +44,35 @@ public class CashSummaryDto
     public decimal TotalPettyExpenses { get; set; }
     public decimal TotalOwnerWithdrawals { get; set; }
     public decimal ExpectedCashInDrawer { get; set; }
-    public decimal ActualPhysicalCashCounted { get; set; }
-    public decimal TotalDiscrepancy { get; set; }
+
+    /// <summary>
+    /// What the drawer currently on the counter was counted at. **Null when nobody has counted
+    /// it yet**, which is the normal state until a shift ends.
+    ///
+    /// Nullable rather than zero on purpose. Zero reads as "the drawer is empty" — the whole
+    /// day's takings shown as gone — when what is true is "nobody has looked".
+    /// </summary>
+    public decimal? ActualPhysicalCashCounted { get; set; }
+
+    /// <summary>
+    /// <see cref="ActualPhysicalCashCounted"/> minus <see cref="ExpectedCashInDrawer"/>, so the
+    /// three figures always agree with each other. Null while the drawer is uncounted, because
+    /// the difference is then unknown, and "no difference" on an uncounted drawer is the most
+    /// dangerous thing this screen could say.
+    /// </summary>
+    public decimal? TotalDiscrepancy { get; set; }
+
+    /// <summary>
+    /// Differences already found and closed earlier in the same trading day — a shift handover
+    /// where the drawer was counted short, or over.
+    ///
+    /// Kept as its own figure rather than folded into <see cref="TotalDiscrepancy"/>. That money
+    /// went missing on an earlier shift, and the drawer in use now started from what was actually
+    /// counted, so it is not itself short by this amount. Without the line the column does not
+    /// add up: opening plus takings comes to more than the drawer is expected to hold, with
+    /// nothing on screen explaining the gap.
+    /// </summary>
+    public decimal DifferencesFoundEarlier { get; set; }
 }
 
 public class PaymentMethodSummaryDto

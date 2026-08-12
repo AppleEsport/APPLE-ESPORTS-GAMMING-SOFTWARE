@@ -55,6 +55,13 @@ export default function EodPaymentSummaryBar({ report, targetDate, height, onHei
   const creditsPending = report.creditLogs?.filter(c => c.status?.toLowerCase() === 'pending').reduce((acc, c) => acc + c.creditAmount, 0) || 0;
   const overallEndTotal = report.paymentMethods.totalCash + report.paymentMethods.totalOnline + report.paymentMethods.totalWalletDeductions + report.paymentMethods.totalWalletTopUps;
 
+  // The drawer's count and its difference are null until somebody counts it, and null is not
+  // zero here - see CashSummaryDto. Kept as null rather than coerced, so the rows below can say
+  // "not counted yet" instead of printing an empty drawer.
+  const counted = report.cash.actualPhysicalCashCounted;
+  const discrepancy = report.cash.totalDiscrepancy;
+  const earlierDifference = Number(report.cash.differencesFoundEarlier ?? 0);
+
   return (
     <div
       style={{ height }}
@@ -186,19 +193,52 @@ export default function EodPaymentSummaryBar({ report, targetDate, height, onHei
                 <span className="text-text-2">Petty Expenses</span>
                 <span className="font-mono text-neon-red">- ₹{report.cash.totalPettyExpenses}</span>
               </div>
+
+              {/* Only when there was one. A handover that balanced has nothing to say here, and a
+                  row reading "- ₹0" invites the reader to look for a problem that is not there.
+
+                  It is shown BEFORE the expected total because that is where it belongs in the
+                  arithmetic: opening plus takings, less what was spent and less what went astray
+                  earlier, is what the drawer should hold now. Leaving it out is what made the
+                  column fail to add up. */}
+              {earlierDifference !== 0 && (
+                <div className="flex justify-between items-center">
+                  <span className="text-text-2">
+                    {earlierDifference < 0 ? 'Missing at an earlier handover' : 'Extra at an earlier handover'}
+                  </span>
+                  <span className={`font-mono ${earlierDifference < 0 ? 'text-neon-red' : 'text-neon-orange'}`}>
+                    {earlierDifference < 0 ? '- ' : '+ '}₹{Math.abs(earlierDifference).toFixed(2)}
+                  </span>
+                </div>
+              )}
+
               <div className="flex justify-between items-center border-t border-border pt-1.5">
                 <span className="font-bold text-text">Expected Drawer Total</span>
                 <span className="font-mono font-bold text-accent">₹{report.cash.expectedCashInDrawer}</span>
               </div>
+
+              {/* "Not counted yet" rather than ₹0. Zero reads as an empty drawer - the whole day's
+                  takings gone - when the truth is that nobody has looked in it yet. */}
               <div className="flex justify-between items-center">
                 <span className="font-bold text-text">Physically Counted</span>
-                <span className="font-mono font-bold text-text">₹{report.cash.actualPhysicalCashCounted}</span>
+                {counted === null || counted === undefined ? (
+                  <span className="text-text-3 text-[11px] italic">not counted yet</span>
+                ) : (
+                  <span className="font-mono font-bold text-text">₹{counted}</span>
+                )}
               </div>
+
               <div className="flex justify-between items-center bg-bg-3 px-3 py-1.5 rounded-lg border border-border mt-1">
-                <span className="font-bold text-text uppercase tracking-widest text-[10px]">Total Difference</span>
-                <span className={`font-mono font-bold ${report.cash.totalDiscrepancy === 0 ? 'text-neon-blue' : 'text-neon-red'}`}>
-                  ₹{report.cash.totalDiscrepancy}
+                <span className="font-bold text-text uppercase tracking-widest text-[10px]">
+                  {counted === null || counted === undefined ? 'Difference' : 'Total Difference'}
                 </span>
+                {discrepancy === null || discrepancy === undefined ? (
+                  <span className="text-text-3 text-[11px] italic">unknown until it is counted</span>
+                ) : (
+                  <span className={`font-mono font-bold ${Number(discrepancy) === 0 ? 'text-neon-blue' : 'text-neon-red'}`}>
+                    ₹{discrepancy}
+                  </span>
+                )}
               </div>
             </div>
 

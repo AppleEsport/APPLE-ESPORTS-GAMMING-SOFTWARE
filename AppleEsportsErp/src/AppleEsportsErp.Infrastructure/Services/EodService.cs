@@ -180,23 +180,38 @@ public class EodService : IEodService
         // like the operator is short by exactly the amount they correctly sent up.
         report.Cash.TotalOwnerWithdrawals = allCashTxs.Where(t => t.TransactionType == "withdrawal").Sum(t => Math.Abs(t.CashAmount));
 
-        // The drawer as it stands. ExpectedDrawerCash is maintained on the register by every
-        // cash movement as it happens, so the latest register carries the running figure -
-        // no need to re-derive it, and re-deriving it is where double counting creeps in.
+        // The drawer as it stands, what it was counted at, and the difference between the two -
+        // all three read off the SAME register.
+        //
+        // That is the fix, and it matters because a trading day can now hold several drawers in
+        // sequence: a shift handover closes one with a count and opens the next from what was
+        // counted. This used to take "expected" from the drawer in use and "counted" from
+        // whichever earlier drawer had last been counted, which printed three figures that could
+        // not all be true at once - expected Rs 5,000, counted Rs 5,000, short Rs 240 - and left
+        // an operator no way to tell which of them to believe.
+        //
+        // ExpectedDrawerCash is maintained on the register by every cash movement as it happens,
+        // so the latest register carries the running figure. Re-deriving it is where double
+        // counting creeps in.
         report.Cash.ExpectedCashInDrawer = lastRegister?.ExpectedDrawerCash ?? 0m;
+        report.Cash.ActualPhysicalCashCounted = lastRegister?.PhysicalCashCounted;
+        report.Cash.TotalDiscrepancy = lastRegister?.PhysicalCashCounted is null
+            ? null
+            : lastRegister.PhysicalCashCounted - lastRegister.ExpectedDrawerCash;
 
-        // What was actually counted, from the last shift that counted it. A shift still open
-        // has counted nothing, and reading that as zero cash would show the whole day's
-        // takings as missing.
-        var lastCounted = registers.LastOrDefault(r => r.PhysicalCashCounted.HasValue);
-        report.Cash.ActualPhysicalCashCounted = lastCounted?.PhysicalCashCounted ?? 0m;
-
-        // Only meaningful once somebody has counted. Before that the difference is unknown,
-        // not zero - and "zero difference" on an uncounted drawer is the most dangerous
-        // possible thing for this screen to say.
-        report.Cash.TotalDiscrepancy = lastCounted is null
-            ? 0m
-            : (lastCounted.PhysicalCashCounted ?? 0m) - lastCounted.ExpectedDrawerCash;
+        // Money that went missing, or turned up spare, on a drawer already closed today - a
+        // handover counted short. Reported separately from the figure above because it belongs to
+        // an earlier shift: the drawer in use started from what was physically counted, so it is
+        // not short by this as well, and adding the two together would charge the same shortfall
+        // to two shifts.
+        //
+        // It also closes the column's arithmetic. Opening plus takings less expenses is what the
+        // drawer would hold had nothing gone astray; subtract what did, and the expected figure
+        // beneath it follows. Without this line the two simply disagree by the missing amount and
+        // the screen offers no account of why.
+        report.Cash.DifferencesFoundEarlier = registers
+            .Where(r => r.Id != lastRegister?.Id && r.CashDifference.HasValue)
+            .Sum(r => r.CashDifference!.Value);
 
         // Shifts Summary
         report.Shifts.TotalShifts = registers.Count;
