@@ -124,9 +124,26 @@ Restoring the rolled-back work is done. So is everything the owner raised while 
 | The trading day closes itself when nobody ticks "last shift" | closed 11 Aug on live data, mail arrived |
 | B takes over A's abandoned shift — blind count, drawer and stock, closed by somebody else | 95 checks against a real database, real login, real drawer |
 
-### The one thing left
+### Phase 1 is closed
 
-**Verify, tag, freeze.** Ends Phase 1.
+**Frozen 12 August 2026** at `f4dc789`, tagged **`phase1-server-frozen`**. That tag is the commit
+the branch EXE is built against.
+
+From here the server changes only through a deliberate, tested, versioned release. Not because it
+is finished, but because Phase 2 builds a branch database from these same migrations, and a schema
+that moves while the EXE is built against it is close to what went wrong last time.
+
+The freeze is a discipline, not a lock. Everything on the open list below is still fixable — it
+just gets a version number.
+
+**Verified before freezing:** the real services driven against a real database with the real
+migrations, 123 checks; plus a walkthrough on the live server — a shift left open four hours, taken
+over, counted ₹240 short, the shortfall recorded against the operator whose shift it was, and the
+incoming operator's drawer opened on the money actually in it.
+
+**One check still outstanding:** nobody has looked at the End of Day screen since the cash panel
+was fixed. The logic is proven and the field names line up, but the rendered screen has not been
+seen, and the new handover line only appears on a day that has had a handover.
 
 ### B takes over A's abandoned shift — built 12 August 2026
 
