@@ -27,6 +27,12 @@ public interface IAuthService
     /// </summary>
     Task LogoutAsync(Guid userId, string role, Guid? shiftId, bool closesTradingDay = false);
 
+    /// <summary>
+    /// Closes any trading day that has ended and that nobody closed, sends its report, and
+    /// returns how many days were closed. Safe to call repeatedly.
+    /// </summary>
+    Task<int> CloseFinishedTradingDaysAsync(CancellationToken cancellationToken = default);
+
     /// <summary>SOP §11: Force Logout — Super Admin forcibly logs out an operator</summary>
     Task<ForceLogoutResponseDto> ForceLogoutAsync(Guid adminId, Guid operatorId);
 

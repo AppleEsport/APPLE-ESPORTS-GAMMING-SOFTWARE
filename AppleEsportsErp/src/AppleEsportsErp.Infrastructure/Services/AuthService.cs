@@ -587,7 +587,118 @@ public class AuthService : IAuthService
     ///
     /// Never throws. A summary that cannot be emailed must not stop an operator going home.
     /// </summary>
-    private async Task SendDaySummaryAsync(Shift shift)
+    /// <summary>
+    /// Closes any trading day that is over and that nobody closed, and sends its report.
+    ///
+    /// The end-of-day report used to depend entirely on an operator ticking "last shift of the
+    /// day". Ticking it wrongly costs one confusing email. Forgetting it costs the whole day's
+    /// report AND leaves the register open past 06:00 for good — which is where the thirty stale
+    /// registers already cleared off the live system came from. Forgetting is much the likelier,
+    /// because it takes doing nothing.
+    ///
+    /// So the day no longer depends on being remembered. The tick still works, and closes the day
+    /// early when an operator uses it; this is what happens when nobody does.
+    ///
+    /// Safe to call repeatedly: it only acts on registers still open from a day that has ended,
+    /// and closing them is what stops it acting again.
+    /// </summary>
+    public async Task<int> CloseFinishedTradingDaysAsync(CancellationToken cancellationToken = default)
+    {
+        var today = IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow);
+
+        // Strictly earlier than today's trading day, so a day still being traded is never touched.
+        // At 05:59 the previous day is still open for business and must be left alone.
+        var stale = await _db.CashRegisters
+            .Where(r => r.BusinessDay < today && r.Status != CashRegisterStatus.Closed)
+            .ToListAsync(cancellationToken);
+
+        if (stale.Count == 0) return 0;
+
+        var closedDays = 0;
+
+        foreach (var branchDay in stale.GroupBy(r => new { r.BranchId, r.BusinessDay }))
+        {
+            try
+            {
+                foreach (var register in branchDay)
+                {
+                    register.Status = CashRegisterStatus.Closed;
+                    register.ClosedAt = DateTimeOffset.UtcNow;
+
+                    // Left uncounted on purpose where nobody counted it. Writing a figure in would
+                    // invent a count that never happened; an empty one keeps the money visibly
+                    // unreconciled, which is the truth and the thing worth following up.
+                    if (register.PhysicalCashCounted == null)
+                    {
+                        register.MismatchReason = string.IsNullOrWhiteSpace(register.MismatchReason)
+                            ? "Nobody counted this drawer or marked the last shift. The day was closed automatically once it was over."
+                            : register.MismatchReason;
+                    }
+                }
+
+                // Any shift still running from that finished day ends with it. Its end is the last
+                // moment of ITS OWN trading day, not now - stamping it with the current time would
+                // push the shift into today and file the whole report under the wrong date.
+                var dayShifts = await _db.Shifts
+                    .Where(s => s.BranchId == branchDay.Key.BranchId && s.Status == ShiftStatus.Active)
+                    .ToListAsync(cancellationToken);
+
+                Shift? closingShift = null;
+
+                foreach (var shift in dayShifts)
+                {
+                    var (_, shiftDayEnd) = IndiaTime.BusinessDayRangeFor(shift.LoginTime);
+                    if (IndiaTime.BusinessDayOf(shift.LoginTime) != branchDay.Key.BusinessDay) continue;
+
+                    shift.LogoutTime = shiftDayEnd.AddSeconds(-1);
+                    shift.Status = ShiftStatus.Completed;
+                    shift.ClosedTradingDay = true;
+                    closingShift = shift;
+
+                    var op = await _db.Operators.FindAsync(new object[] { shift.OperatorId }, cancellationToken);
+                    if (op != null && op.Status == OperatorStatus.Active)
+                    {
+                        op.Status = OperatorStatus.LoggedOut;
+                        op.IsOnline = false;
+                    }
+                }
+
+                // No shift was left open — the operators logged out properly and simply nobody
+                // ticked the box. The day still needs its report, so it is attributed to the last
+                // shift that ran on it.
+                closingShift ??= await _db.Shifts
+                    .Where(s => s.BranchId == branchDay.Key.BranchId && s.LogoutTime != null)
+                    .OrderByDescending(s => s.LogoutTime)
+                    .FirstOrDefaultAsync(cancellationToken);
+
+                await _db.SaveChangesAsync(cancellationToken);
+
+                _logger.LogWarning(
+                    "Closed trading day {Day} for branch {Branch} automatically: nobody marked the last shift. " +
+                    "{Registers} register(s) closed, holding Rs {Amount} between them.",
+                    branchDay.Key.BusinessDay, branchDay.Key.BranchId,
+                    branchDay.Count(), branchDay.Sum(r => r.ExpectedDrawerCash));
+
+                if (closingShift != null &&
+                    IndiaTime.BusinessDayOf(closingShift.LogoutTime ?? DateTimeOffset.UtcNow) == branchDay.Key.BusinessDay)
+                {
+                    await SendDaySummaryAsync(closingShift, closedAutomatically: true);
+                }
+
+                closedDays++;
+            }
+            catch (Exception ex)
+            {
+                // One branch failing must not leave the other three un-closed.
+                _logger.LogError(ex, "Could not close trading day {Day} for branch {Branch}.",
+                    branchDay.Key.BusinessDay, branchDay.Key.BranchId);
+            }
+        }
+
+        return closedDays;
+    }
+
+    private async Task SendDaySummaryAsync(Shift shift, bool closedAutomatically = false)
     {
         try
         {
@@ -643,10 +754,18 @@ public class AuthService : IAuthService
                 AdminEmailTemplate.Compose(
                     $"How {branchName} did today",
                     AdminEmailTemplate.Green,
-                    $"The shop has closed for the day. {branchName} took Rs {total:0.00} from {sessions} customer{(sessions == 1 ? "" : "s")} on {businessDay:dd MMM yyyy}.",
+                    $"The shop has closed for the day. {branchName} took Rs {total:0.00} from {sessions} customer{(sessions == 1 ? "" : "s")} on {businessDay:dd MMM yyyy}."
+                        + (closedAutomatically
+                            ? " Nobody marked the last shift of the day, so the system closed the day itself at 6 in the morning."
+                            : string.Empty),
                     rows,
                     headline: $"Rs {total:0.00}",
-                    footnote: "The day runs from 6 in the morning to 6 the next morning, so late-night play counts towards the day it started on. You are getting this because the operator ticked \"last shift of the day\" when they finished."));
+                    footnote: closedAutomatically
+                        ? "The day runs from 6 in the morning to 6 the next morning, so late-night play counts towards "
+                          + "the day it started on. No operator ticked \"last shift of the day\", so this was put "
+                          + "together automatically once the day was over. The figures are complete; the only thing "
+                          + "missing is a counted drawer, if nobody counted it before leaving."
+                        : "The day runs from 6 in the morning to 6 the next morning, so late-night play counts towards the day it started on. You are getting this because the operator ticked \"last shift of the day\" when they finished."));
         }
         catch (Exception ex)
         {

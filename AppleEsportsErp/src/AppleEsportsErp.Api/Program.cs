@@ -326,6 +326,10 @@ builder.Services.AddScoped<ISessionActivityService, SessionActivityService>();
 builder.Services.AddScoped<IMaintenanceLogService, MaintenanceLogService>();
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.ReservationBackgroundService>();
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.OpenSessionMonitorService>();
+
+// Closes a trading day that has ended when nobody ticked "last shift of the day", so the report
+// no longer depends on being remembered at 3am.
+builder.Services.AddHostedService<AppleEsportsErp.Api.Services.TradingDayCloserService>();
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.FixedDurationSessionMonitorService>();
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.DeferredBillingMonitorService>();
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.SessionActivityCleanupService>();
