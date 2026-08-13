@@ -343,6 +343,11 @@ builder.Services.AddHostedService<AppleEsportsErp.Api.Services.SyncCourierServic
 // whether any of them took it. Does nothing at Head Office, which has nobody to report to.
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.BranchVersionReporterService>();
 
+// Sends Head Office a picture of this shop every thirty seconds - who is on duty, which PCs are
+// busy, what the drawer holds, how far behind sync is. State rather than history, so a missed
+// beat costs nothing and there is no queue behind it. Does nothing at Head Office.
+builder.Services.AddHostedService<AppleEsportsErp.Api.Services.BranchHeartbeatService>();
+
 // Lets a fresh branch take Head Office's identifiers instead of inventing its own, which is
 // what makes anything it later reports recognisable at Head Office.
 builder.Services.AddHttpClient();

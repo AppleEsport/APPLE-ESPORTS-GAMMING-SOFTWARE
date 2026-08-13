@@ -141,3 +141,27 @@ public class DenominationCountConfiguration : IEntityTypeConfiguration<Denominat
             .HasForeignKey(e => e.OperatorId).OnDelete(DeleteBehavior.Restrict);
     }
 }
+
+/// <summary>
+/// One row per branch, replaced in place rather than appended to. This is the branch as it is
+/// now, not a record of how it got here — that is what the sync inbox is for.
+/// </summary>
+public class BranchHeartbeatConfiguration : IEntityTypeConfiguration<BranchHeartbeat>
+{
+    public void Configure(EntityTypeBuilder<BranchHeartbeat> builder)
+    {
+        builder.ToTable("branch_heartbeats");
+
+        // The branch IS the key. A branch cannot have two current states, and making this the
+        // primary key means the database enforces that rather than the code remembering to.
+        builder.HasKey(e => e.BranchId);
+
+        builder.Property(e => e.Version).HasMaxLength(20);
+        builder.Property(e => e.OperatorsOnDuty).HasColumnType("jsonb");
+        builder.Property(e => e.DrawerExpected).HasPrecision(10, 2);
+        builder.Property(e => e.TakingsToday).HasPrecision(12, 2).HasDefaultValue(0m);
+
+        builder.HasOne<Branch>().WithMany()
+            .HasForeignKey(e => e.BranchId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
