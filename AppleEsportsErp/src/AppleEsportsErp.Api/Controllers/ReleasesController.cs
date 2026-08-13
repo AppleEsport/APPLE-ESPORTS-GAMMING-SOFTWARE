@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Common;
 using AppleEsportsErp.Domain.Entities;
+using AppleEsportsErp.Infrastructure.Configuration;
 using AppleEsportsErp.Infrastructure.Data;
 
 namespace AppleEsportsErp.Api.Controllers;
@@ -29,14 +30,37 @@ public class ReleasesController : ControllerBase
 {
     private readonly AppDbContext _db;
     private readonly IWebHostEnvironment _env;
+    private readonly IConfiguration _configuration;
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<ReleasesController> _logger;
 
-    public ReleasesController(AppDbContext db, IWebHostEnvironment env, ILogger<ReleasesController> logger)
+    public ReleasesController(
+        AppDbContext db,
+        IWebHostEnvironment env,
+        IConfiguration configuration,
+        IHttpClientFactory httpClientFactory,
+        ILogger<ReleasesController> logger)
     {
         _db = db;
         _env = env;
+        _configuration = configuration;
+        _httpClientFactory = httpClientFactory;
         _logger = logger;
     }
+
+    /// <summary>
+    /// Head Office's address, or null when this instance IS Head Office.
+    ///
+    /// A branch answers these two endpoints by asking Head Office and passing the answer
+    /// straight through. That is what makes one address work everywhere: the counter PC's app
+    /// talks to the counter PC, a gaming PC talks to the counter PC, and neither has to know
+    /// or store where Head Office lives. The branch already knows, because it reports there.
+    ///
+    /// It also means the shop behaves correctly with no internet: the branch cannot reach Head
+    /// Office, so it answers "no update", which is exactly true.
+    /// </summary>
+    private string? UpstreamHeadOffice =>
+        _configuration.IsHeadOffice() ? null : _configuration["Sync:HeadOfficeUrl"]?.TrimEnd('/');
 
     /// <summary>
     /// Where published installers are kept. Outside the application directory on purpose: an
@@ -67,6 +91,27 @@ public class ReleasesController : ControllerBase
     [AllowAnonymous]
     public async Task<IActionResult> Latest(CancellationToken ct)
     {
+        if (UpstreamHeadOffice is { } upstream)
+        {
+            try
+            {
+                var client = _httpClientFactory.CreateClient();
+                client.Timeout = TimeSpan.FromSeconds(20);
+                var body = await client.GetStringAsync($"{upstream}/api/releases/latest", ct);
+                return Content(body, "application/json");
+            }
+            catch (Exception ex)
+            {
+                // No internet, or Head Office is down. "No update" is the honest answer and the
+                // safe one - the shop carries on with the version it has, which is the whole
+                // point of a branch that runs on its own.
+                _logger.LogInformation(
+                    "Could not ask Head Office about updates ({Reason}). Reporting none available.",
+                    ex.GetBaseException().Message);
+                return Ok(ApiResponse<object>.Ok(new { available = false }));
+            }
+        }
+
         var version = await _db.Set<VersionInfo>()
             .Where(v => v.ApprovedForRollout)
             .OrderByDescending(v => v.CreatedAt)
@@ -114,7 +159,7 @@ public class ReleasesController : ControllerBase
     /// </summary>
     [HttpGet("download/{fileName}")]
     [AllowAnonymous]
-    public IActionResult Download(string fileName)
+    public async Task<IActionResult> Download(string fileName, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(fileName)
             || fileName != Path.GetFileName(fileName)
@@ -124,6 +169,39 @@ public class ReleasesController : ControllerBase
         }
 
         var path = Path.Combine(ReleaseFolder, fileName);
+
+        // A branch fetches the installer from Head Office once, keeps it, and serves it to its
+        // own gaming PCs over the shop network. Four PCs at a branch then cost Head Office one
+        // download rather than four, and the second gaming PC is served from the counter at LAN
+        // speed. The file is verified by the branch's own client against the published hash
+        // either way, so a cached copy is no more trusted than a fresh one.
+        if (UpstreamHeadOffice is { } upstream && !System.IO.File.Exists(path))
+        {
+            try
+            {
+                var client = _httpClientFactory.CreateClient();
+                client.Timeout = TimeSpan.FromMinutes(15);   // installers are large
+
+                await using var incoming = await client.GetStreamAsync(
+                    $"{upstream}/api/releases/download/{fileName}", ct);
+
+                var staging = path + ".part";
+                await using (var target = System.IO.File.Create(staging))
+                {
+                    await incoming.CopyToAsync(target, ct);
+                }
+                System.IO.File.Move(staging, path, overwrite: true);
+
+                _logger.LogInformation("Fetched {FileName} from Head Office for this branch.", fileName);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Could not fetch {FileName} from Head Office.", fileName);
+                return StatusCode(502, ApiResponse<object>.Fail(
+                    "Could not fetch the update from Head Office.", "HEAD_OFFICE_UNREACHABLE"));
+            }
+        }
+
         if (!System.IO.File.Exists(path))
             return NotFound(ApiResponse<object>.Fail("No such release.", "RELEASE_NOT_FOUND"));
 
