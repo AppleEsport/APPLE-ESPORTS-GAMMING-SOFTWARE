@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -142,7 +143,67 @@ public class BranchHeartbeatController : ControllerBase
 
         await _db.SaveChangesAsync(ct);
 
-        return Ok(ApiResponse<object>.Ok(new { received = true, at = now }));
+        // The reply carries this branch's settings back down, which is the half of sync that
+        // never existed. Null when the branch already has them, so almost every beat stays a
+        // few hundred bytes.
+        var config = await ConfigForBranchIfChangedAsync(dto.BranchId, dto.ConfigVersion, ct);
+
+        return Ok(ApiResponse<object>.Ok(new { received = true, at = now, config }));
+    }
+
+    /// <summary>
+    /// This branch's operators and what they are allowed to see - but only if the branch does
+    /// not already have exactly this.
+    ///
+    /// Scoped to the one branch, deliberately. Katargam's staff are no business of Adajan's
+    /// counter PC, and sending the whole chain's operators to every shop would put every
+    /// password hash in the company on four machines instead of one.
+    /// </summary>
+    private async Task<BranchConfigDto?> ConfigForBranchIfChangedAsync(
+        Guid branchId, string? branchHasVersion, CancellationToken ct)
+    {
+        var operators = await _db.Operators.AsNoTracking()
+            .Where(o => o.BranchId == branchId)
+            .OrderBy(o => o.Id)   // stable order, or the fingerprint changes on its own
+            .Select(o => new BranchOperatorConfigDto
+            {
+                Id = o.Id,
+                FullName = o.FullName,
+                Username = o.Username,
+                Email = o.Email,
+                PasswordHash = o.PasswordHash,
+                MobileNumber = o.MobileNumber,
+                AccessPin = o.AccessPin,
+                IsGlobalAdmin = o.IsGlobalAdmin,
+                DashboardPermissions = o.DashboardPermissions,
+                IsBlocked = o.Status == OperatorStatus.Suspended || o.Status == OperatorStatus.Disabled,
+            })
+            .ToListAsync(ct);
+
+        var config = new BranchConfigDto { Operators = operators };
+        config.Version = Fingerprint(config);
+
+        return string.Equals(config.Version, branchHasVersion, StringComparison.Ordinal)
+            ? null                 // the branch is already correct; say nothing
+            : config;
+    }
+
+    /// <summary>
+    /// A short, stable fingerprint of the configuration.
+    ///
+    /// Computed from the content itself rather than kept as a column somebody has to remember
+    /// to bump. A version number maintained by hand is a version number that eventually lies,
+    /// and a branch that trusts a stale one would sit on old permissions for ever with both
+    /// sides insisting they agree.
+    /// </summary>
+    private static string Fingerprint(BranchConfigDto config)
+    {
+        var canonical = string.Join('\n', config.Operators.Select(o => string.Join('',
+            o.Id, o.FullName, o.Username, o.Email, o.PasswordHash,
+            o.MobileNumber, o.AccessPin, o.IsGlobalAdmin, o.DashboardPermissions, o.IsBlocked)));
+
+        return Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))[..16];
     }
 
     /// <summary>
