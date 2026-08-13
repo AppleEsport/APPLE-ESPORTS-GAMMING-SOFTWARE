@@ -171,6 +171,7 @@ public class BranchHeartbeatService : BackgroundService
         {
             BranchId = branchId,
             Version = RunningVersion,
+            MachineName = Environment.MachineName,
             BranchLocalTime = IndiaTime.Now,
             OperatorsOnDuty = onDuty,
             Pcs = pcs,

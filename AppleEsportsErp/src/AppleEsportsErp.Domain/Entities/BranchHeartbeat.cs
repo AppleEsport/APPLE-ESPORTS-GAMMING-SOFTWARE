@@ -37,6 +37,27 @@ public class BranchHeartbeat
 
     public string? Version { get; set; }
 
+    /// <summary>The counter PC this branch is being run from, as Windows names it.</summary>
+    public string? ReportedByMachine { get; set; }
+
+    /// <summary>
+    /// A second machine claiming to be this same branch, if one has been heard from.
+    ///
+    /// Two counter PCs both reporting as one shop is not a curiosity, it is a slow disaster:
+    /// each keeps its own database and sends its own bills upward under the same branch, so
+    /// the takings of two shops merge into one set of figures that can never be separated
+    /// again. It happened here for a whole evening and the only trace was a web server log.
+    ///
+    /// Recorded rather than rejected. Head Office genuinely cannot tell which of the two is
+    /// the real Adajan - refusing the newcomer would as easily silence the true counter PC
+    /// after a hardware replacement. Naming both and letting a person decide is the only
+    /// honest answer.
+    /// </summary>
+    public string? ConflictingMachine { get; set; }
+
+    /// <summary>When the clash was last seen. Null once nothing has disagreed for a while.</summary>
+    public DateTimeOffset? ConflictingMachineSeenAt { get; set; }
+
     /// <summary>Who is on shift right now, as JSON: name, when they started, their shift.</summary>
     public string? OperatorsOnDuty { get; set; }
 

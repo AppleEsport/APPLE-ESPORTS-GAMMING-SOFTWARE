@@ -157,6 +157,12 @@ public class BranchHeartbeatConfiguration : IEntityTypeConfiguration<BranchHeart
         builder.HasKey(e => e.BranchId);
 
         builder.Property(e => e.Version).HasMaxLength(20);
+
+        // Windows caps a computer name at 15 characters; 64 leaves room for whatever a
+        // future non-Windows counter might call itself without ever truncating a name
+        // somebody has to go and find in a shop.
+        builder.Property(e => e.ReportedByMachine).HasMaxLength(64);
+        builder.Property(e => e.ConflictingMachine).HasMaxLength(64);
         builder.Property(e => e.OperatorsOnDuty).HasColumnType("jsonb");
         builder.Property(e => e.DrawerExpected).HasPrecision(10, 2);
         builder.Property(e => e.TakingsToday).HasPrecision(12, 2).HasDefaultValue(0m);
