@@ -23,8 +23,11 @@ public class MemberService : IMemberService
     private const int MaxFailedAttempts = 5;
     private static readonly TimeSpan LockoutDuration = TimeSpan.FromMinutes(15);
 
-    public MemberService(IUnitOfWork unitOfWork, IAuditService auditService, JwtTokenService jwt, IEmailService emailService, IAppUrlProvider appUrls)
+    private readonly IOutboxService _outbox;
+
+    public MemberService(IUnitOfWork unitOfWork, IAuditService auditService, JwtTokenService jwt, IEmailService emailService, IAppUrlProvider appUrls, IOutboxService outbox)
     {
+        _outbox = outbox;
         _unitOfWork = unitOfWork;
         _auditService = auditService;
         _jwt = jwt;
@@ -154,6 +157,26 @@ public class MemberService : IMemberService
         };
 
         await _unitOfWork.Repository<Member>().AddAsync(member);
+
+        // Head Office needs to know this person exists before it can make sense of anything
+        // they do. Without it, a wallet top-up arrives naming a member the server has never
+        // heard of - which is exactly what happened on the first offline test: Rs 1,000 topped
+        // up at a branch, delivered to Head Office, and belonging to nobody up there.
+        //
+        // Recorded here rather than at the wallet, because the member has to exist first. The
+        // outbox preserves order, so a member created and topped up while offline arrives in
+        // the order it happened.
+        await _outbox.RecordEventAsync(branchId, "Member", member.Id, "member.created", new
+        {
+            memberId = member.Id,
+            memberNumber = member.MemberNumber,
+            fullName = member.FullName,
+            mobileNumber = member.MobileNumber,
+            email = member.Email,
+            username = member.Username,
+            createdAt = member.CreatedAt,
+            createdBy = operatorId,
+        });
 
         await _auditService.LogAsync(new AuditEntry
         {
