@@ -6,6 +6,7 @@ using AppleEsportsErp.Application.DTOs.Common;
 using AppleEsportsErp.Infrastructure.Data;
 using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
+using AppleEsportsErp.Application.Interfaces;
 
 namespace AppleEsportsErp.Api.Controllers;
 
@@ -17,11 +18,13 @@ namespace AppleEsportsErp.Api.Controllers;
 public class SyncInboxController : ControllerBase
 {
     private readonly AppDbContext _db;
+    private readonly IEmailService _email;
     private readonly ILogger<SyncInboxController> _logger;
 
-    public SyncInboxController(AppDbContext db, ILogger<SyncInboxController> logger)
+    public SyncInboxController(AppDbContext db, IEmailService email, ILogger<SyncInboxController> logger)
     {
         _db = db;
+        _email = email;
         _logger = logger;
     }
 
@@ -176,6 +179,10 @@ public class SyncInboxController : ControllerBase
 
         switch (held.EventType.ToLowerInvariant())
         {
+            case "member.created":
+                await UpsertMemberAsync(held, root);
+                break;
+
             case "session.started":
                 await UpsertSessionStartedAsync(held, root);
                 break;
@@ -187,22 +194,16 @@ public class SyncInboxController : ControllerBase
 
             case "bill.paid":
             case "payment.recorded":
-                // Deliberately not reconstructed into the bills table. A bill is a tree of
-                // line items, discounts and payments; rebuilding it from a single flat event
-                // would produce something that looks like a bill but does not reconcile.
-                // Held intact for reporting and for a purpose-built importer later.
-                _logger.LogInformation(
-                    "Bill event {EventType} from branch {BranchId} stored for reporting (bill {BillId}).",
-                    held.EventType, held.BranchId, held.AggregateId);
+                await RecordPaymentAsync(held, root);
                 break;
 
             case "wallet.topped_up":
             case "member.wallet_toppedup":
-                // Same reasoning, higher stakes: Head Office must never infer a wallet balance
-                // from one event, because an out-of-order batch would corrupt real money.
-                _logger.LogInformation(
-                    "Wallet event from branch {BranchId} stored for reporting (member {MemberId}).",
-                    held.BranchId, held.AggregateId);
+                await RecordWalletTopUpAsync(held, root);
+                break;
+
+            case "email.send_requested":
+                await SendQueuedEmailAsync(held, root);
                 break;
 
             default:
@@ -244,6 +245,245 @@ public class SyncInboxController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// A member signed up at a branch, arriving at Head Office.
+    ///
+    /// Members are the one record a branch legitimately creates that Head Office must also
+    /// hold: a person joins at whichever shop they walk into, and their wallet follows them to
+    /// the others. Without this the branch's own wallet top-ups arrive naming somebody the
+    /// server has never heard of - Rs 1,000 belonging to nobody.
+    ///
+    /// No balances are set from here. The amounts on this event are what the branch had at the
+    /// moment of signing up, which is nothing; the money is a separate story told by wallet
+    /// events, and inferring a balance from a creation event is how a stale batch overwrites a
+    /// real one.
+    /// </summary>
+    private async Task UpsertMemberAsync(SyncInboxEntry held, JsonElement root)
+    {
+        var memberId = held.AggregateId;
+        if (await _db.Members.AnyAsync(m => m.Id == memberId))
+            return;   // already known: a redelivery, or this box is both branch and Head Office
+
+        var fullName = ReadString(root, "fullName");
+        if (string.IsNullOrWhiteSpace(fullName))
+            throw new InvalidOperationException($"Member {memberId} arrived with no name.");
+
+        // Not branch-scoped, and correctly so: a member joins at one shop and plays at any of
+        // them, which is the whole reason their wallet has to live at Head Office rather than
+        // on one till.
+        _db.Members.Add(new Member
+        {
+            Id = memberId,
+            FullName = fullName,
+            MemberNumber = ReadString(root, "memberNumber") ?? memberId.ToString("N")[..8].ToUpperInvariant(),
+            MobileNumber = ReadString(root, "mobileNumber") ?? string.Empty,
+            Email = ReadString(root, "email"),
+            Username = ReadString(root, "username"),
+            Status = MemberStatus.Active,
+            CreatedAt = ReadDate(root, "createdAt") ?? held.OccurredAt,
+            UpdatedAt = held.ReceivedAt,
+        });
+    }
+
+    /// <summary>
+    /// Head Office's view of what each PC is doing, kept in step with the sessions it is told
+    /// about.
+    ///
+    /// Derived from session events rather than reported separately, deliberately. A PC's state
+    /// is set in a dozen places across billing, reservations and maintenance, and instrumenting
+    /// every one of them means missing one — and a state that is right most of the time is worse
+    /// than one that is plainly derived, because nobody knows which screens to trust.
+    ///
+    /// Before this, Head Office showed Adajan with three PCs "awaiting billing" whose last
+    /// change was in July, against sessions that no longer existed. Four days of fiction on the
+    /// screen the owner uses to see the business.
+    /// </summary>
+    private async Task SetPcStateAsync(Guid? pcId, PcState state, Guid? currentSessionId)
+    {
+        if (pcId is null) return;
+
+        var pc = await _db.Pcs.FirstOrDefaultAsync(p => p.Id == pcId);
+        if (pc is null) return;
+
+        pc.State = state;
+        pc.CurrentSessionId = currentSessionId;
+        pc.LastActiveAt = DateTimeOffset.UtcNow;
+        pc.UpdatedAt = DateTimeOffset.UtcNow;
+    }
+
+    /// <summary>
+    /// Sends an email a branch could not send itself.
+    ///
+    /// Only Head Office holds the mail credentials, so a branch queues instead of sending — the
+    /// welcome message, the password reset link, the low stock warning. That design was right
+    /// and the last step was missing: these arrived here and fell through to "no handler",
+    /// which logged a warning and marked the entry applied. Every email any branch has ever
+    /// queued was accepted and thrown away, and the branch was told it had been delivered.
+    ///
+    /// Found because a member signed up at a branch and no reset link ever came.
+    ///
+    /// A failure to send throws, which leaves the entry unapplied and retried. Mail that
+    /// bounces is a different problem from mail never attempted, and only the second is worth
+    /// retrying.
+    /// </summary>
+    private async Task SendQueuedEmailAsync(SyncInboxEntry held, JsonElement root)
+    {
+        var to = ReadString(root, "to");
+        var subject = ReadString(root, "subject");
+        var body = ReadString(root, "body");
+
+        if (string.IsNullOrWhiteSpace(to))
+        {
+            // Nothing to retry towards. Swallowed rather than thrown so it does not sit in the
+            // queue for ever being reattempted at nobody.
+            _logger.LogWarning("A branch queued an email with no recipient. Discarded.");
+            return;
+        }
+
+        await _email.SendEmailAsync(to, subject ?? "Apple Esports", body ?? string.Empty);
+
+        _logger.LogInformation(
+            "Sent an email queued by branch {BranchId} to {Recipient}.", held.BranchId, to);
+    }
+
+    /// <summary>
+    /// Money a branch actually took, appearing in Head Office's own figures.
+    ///
+    /// The previous version deliberately refused to do this, and its reasoning was sound as far
+    /// as it went: a bill is a tree of line items and discounts, and rebuilding one from a flat
+    /// event produces something that looks like a bill and does not reconcile. But refusing
+    /// meant the entry was marked applied while nothing was written, so a branch's takings never
+    /// reached the End of Day screen and nothing anywhere said so. Head Office showed a shop
+    /// that traded all evening as having taken nothing.
+    ///
+    /// The distinction that resolves it: a PAYMENT is flat. Cash, online, wallet, when, which
+    /// branch - facts, not a tree. That is also exactly what the End of Day screen reads. So the
+    /// payment is recorded in full, and the bill it belongs to is written as a header carrying
+    /// the branch's own totals, with no invented line items. The items stay at the branch, which
+    /// is where they were rung up and where they can be looked at.
+    ///
+    /// The branch's own identifiers are used throughout, so the same bill is one bill in both
+    /// places and a redelivery cannot double the takings.
+    /// </summary>
+    private async Task RecordPaymentAsync(SyncInboxEntry held, JsonElement root)
+    {
+        var billId = ReadGuid(root, "billId") ?? held.AggregateId;
+
+        if (await _db.Payments.AnyAsync(p => p.BillId == billId))
+            return;   // already counted
+
+        var operatorId = ReadGuid(root, "operatorId");
+        if (operatorId is null || !await _db.Operators.AnyAsync(o => o.Id == operatorId))
+            throw new InvalidOperationException(
+                $"Head Office has no operator {operatorId}, so this payment cannot be attributed.");
+
+        var gaming = ReadDecimal(root, "gamingAmount") ?? 0m;
+        var food = ReadDecimal(root, "foodAmount") ?? 0m;
+        var discount = ReadDecimal(root, "discountAmount") ?? 0m;
+        var billTotal = ReadDecimal(root, "billTotal") ?? (gaming + food - discount);
+        var totalPaid = ReadDecimal(root, "totalPaid") ?? billTotal;
+        var cash = ReadDecimal(root, "cashAmount") ?? 0m;
+        var paidAt = ReadDate(root, "paidAt") ?? held.OccurredAt;
+
+        Enum.TryParse<PaymentType>(ReadString(root, "paymentType"), ignoreCase: true, out var method);
+
+        // Anything not taken in cash is whatever the branch settled it with. Split out this way
+        // rather than guessed per method, because the drawer only ever cares about the cash.
+        var nonCash = Math.Max(0m, totalPaid - cash);
+
+        if (!await _db.Bills.AnyAsync(b => b.Id == billId))
+        {
+            _db.Bills.Add(new Bill
+            {
+                Id = billId,
+                BillNumber = ReadString(root, "billNumber") ?? billId.ToString("N")[..8].ToUpperInvariant(),
+                BranchId = held.BranchId,
+                OperatorId = operatorId.Value,
+                SessionId = await KnownHereOnly<Session>(ReadGuid(root, "sessionId")),
+                ShiftId = await KnownHereOnly<Shift>(ReadGuid(root, "shiftId")),
+                GamingAmount = gaming,
+                FoodAmount = food,
+                Subtotal = gaming + food,
+                DiscountAmount = discount,
+                TotalAmount = billTotal,
+                PaymentType = method,
+                Status = BillStatus.Completed,
+                CreatedAt = paidAt,
+                CompletedAt = paidAt,
+            });
+        }
+
+        _db.Payments.Add(new Payment
+        {
+            Id = Guid.NewGuid(),
+            BillId = billId,
+            BranchId = held.BranchId,
+            OperatorId = operatorId.Value,
+            PaymentType = method,
+            TotalAmount = totalPaid,
+            CashAmount = cash,
+            OnlineAmount = method == PaymentType.Wallet ? 0m : nonCash,
+            WalletAmount = method == PaymentType.Wallet ? nonCash : 0m,
+            CashReceived = cash,
+            ChangeReturned = 0m,
+            ActualCashCollected = cash,
+            GamingPortion = gaming,
+            FoodPortion = food,
+            Status = "completed",
+            CreatedAt = paidAt,
+        });
+    }
+
+    /// <summary>
+    /// A wallet top-up taken at a branch, recorded at Head Office.
+    ///
+    /// The earlier refusal was right about the danger and wrong about the remedy. Inferring a
+    /// balance from a single event IS how out-of-order delivery corrupts real money - but
+    /// dropping the event entirely means Rs 1,000 taken across the counter exists nowhere up
+    /// here at all, which is worse.
+    ///
+    /// So the transaction is recorded, because it is a fact that happened at a known time for a
+    /// known amount. The member's stored balance is left alone: the branch took the money and
+    /// the branch owns that figure until there is a deliberate reconciliation. Head Office can
+    /// see and report every top-up without pretending to be the authority on the balance.
+    /// </summary>
+    private async Task RecordWalletTopUpAsync(SyncInboxEntry held, JsonElement root)
+    {
+        // The branch's own transaction id, so a redelivery is the same row rather than a second
+        // one. Without it the same Rs 1,000 could be counted twice in a monthly total.
+        var txId = ReadGuid(root, "walletTransactionId") ?? held.AggregateId;
+        if (await _db.WalletTransactions.AnyAsync(w => w.Id == txId))
+            return;
+
+        var memberId = ReadGuid(root, "memberId") ?? held.AggregateId;
+        if (!await _db.Members.AnyAsync(m => m.Id == memberId))
+            throw new InvalidOperationException(
+                $"Head Office has no member {memberId}. The member.created event should arrive first.");
+
+        var cash = ReadDecimal(root, "cashAmount") ?? 0m;
+        var bonus = ReadDecimal(root, "bonusAmount") ?? 0m;
+        var credited = ReadDecimal(root, "totalCredit") ?? (cash + bonus);
+        var balanceAfter = ReadDecimal(root, "gamingBalanceAfter") ?? 0m;
+
+        _db.WalletTransactions.Add(new WalletTransaction
+        {
+            Id = txId,
+            MemberId = memberId,
+            BranchId = held.BranchId,
+            OperatorId = await KnownHereOnly<Operator>(ReadGuid(root, "operatorId")),
+            ShiftId = await KnownHereOnly<Shift>(ReadGuid(root, "shiftId")),
+            Action = WalletAction.Recharge,
+            TargetWallet = WalletType.Gaming,
+            Amount = credited,
+            BalanceBefore = balanceAfter - credited,
+            BalanceAfter = balanceAfter,
+            PaymentType = ReadString(root, "paymentType"),
+            CashAmount = cash,
+            BonusAmount = bonus,
+            CreatedAt = ReadDate(root, "occurredAt") ?? held.OccurredAt,
+        });
+    }
+
     private async Task UpsertSessionStartedAsync(SyncInboxEntry held, JsonElement root)
     {
         var sessionId = held.AggregateId;
@@ -281,6 +521,8 @@ public class SyncInboxController : ControllerBase
             CreatedAt = held.OccurredAt,
             UpdatedAt = held.ReceivedAt,
         });
+
+        await SetPcStateAsync(pcId, PcState.Active, sessionId);
     }
 
     private async Task UpsertSessionStoppedAsync(SyncInboxEntry held, JsonElement root)
@@ -306,6 +548,11 @@ public class SyncInboxController : ControllerBase
         session.FoodAmount = ReadDecimal(root, "foodAmount") ?? session.FoodAmount;
         session.TotalAmount = ReadDecimal(root, "totalAmount") ?? session.TotalAmount;
         session.UpdatedAt = held.ReceivedAt;
+
+        // The PC is free again as far as Head Office is concerned. Whether the branch shows it
+        // as awaiting billing is the branch's own business - that state exists to tell the
+        // operator standing there to collect money, and there is nobody standing at Head Office.
+        await SetPcStateAsync(session.PcId, PcState.Idle, currentSessionId: null);
     }
 
     // ── Payload readers ──
