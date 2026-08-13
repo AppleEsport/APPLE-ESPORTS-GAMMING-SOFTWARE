@@ -88,8 +88,14 @@ services:
       - Cors__AllowedOrigins__0=http://localhost:8081
       - Cors__AllowedOrigins__1=http://127.0.0.1:8081
       - Cors__AllowedOrigins__2=http://localhost:5173
+      # Where published branch installers live. Outside the container image, on a named
+      # volume, because rebuilding the API must not delete the releases branches are
+      # downloading from - and a 160 MB installer does not belong in an image anyway.
+      - Releases__Path=/releases
       # Uncomment below to enable Redis Backplane when scaling out
       # - Redis__ConnectionString=redis:6379,password=${REDIS_PASSWORD}
+    volumes:
+      - releases_data:/releases
     networks:
       - appleesports_net
     depends_on:
@@ -145,6 +151,7 @@ networks:
     driver: bridge
 
 volumes:
+  releases_data:
   postgres_data:
   db_backups:
   redis_data:

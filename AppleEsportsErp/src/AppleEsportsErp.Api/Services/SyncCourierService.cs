@@ -159,7 +159,7 @@ public class SyncCourierService : BackgroundService
                 else
                 {
                     var errorMsg = await response.Content.ReadAsStringAsync(cancellationToken);
-                    HandleSyncFailure(context, entries, $"HTTP {response.StatusCode}: {errorMsg}");
+                    HandleSyncFailure(context, entries, $"HTTP {response.StatusCode}: {errorMsg}", transportFailure: false);
                     _logger.LogWarning("Failed to sync {Count} entries from branch {BranchId}: {Status}", entries.Count, branchId, response.StatusCode);
                 }
             }
@@ -169,18 +169,18 @@ public class SyncCourierService : BackgroundService
             // Cannot reach Head Office at all — this is the internet being down, as opposed
             // to Head Office answering with an error.
             MarkInternetDown(branchId);
-            HandleSyncFailure(context, entries, $"Network error: {ex.Message}");
+            HandleSyncFailure(context, entries, $"Network error: {ex.Message}", transportFailure: true);
             _logger.LogWarning(ex, "Network error syncing branch {BranchId}", branchId);
         }
         catch (TaskCanceledException ex)
         {
             MarkInternetDown(branchId);
-            HandleSyncFailure(context, entries, $"Request timeout: {ex.Message}");
+            HandleSyncFailure(context, entries, $"Request timeout: {ex.Message}", transportFailure: true);
             _logger.LogWarning(ex, "Timeout syncing branch {BranchId}", branchId);
         }
         catch (Exception ex)
         {
-            HandleSyncFailure(context, entries, $"Unexpected error: {ex.Message}");
+            HandleSyncFailure(context, entries, $"Unexpected error: {ex.Message}", transportFailure: false);
             _logger.LogError(ex, "Unexpected error syncing branch {BranchId}", branchId);
         }
     }
@@ -276,12 +276,36 @@ public class SyncCourierService : BackgroundService
         }
     }
 
-    private void HandleSyncFailure(AppDbContext context, List<SyncOutboxEntry> entries, string errorMsg)
+    /// <param name="transportFailure">
+    /// True when Head Office could not be reached at all — the internet is down, the line is
+    /// bad, the server is being restarted. False when Head Office answered and refused the
+    /// record.
+    ///
+    /// The two must not be counted the same way, and counting them the same way lost a whole
+    /// evening's trading on the first branch this was ever tested on. The courier retries every
+    /// thirty seconds and gives up after five attempts, so a shop whose internet was out for
+    /// **two and a half minutes** had every queued record marked as beyond hope. They are then
+    /// excluded from the query that looks for work, so reconnecting does not help: the takings
+    /// sit in the outbox for ever while the branch reports itself perfectly healthy.
+    ///
+    /// That defeats the entire point of a durable outbox, which exists precisely because the
+    /// line goes down. A branch being offline is the normal case this was built for, not a
+    /// fault in the record, so it no longer consumes the retry budget.
+    ///
+    /// A refusal from Head Office is different: the record itself is wrong, and retrying it a
+    /// thousand times will not make it right. Those still give up after five, so one bad record
+    /// cannot block the queue behind it for ever.
+    /// </param>
+    private void HandleSyncFailure(
+        AppDbContext context, List<SyncOutboxEntry> entries, string errorMsg, bool transportFailure)
     {
         foreach (var entry in entries)
         {
-            entry.AttemptCount++;
             entry.LastError = errorMsg;
+
+            if (transportFailure) continue;
+
+            entry.AttemptCount++;
 
             if (entry.AttemptCount >= _maxAttempts)
             {
