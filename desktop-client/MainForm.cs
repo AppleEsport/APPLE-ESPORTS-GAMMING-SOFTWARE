@@ -262,6 +262,29 @@ public sealed class MainForm : Form
         core.ProcessFailed += (_, _) =>
             ShowOverlay("The embedded browser stopped responding.", showActions: true);
 
+        // The one thing the dashboard is allowed to ask of the machine it runs on.
+        //
+        // The Updates page can see that a newer version exists - it asks Head Office directly -
+        // but only this process can install one. Without a way across, the best that page could
+        // ever offer was "it will happen on its own eventually", which is no use to somebody
+        // standing at a counter wondering whether updates work at all.
+        //
+        // Deliberately not a general bridge. It takes one fixed word and grants nothing else:
+        // the page cannot name a file, a version or a URL, so the worst a compromised dashboard
+        // achieves here is asking Head Office for the update it was going to take anyway.
+        core.WebMessageReceived += (_, args) =>
+        {
+            string message;
+            try { message = args.TryGetWebMessageAsString() ?? string.Empty; }
+            catch { return; }   // not a string - not ours
+
+            if (!string.Equals(message, "check-for-updates", StringComparison.Ordinal)) return;
+
+            // Wakes the loop rather than starting a second check, so pressing the button twice
+            // cannot have two downloads writing the same file.
+            try { _checkNow.Cancel(); } catch { /* already awake */ }
+        };
+
         _retryTimer.Tick += (_, _) =>
         {
             _retryTimer.Stop();
@@ -276,11 +299,25 @@ public sealed class MainForm : Form
     }
 
     /// <summary>
-    /// Checks Head Office for an approved update, then again every few hours.
+    /// Checks Head Office for an approved update, then keeps checking every few minutes.
     ///
     /// Runs for the life of the app rather than only at launch: a branch PC can stay on for
     /// days, and a fix nobody restarts to collect is a fix nobody has.
+    ///
+    /// This used to wait four hours between looks, which made every release feel broken. A
+    /// version published at nine in the evening would not be noticed until the small hours,
+    /// and in the meantime the branch sat on the old build with no sign that anything was
+    /// coming - indistinguishable, from the counter, from updates not working at all. During
+    /// development that is worse still: a fix goes out, the branch does not take it, and the
+    /// next hour goes on hunting a bug that was already fixed.
+    ///
+    /// Five minutes instead. The check is a single request answered with a version number and
+    /// a hash - a few hundred bytes, less than one page of the dashboard - so doing it twelve
+    /// times an hour costs nothing even on a phone tether. The 172 MB download still only
+    /// happens when there is genuinely something new.
     /// </summary>
+    private static readonly TimeSpan CheckEvery = TimeSpan.FromMinutes(5);
+
     private async Task UpdateLoopAsync()
     {
         // Let the dashboard settle first. Competing with page load for bandwidth on a branch
@@ -298,9 +335,25 @@ public sealed class MainForm : Form
                 // Never let an update check take the app down with it.
             }
 
-            await Task.Delay(TimeSpan.FromHours(4));
+            // Woken early when somebody presses "Check for updates now", so the button is a
+            // real check rather than a message saying one will happen eventually.
+            try { await Task.Delay(CheckEvery, _checkNow.Token); }
+            catch (OperationCanceledException) { /* asked to look now */ }
+
+            if (_checkNow.IsCancellationRequested)
+            {
+                var old = _checkNow;
+                _checkNow = new CancellationTokenSource();
+                old.Dispose();
+            }
         }
     }
+
+    /// <summary>
+    /// Cancelled to cut the wait short when the Updates page asks for a check right now.
+    /// Replaced each time, because a CancellationTokenSource cannot be un-cancelled.
+    /// </summary>
+    private CancellationTokenSource _checkNow = new();
 
     private async Task CheckForUpdateOnceAsync()
     {

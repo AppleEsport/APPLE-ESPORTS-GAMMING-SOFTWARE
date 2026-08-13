@@ -27,11 +27,18 @@ public class BranchHeartbeatController : ControllerBase
     private readonly ILogger<BranchHeartbeatController> _logger;
 
     /// <summary>
-    /// How long a branch may be silent before Head Office should say so. Four missed beats:
-    /// long enough that one dropped connection is not an alarm, short enough that a shop which
-    /// has genuinely stopped reporting is noticed within a couple of minutes.
+    /// How long a branch may be silent before Head Office should say so.
+    ///
+    /// One minute, which at a three-second beat is twenty missed in a row - far past a dropped
+    /// packet or a moment of bad signal, and still quick enough that a counter PC someone has
+    /// switched off shows as gone while you are still standing there.
+    ///
+    /// This has to move whenever the beat does. Left at the two minutes that suited a
+    /// thirty-second beat, it would have taken forty missed beats to admit a branch had
+    /// stopped - a screen quietly showing a dead shop as healthy, which is the one thing this
+    /// whole mechanism exists to prevent.
     /// </summary>
-    public static readonly TimeSpan SilentAfter = TimeSpan.FromMinutes(2);
+    public static readonly TimeSpan SilentAfter = TimeSpan.FromMinutes(1);
 
     public BranchHeartbeatController(AppDbContext db, ILogger<BranchHeartbeatController> logger)
     {
@@ -143,6 +150,19 @@ public class BranchHeartbeatController : ControllerBase
 
             if (!Enum.TryParse<PcState>(reported.State.Replace("_", ""), ignoreCase: true, out var state))
                 continue;   // a state this Head Office build does not know; leave it alone
+
+            // Nothing is written for a PC that has not moved, and this is what lets branches
+            // report every three seconds instead of every thirty.
+            //
+            // The timestamps are the whole point. State and CurrentSessionId are compared by
+            // EF, which skips an UPDATE when neither differs - but stamping LastActiveAt and
+            // UpdatedAt unconditionally defeated that and forced a write for every PC on every
+            // beat. Sixteen idle machines at four branches, twenty beats a minute, is around
+            // 1,300 pointless row updates a minute for a chain where nothing is happening.
+            //
+            // It also made UpdatedAt useless. "Last changed" that changes every three seconds
+            // whether or not anything changed answers no question anybody would ask of it.
+            if (pc.State == state && pc.CurrentSessionId == reported.CurrentSessionId) continue;
 
             pc.State = state;
             pc.CurrentSessionId = reported.CurrentSessionId;

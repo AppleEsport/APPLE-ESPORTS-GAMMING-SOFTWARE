@@ -57,6 +57,7 @@ export default function UpdatesPage() {
   const isSuperAdmin = role === ROLES.SUPER_ADMIN;
 
   const [latest, setLatest] = useState(null);
+  const [release, setRelease] = useState(null);
   const [history, setHistory] = useState([]);
   const [branches, setBranches] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -70,13 +71,25 @@ export default function UpdatesPage() {
 
       // No '/api' prefix — the shared client is already based at /api, so writing it again
       // produced /api/api/... and every call 404'd.
-      const [latestRes, historyRes] = await Promise.all([
+      //
+      // /releases/latest is the one that matters, and adding it is the fix for a page that
+      // confidently lied. /versions/* reads this machine's OWN database. At Head Office that
+      // is the truth; at a branch it is a local copy that nothing ever refreshes, so a counter
+      // running 2.2.4 read its own row, found 2.2.4, and printed "This branch has the newest
+      // version. There is nothing to do." while 2.2.5 sat on the server waiting.
+      //
+      // /releases/latest is the very question the updater asks, and on a branch it is passed
+      // straight through to Head Office. Asking it here means this page and the thing that
+      // actually installs can no longer disagree — which is the whole reason the page exists.
+      const [latestRes, historyRes, releaseRes] = await Promise.all([
         api.get('/versions/latest'),
         api.get('/versions/history'),
+        api.get('/releases/latest').catch(() => null),   // offline is not an error here
       ]);
 
       setLatest(latestRes.data?.data ?? null);
       setHistory(historyRes.data?.data ?? []);
+      setRelease(releaseRes?.data?.data ?? null);
 
       if (isSuperAdmin) {
         const res = await api.get('/versions/all-branches');
@@ -193,6 +206,7 @@ export default function UpdatesPage() {
           ) : (
             <BranchView
               latest={latest}
+              release={release}
               branch={branches[0]}
               busy={busy}
               onSetAutoUpdate={setAutoUpdate}
@@ -423,9 +437,24 @@ function BranchCard({ branch, latest, busy, onSetAutoUpdate }) {
 
 // ── An operator's or admin's view of their own branch ──
 
-function BranchView({ latest, branch, busy, onSetAutoUpdate }) {
+function BranchView({ latest, release, branch, busy, onSetAutoUpdate }) {
   const current = branch?.currentVersion;
-  const updateWaiting = !!latest?.approvedForRollout && current !== latest?.currentVersion;
+
+  // Head Office's live answer, which is also what the updater goes on. The old code compared
+  // against this branch's own database — a copy that never learns about anything new — so the
+  // page reported "nothing to do" for a version it had simply never been told about.
+  const offered = release?.available ? release.version : null;
+  const updateWaiting = !!offered && offered !== current;
+
+  // Only inside the desktop app is there something able to install. In an ordinary browser
+  // there is not, so the button is not offered rather than offered and doing nothing.
+  const canInstallHere = typeof window !== 'undefined' && !!window.chrome?.webview;
+  const [checking, setChecking] = useState(false);
+
+  const checkNow = () => {
+    window.chrome.webview.postMessage('check-for-updates');
+    setChecking(true);
+  };
 
   const total = branch?.gamingPcsTotalCount || 0;
   const upToDate = branch?.gamingPcsUpToDateCount || 0;
@@ -451,17 +480,30 @@ function BranchView({ latest, branch, busy, onSetAutoUpdate }) {
                 Update waiting
               </p>
               <p className="font-mono text-3xl font-bold text-neon-orange mt-1">
-                {latest.currentVersion}
+                {offered}
               </p>
             </div>
           )}
         </div>
 
-        {updateWaiting && <div className="mt-4"><WhatChanged notes={latest.releaseNotes} /></div>}
+        {updateWaiting && (
+          <div className="mt-4">
+            <WhatChanged notes={release?.releaseNotes || latest?.releaseNotes} />
+          </div>
+        )}
 
-        {!updateWaiting && current && (
+        {!updateWaiting && current && release && (
           <p className="text-text-2 text-sm mt-4">
             This branch has the newest version. There is nothing to do.
+          </p>
+        )}
+
+        {/* Head Office could not be reached. Said plainly, because "up to date" would be a
+            guess — the branch has no idea what exists until it can ask. */}
+        {!release && current && (
+          <p className="text-text-2 text-sm mt-4">
+            Could not reach Head Office just now, so there is no way to tell whether an update
+            is waiting. Your branch keeps working normally, and it will keep trying.
           </p>
         )}
 
@@ -483,20 +525,32 @@ function BranchView({ latest, branch, busy, onSetAutoUpdate }) {
             </p>
           </div>
 
-          {updateWaiting && !latest?.hasInstaller && (
-            <p className="text-text-2 text-sm flex items-start gap-2">
-              <Clock className="w-4 h-4 mt-0.5 shrink-0 text-text-3" />
-              <span>
-                This update cannot install itself yet — the part of the program that does that
-                is still being built. Nothing is wrong at your branch.
-              </span>
-            </p>
-          )}
+          {/* Always available, not only when an update is waiting. Being able to press this
+              and see "you are on the newest version" is the difference between knowing updates
+              work and assuming they are broken — which is exactly the doubt this page kept
+              creating when it had nothing to press at all. */}
+          {canInstallHere && (
+            <div>
+              <button
+                className={updateWaiting ? 'btn-primary flex items-center gap-2' : 'btn-secondary flex items-center gap-2'}
+                disabled={checking}
+                onClick={checkNow}
+              >
+                {checking
+                  ? <Loader2 className="w-4 h-4 animate-spin" />
+                  : <Download className="w-4 h-4" />}
+                {updateWaiting ? `Install ${offered} now` : 'Check for updates now'}
+              </button>
 
-          {updateWaiting && latest?.hasInstaller && !branch?.autoUpdateEnabled && (
-            <button className="btn-primary flex items-center gap-2">
-              <Download className="w-4 h-4" /> Update now
-            </button>
+              <p className="text-text-3 text-xs mt-2 leading-relaxed">
+                {checking
+                  ? 'Looking now. If there is an update it downloads in the background and the ' +
+                    'app restarts itself when it is ready — that can take a few minutes on a ' +
+                    'slow line. You can carry on working.'
+                  : 'This branch looks for updates by itself every few minutes. Press this if ' +
+                    'you do not want to wait.'}
+              </p>
+            </div>
           )}
         </div>
       </div>
