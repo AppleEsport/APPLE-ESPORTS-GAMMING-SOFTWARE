@@ -311,18 +311,32 @@ public sealed class MainForm : Form
     /// development that is worse still: a fix goes out, the branch does not take it, and the
     /// next hour goes on hunting a bug that was already fixed.
     ///
-    /// Five minutes instead. The check is a single request answered with a version number and
-    /// a hash - a few hundred bytes, less than one page of the dashboard - so doing it twelve
-    /// times an hour costs nothing even on a phone tether. The 172 MB download still only
-    /// happens when there is genuinely something new.
+    /// Thirty seconds instead, so a fix published at Head Office is on its way to every shop
+    /// before anyone thinks to ask whether it worked.
+    ///
+    /// Frugality was the wrong thing to optimise for. A check is one request answered with a
+    /// version number and a hash - a few hundred bytes, far less than a single page of the
+    /// dashboard. The branch already reports its own status to Head Office every three
+    /// seconds, so this adds about a tenth to a conversation that is happening anyway. The
+    /// 172 MB download still only happens when there is genuinely something new.
     /// </summary>
-    private static readonly TimeSpan CheckEvery = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan CheckEvery = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// How long after the app opens before the first look.
+    ///
+    /// This is the one that matters for a shop that was closed. A counter PC switched on in
+    /// the morning should collect whatever was published overnight straight away, while the
+    /// operator is still logging in - not two minutes later, in the middle of their first
+    /// customer. Ten seconds is enough for the dashboard to finish loading first.
+    /// </summary>
+    private static readonly TimeSpan FirstCheckAfter = TimeSpan.FromSeconds(10);
 
     private async Task UpdateLoopAsync()
     {
-        // Let the dashboard settle first. Competing with page load for bandwidth on a branch
-        // connection is a poor trade for something with no deadline.
-        await Task.Delay(TimeSpan.FromMinutes(2));
+        // Let the dashboard finish loading first, so the two are not competing for a branch
+        // connection at the one moment somebody is watching the screen.
+        await Task.Delay(FirstCheckAfter);
 
         while (!IsDisposed)
         {
