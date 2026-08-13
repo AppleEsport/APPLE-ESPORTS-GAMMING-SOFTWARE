@@ -503,6 +503,9 @@ public class SyncInboxController : ControllerBase
         if (operatorId is null || !await _db.Operators.AnyAsync(o => o.Id == operatorId))
             throw new InvalidOperationException($"Head Office has no operator {operatorId}.");
 
+        var startTime = ReadDate(root, "startTime") ?? held.OccurredAt;
+        var plannedMin = ReadInt(root, "plannedDurationMin");
+
         _db.Sessions.Add(new Session
         {
             Id = sessionId,
@@ -512,8 +515,22 @@ public class SyncInboxController : ControllerBase
             ShiftId = await KnownHereOnly<Shift>(ReadGuid(root, "shiftId")),
             MemberId = await KnownHereOnly<Member>(ReadGuid(root, "memberId")),
             CustomerName = ReadString(root, "customerName"),
-            StartTime = ReadDate(root, "startTime") ?? held.OccurredAt,
-            PlannedDurationMin = ReadInt(root, "plannedDurationMin"),
+            StartTime = startTime,
+            PlannedDurationMin = plannedMin,
+
+            // When the session was sold with a length, work out when it is due to end.
+            //
+            // This is why Head Office showed an hour's play as unlimited. The duration arrived
+            // and was stored faithfully, but EndTime was left null - and the PC grid decides
+            // pay-as-you-go purely by "has no end time". So every synced session, however it
+            // was sold, drew the infinity symbol and no countdown. The branch's own screen was
+            // right the whole time, which is what made the two impossible to reconcile.
+            //
+            // Computed rather than sent, because the branch already sends both halves and a
+            // number derived twice from the same two values cannot disagree with itself.
+            // Genuine pay-as-you-go has no planned duration and correctly stays null here.
+            EndTime = plannedMin is > 0 ? startTime.AddMinutes(plannedMin.Value) : null,
+
             GamingType = ReadString(root, "gamingType") ?? "standard",
             TotalAmount = ReadDecimal(root, "expectedAmount") ?? 0m,
             GamingAmount = ReadDecimal(root, "expectedAmount") ?? 0m,
