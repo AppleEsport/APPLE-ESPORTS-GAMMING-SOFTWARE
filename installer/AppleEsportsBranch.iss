@@ -12,7 +12,7 @@
 ; ============================================================================
 
 #define AppName        "Apple Esports"
-#define AppVersion     "2.2.6"
+#define AppVersion     "2.2.7"
 #define AppPublisher   "Apple Esports"
 #define Staging        "branch\staging"
 
@@ -278,6 +278,22 @@ begin
   SaveStringsToFile(Path, Lines, False);
 end;
 
+{ Starts the branch's two services, whatever else has happened.
+
+  PrepareToInstall stops them both before a single file is copied, so every path out of the
+  post-install step has to leave them running again. A setup script that fails is a problem;
+  a setup script that fails and also leaves the shop switched off is a much larger one, and
+  the operator has no way of telling the two apart.
+
+  Safe to call when they are already running - sc.exe simply reports so and changes nothing. }
+procedure EnsureServicesRunning();
+var
+  ResultCode: Integer;
+begin
+  Exec('sc.exe', 'start AppleEsportsDb',  '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec('sc.exe', 'start AppleEsportsApi', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep <> ssPostInstall then
@@ -286,11 +302,30 @@ begin
   { Both kinds of PC need this, so it runs before the operator-only work below. }
   WriteClientConfig();
 
-  if not IsComponentSelected('server') then
+  { The guard that took a real branch offline.
+
+    PrepareToInstall stops both services using InstallServerParts(), which is true whenever
+    this machine already runs the branch. This line used IsComponentSelected('server') on its
+    own - and that is FALSE during a silent update, because the updater passes no /COMPONENTS
+    and Inno falls back to the default type.
+
+    So a silent update stopped the branch, replaced its files, and then returned here and gave
+    up before running the scripts that start it again. Both services left stopped, and a
+    dashboard showing "Cannot reach the branch system" with a list of things to check, none of
+    which were wrong. A shop taking an update overnight would have opened to a dead counter.
+
+    Whatever decides to stop the branch and whatever decides to start it again must be the
+    same decision. That is why this is InstallServerParts() and not a second, similar test. }
+  if not InstallServerParts() then
     Exit;
 
   if not RunSetupScript('setup-database.ps1', 'Setting up the branch database (this takes a minute)...') then
   begin
+    { Started again before reporting anything. Under /SUPPRESSMSGBOXES - which every silent
+      update uses - this message is answered for us and nobody ever sees it, so leaving
+      without this call is how a failure here becomes a shop that simply never comes back. }
+    EnsureServicesRunning();
+
     MsgBox(
       'The branch database could not be set up.' + #13#10#13#10 +
       'The rest of the software installed, but this PC cannot run the branch until the '
@@ -303,6 +338,8 @@ begin
 
   if not RunSetupScript('setup-api.ps1', 'Starting the branch system...') then
   begin
+    EnsureServicesRunning();
+
     MsgBox(
       'The database is ready, but the branch system did not start.' + #13#10#13#10 +
       'What went wrong was written to:' + #13#10 +
@@ -311,6 +348,10 @@ begin
     Exit;
   end;
 
+  { Belt and braces on the ordinary path too. setup-api.ps1 reporting success and the service
+    actually being up are not quite the same claim, and this costs nothing to be sure of. }
+  EnsureServicesRunning();
+
   MsgBox(
     'This PC now runs the branch itself.' + #13#10#13#10 +
     'The database and dashboard start automatically with Windows, so the shop works ' +
@@ -318,4 +359,25 @@ begin
     'and to receive updates.' + #13#10#13#10 +
     'Point the gaming PCs at this machine when you set them up.',
     mbInformation, MB_OK);
+end;
+
+{ The last thing that runs, whatever happened.
+
+  This is the one that would have saved a real branch. An update stopped both services in
+  PrepareToInstall, began copying, failed partway, and Inno rolled the files back - so setup
+  ended without ever reaching ssPostInstall. Every restart-the-services path lives in
+  CurStepChanged, none of it ran, and the counter PC was left with the old version installed
+  and both services stopped. Sixteen minutes later somebody had to start them by hand.
+
+  Rolling the files back is right. Leaving the shop switched off is not, and a failed upgrade
+  must always end with the branch running whatever version it had before - that version worked
+  this morning and is worth infinitely more than a tidy exit.
+
+  DeinitializeSetup runs on success, on failure and on cancel alike, which is exactly the
+  guarantee needed here. On a gaming PC or a fresh install the services do not exist and
+  sc.exe simply reports so. }
+procedure DeinitializeSetup();
+begin
+  if IsExistingServerInstall() then
+    EnsureServicesRunning();
 end;

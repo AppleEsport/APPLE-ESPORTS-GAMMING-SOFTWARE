@@ -73,6 +73,39 @@ public class BranchHeartbeatController : ControllerBase
             _db.Add(beat);
         }
 
+        // Two counter PCs both calling themselves one branch, caught the only moment it is
+        // cheap to catch: while they are taking it in turns to overwrite each other.
+        //
+        // Checked before LastSeenAt moves, because "was the previous beat recent?" is the
+        // whole test. Machines swapping every thirty seconds are two machines running at once;
+        // a name that changed after an hour of silence is simply a replaced PC, which is a
+        // normal thing to do and must not raise an alarm.
+        if (!string.IsNullOrWhiteSpace(dto.MachineName)
+            && !string.IsNullOrWhiteSpace(beat.ReportedByMachine)
+            && !string.Equals(beat.ReportedByMachine, dto.MachineName, StringComparison.OrdinalIgnoreCase)
+            && now - beat.LastSeenAt < SilentAfter)
+        {
+            beat.ConflictingMachine = beat.ReportedByMachine;
+            beat.ConflictingMachineSeenAt = now;
+
+            _logger.LogWarning(
+                "Two PCs are both reporting as branch {BranchId}: {MachineA} and {MachineB}. " +
+                "Each keeps its own records and syncs them under this one branch, so their " +
+                "takings will be merged and cannot be separated afterwards. One of them should " +
+                "be stopped.",
+                dto.BranchId, beat.ReportedByMachine, dto.MachineName);
+        }
+
+        beat.ReportedByMachine = dto.MachineName;
+
+        // Cleared once nothing has disagreed for a full silent window, so a clash that was
+        // dealt with stops being reported and the warning keeps meaning something.
+        if (beat.ConflictingMachineSeenAt is { } seen && now - seen > SilentAfter)
+        {
+            beat.ConflictingMachine = null;
+            beat.ConflictingMachineSeenAt = null;
+        }
+
         beat.LastSeenAt = now;
 
         // Converted here, and this one line is why no heartbeat ever reached Head Office.
@@ -224,6 +257,13 @@ public class BranchHeartbeatController : ControllerBase
                 lastSeenAt = beat?.LastSeenAt,
                 secondsSinceLastSeen = beat is null ? (int?)null : (int)(now - beat.LastSeenAt).TotalSeconds,
                 version = beat?.Version,
+                reportedByMachine = beat?.ReportedByMachine,
+
+                // Surfaced beside the branch's own figures rather than buried in a log,
+                // because every number on this row is wrong while two machines are supplying
+                // them and nobody would think to doubt them otherwise.
+                conflictingMachine = beat?.ConflictingMachine,
+                conflictingMachineSeenAt = beat?.ConflictingMachineSeenAt,
                 operatorsOnDuty = beat is null
                     ? new List<OperatorOnDutyDto>()
                     : JsonSerializer.Deserialize<List<OperatorOnDutyDto>>(beat.OperatorsOnDuty ?? "[]")

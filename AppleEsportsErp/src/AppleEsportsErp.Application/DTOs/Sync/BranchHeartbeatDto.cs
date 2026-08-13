@@ -12,6 +12,22 @@ public class BranchHeartbeatDto
     public Guid BranchId { get; set; }
     public string? Version { get; set; }
 
+    /// <summary>
+    /// Which PC this came from, as Windows knows it.
+    ///
+    /// Added because two machines were both reporting as Adajan for an entire evening and
+    /// nothing could say so. They overwrote each other every thirty seconds - one with an
+    /// operator on shift, one with nobody - so the owner's screen flickered between two
+    /// truths and neither was wrong. Finding it meant reading raw web server logs for
+    /// source IP addresses.
+    ///
+    /// A name costs nothing to send and turns that into a sentence Head Office can print.
+    /// It matters far beyond a confusing screen: each machine keeps its own database and
+    /// syncs its own bills upward under the same branch, so with real money two shops'
+    /// takings would merge into one and nothing would separate them again.
+    /// </summary>
+    public string? MachineName { get; set; }
+
     /// <summary>The branch's own clock. A shop with the wrong time produces reports nobody can reconcile.</summary>
     public DateTimeOffset BranchLocalTime { get; set; }
 

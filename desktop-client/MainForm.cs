@@ -39,6 +39,76 @@ public sealed class MainForm : Form
     /// </summary>
     private static readonly TimeSpan StartupGrace = TimeSpan.FromMinutes(2);
 
+    /// <summary>
+    /// The same, while an update is being installed.
+    ///
+    /// Two minutes is right for an ordinary morning start. It is nowhere near enough for an
+    /// upgrade: the installer stops the API and PostgreSQL, replaces 300 MB, brings the
+    /// database back up and applies migrations. The old grace ran out somewhere in the middle
+    /// of that and the operator got "Cannot reach the branch system" with a list of things to
+    /// check, none of which were wrong - the software blaming the shop for something it was
+    /// doing to itself.
+    ///
+    /// Twenty minutes covers a slow disk and a large migration with room to spare, and it only
+    /// applies when an update is genuinely under way. A real fault at any other time is still
+    /// reported in two minutes, which is the whole reason not to simply raise the grace for
+    /// everything.
+    /// </summary>
+    private static readonly TimeSpan UpdateGrace = TimeSpan.FromMinutes(20);
+
+    /// <summary>
+    /// Written the moment before the installer is launched, and deleted the moment the
+    /// dashboard loads again.
+    ///
+    /// It has to be a file. The app deliberately exits so the installer can replace its own
+    /// executable, so nothing held in memory survives to tell the next launch why it could
+    /// not connect. Kept beside the config rather than in the program folder, because the
+    /// program folder is exactly what is being overwritten.
+    /// </summary>
+    private static string UpdateMarkerPath =>
+        Path.Combine(AppConfig.AppDataDirectory, "installing-update.txt");
+
+    /// <summary>The version being installed, when one is. Null the rest of the time.</summary>
+    private static string? UpdateInProgress()
+    {
+        try
+        {
+            if (!File.Exists(UpdateMarkerPath)) return null;
+
+            // A stale marker must not excuse a genuine outage for ever. If an install was
+            // interrupted - power cut mid-upgrade - the shop is back to reporting faults
+            // normally within the hour rather than sitting on a reassuring message that has
+            // stopped being true.
+            if (DateTime.UtcNow - File.GetLastWriteTimeUtc(UpdateMarkerPath) > TimeSpan.FromHours(1))
+            {
+                ClearUpdateMarker();
+                return null;
+            }
+
+            var version = File.ReadAllText(UpdateMarkerPath).Trim();
+            return string.IsNullOrWhiteSpace(version) ? "a new version" : version;
+        }
+        catch
+        {
+            return null;   // unreadable marker is not a reason to fail to start
+        }
+    }
+
+    private static void MarkUpdateStarting(string version)
+    {
+        try
+        {
+            Directory.CreateDirectory(AppConfig.AppDataDirectory);
+            File.WriteAllText(UpdateMarkerPath, version);
+        }
+        catch { /* best effort - the update still proceeds, the message is just less specific */ }
+    }
+
+    private static void ClearUpdateMarker()
+    {
+        try { if (File.Exists(UpdateMarkerPath)) File.Delete(UpdateMarkerPath); } catch { }
+    }
+
     private readonly System.Windows.Forms.Timer _retryTimer = new() { Interval = 3000 };
     private DateTime? _firstFailureAt;
 
@@ -231,20 +301,55 @@ public sealed class MainForm : Form
             if (args.IsSuccess)
             {
                 _firstFailureAt = null;
+
+                // The dashboard loaded, so whatever was being installed has finished and the
+                // branch is back. Clearing it here rather than on launch means an update that
+                // needs a second restart still gets the patient message.
+                ClearUpdateMarker();
+
                 HideOverlay();
                 return;
             }
 
             _firstFailureAt ??= DateTime.UtcNow;
-            var remaining = StartupGrace - (DateTime.UtcNow - _firstFailureAt.Value);
+
+            // An update in progress is not a fault, and must never be dressed up as one. The
+            // installer has deliberately stopped the branch to replace it; saying "Cannot
+            // reach the branch system" and asking the operator to check the network is both
+            // untrue and alarming, and it teaches them to click through error screens.
+            var installing = UpdateInProgress();
+            var grace = installing is null ? StartupGrace : UpdateGrace;
+            var remaining = grace - (DateTime.UtcNow - _firstFailureAt.Value);
 
             if (remaining > TimeSpan.Zero)
             {
                 // No buttons while this is running: there is nothing for anyone to do, and
                 // offering "Change server..." to an operator whose branch is merely still
                 // booting invites them to break a correct setting.
-                ShowOverlay($"Starting the branch system…  ({(int)remaining.TotalSeconds}s)", showActions: false);
+                ShowOverlay(
+                    installing is null
+                        ? $"Starting the branch system…  ({(int)remaining.TotalSeconds}s)"
+                        : $"Installing update {installing}.\n\n" +
+                          "This takes a few minutes and finishes on its own. Nothing is wrong, " +
+                          "and there is nothing you need to do — the screen comes back by itself.\n\n" +
+                          "Please do not switch this PC off.",
+                    showActions: false);
+
                 _retryTimer.Start();
+                return;
+            }
+
+            // Past even the update grace. Say so plainly rather than silently reverting to a
+            // network error, because "the update did not finish" is a different problem with a
+            // different answer, and the person reading this needs to know which one they have.
+            if (installing is not null)
+            {
+                ClearUpdateMarker();
+                ShowOverlay(
+                    $"The update to {installing} has not finished, and it is taking longer than it should.\n\n" +
+                    "Your takings and records are safe — an update never touches them. " +
+                    "Tell the owner, and try switching this PC off and on again.",
+                    showActions: true);
                 return;
             }
 
@@ -386,8 +491,25 @@ public sealed class MainForm : Form
 
         BeginInvoke(() =>
         {
+            // Written before anything is launched, and it has to be before: this process is
+            // about to exit so the installer can replace its own executable, and the next
+            // launch has no other way of knowing why the branch is unreachable. Without it
+            // the operator meets "Cannot reach the branch system" and a list of things to
+            // check, none of which are wrong.
+            MarkUpdateStarting(available.Version);
+
             _allowClose = true;   // the installer needs this process gone to replace the exe
-            UpdateService.Install(installer);
+
+            if (!UpdateService.Install(installer))
+            {
+                // Refused at the UAC prompt or blocked by policy - nothing was stopped and
+                // nothing will restart, so the marker would only produce a patient message
+                // about an update that is not happening.
+                ClearUpdateMarker();
+                _allowClose = false;
+                return;
+            }
+
             Application.Exit();
         });
     }

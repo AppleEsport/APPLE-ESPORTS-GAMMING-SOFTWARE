@@ -150,9 +150,24 @@ public sealed class UpdateService : IDisposable
     {
         try
         {
+            // /LOG, because without it a failed update leaves nothing to read.
+            //
+            // An upgrade on a real branch stopped both services, failed partway, rolled the
+            // files back and left the shop switched off. Working out why meant Windows event
+            // logs and a web server's access log, and even then the installer's own reason was
+            // simply gone. One flag would have named the file it could not replace.
+            //
+            // Written beside the branch's other logs rather than to the temp folder, so it is
+            // somewhere a person can be told to look. Overwritten each time: the interesting
+            // failure is the one that just happened.
+            var log = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                "Apple Esports", "logs", "update-install.log");
+            Directory.CreateDirectory(Path.GetDirectoryName(log)!);
+
             Process.Start(new ProcessStartInfo(installerPath)
             {
-                Arguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /RESTARTAPPLICATIONS",
+                Arguments = $"/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /RESTARTAPPLICATIONS \"/LOG={log}\"",
                 UseShellExecute = true,
                 Verb = "runas",   // installing to Program Files needs elevation
             });
