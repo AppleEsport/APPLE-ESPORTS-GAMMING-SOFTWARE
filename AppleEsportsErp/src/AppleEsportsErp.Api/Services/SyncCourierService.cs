@@ -19,21 +19,7 @@ public class SyncCourierService : BackgroundService
     private readonly ILogger<SyncCourierService> _logger;
     private readonly IConfiguration _configuration;
     private readonly IServiceProvider _serviceProvider;
-    /// <summary>
-    /// How long a bill can sit at the branch before Head Office is told.
-    ///
-    /// Thirty seconds was chosen when nothing else was moving. Once the branch began reporting
-    /// its live state every three seconds, the gap between the two became the problem: the
-    /// heartbeat would show a PC busy while the session that made it busy had not arrived yet,
-    /// so the owner saw a shop trading with no sessions behind it, then watched the sessions
-    /// appear half a minute later. Both halves correct, the pair of them wrong together.
-    ///
-    /// Three seconds, to match. The query behind it is one indexed look for undelivered rows
-    /// and finds nothing almost every time, and a branch with nothing to send posts nothing at
-    /// all - so a quiet shop costs a local database query every three seconds and no traffic.
-    /// </summary>
-    private readonly int _pollIntervalSeconds = 3;
-
+    private readonly int _pollIntervalSeconds = 30;
     private readonly int _maxAttempts = 5;
     private readonly int _batchSize = 100;
 
@@ -50,7 +36,7 @@ public class SyncCourierService : BackgroundService
         _logger = logger;
         _configuration = configuration;
         _serviceProvider = serviceProvider;
-        _pollIntervalSeconds = configuration.GetValue("Sync:PollIntervalSeconds", 3);
+        _pollIntervalSeconds = configuration.GetValue("Sync:PollIntervalSeconds", 30);
         _maxAttempts = configuration.GetValue("Sync:MaxRetryAttempts", 5);
         _batchSize = configuration.GetValue("Sync:BatchSize", 100);
     }

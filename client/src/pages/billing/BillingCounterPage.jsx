@@ -11,7 +11,6 @@ import ActiveBillsList from '../../components/billing/ActiveBillsList';
 import BillDetailsPanel from '../../components/billing/BillDetailsPanel';
 import BillingAddItemsPanel from '../../components/billing/BillingAddItemsPanel';
 import { getActiveReservations } from '../../api/reservations.api';
-import { startSessionRemoteAware } from '../../api/branchCommands.api';
 
 const dedupeSessionsByPc = (items) => {
   const map = new Map();
@@ -209,10 +208,12 @@ export default function BillingCounterPage() {
         expectedAmount: (req.duration / 60) * ratePerHour,
         notes: 'Walk-in approved from dashboard'
       };
-      await startSessionRemoteAware(activeBranch?.id, req.pcId, payload);
-      toast.success('Walk-in Approved and Session Started!');
-      setPendingWalkins(prev => prev.filter(p => p.pcId !== req.pcId));
-      fetchDashboardData();
+      const res = await api.post('/sessions/start', payload);
+      if (res.data.success) {
+        toast.success('Walk-in Approved and Session Started!');
+        setPendingWalkins(prev => prev.filter(p => p.pcId !== req.pcId));
+        fetchDashboardData();
+      }
     } catch (err) {
       toast.error(err.response?.data?.error || 'Error approving walkin');
     }

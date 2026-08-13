@@ -31,7 +31,6 @@ public class AppDbContext : DbContext
     public DbSet<DenominationCount> DenominationCounts => Set<DenominationCount>();
     public DbSet<ShiftHandover> ShiftHandovers => Set<ShiftHandover>();
     public DbSet<BranchHeartbeat> BranchHeartbeats => Set<BranchHeartbeat>();
-    public DbSet<BranchCommand> BranchCommands => Set<BranchCommand>();
     public DbSet<InventoryItem> InventoryItems => Set<InventoryItem>();
     public DbSet<InventoryLog> InventoryLogs => Set<InventoryLog>();
     public DbSet<FoodOrder> FoodOrders => Set<FoodOrder>();

@@ -298,13 +298,6 @@ public class SyncInboxController : ControllerBase
     /// change was in July, against sessions that no longer existed. Four days of fiction on the
     /// screen the owner uses to see the business.
     /// </summary>
-    /// <summary>
-    /// No longer used, and deliberately so - see the note on the two calls that were removed.
-    ///
-    /// Kept only because a branch far enough behind to send events but no heartbeat would
-    /// otherwise leave Head Office with no PC state at all. Nothing on any supported version
-    /// reaches this.
-    /// </summary>
     private async Task SetPcStateAsync(Guid? pcId, PcState state, Guid? currentSessionId)
     {
         if (pcId is null) return;
@@ -546,7 +539,7 @@ public class SyncInboxController : ControllerBase
             UpdatedAt = held.ReceivedAt,
         });
 
-        // PC state is deliberately NOT written here. See UpsertSessionStoppedAsync below.
+        await SetPcStateAsync(pcId, PcState.Active, sessionId);
     }
 
     private async Task UpsertSessionStoppedAsync(SyncInboxEntry held, JsonElement root)
@@ -573,28 +566,10 @@ public class SyncInboxController : ControllerBase
         session.TotalAmount = ReadDecimal(root, "totalAmount") ?? session.TotalAmount;
         session.UpdatedAt = held.ReceivedAt;
 
-        // PC state is deliberately not written from events, and this is the fix for a grid
-        // that was right most of the time and wrong the rest.
-        //
-        // Two things were writing pcs.State. Events arrive in batches and can be up to the
-        // courier's whole interval old; the heartbeat arrives every three seconds and is always
-        // current. So a session.stopped delivered late would set a PC back to idle after the
-        // heartbeat had already reported the next customer sitting at it - and thirty seconds
-        // later the heartbeat would put it back. A PC flickering between two states, each
-        // writer perfectly correct about a different moment.
-        //
-        // No amount of speed fixes that; it only narrows the window. The rule that does fix it
-        // is one owner per fact:
-        //
-        //   state   - what a PC is doing NOW, who is on shift, what the drawer holds.
-        //             Owned by the heartbeat. Only the newest matters, so the newest wins.
-        //
-        //   history - a session happened, a bill was paid, Rs 180 was taken.
-        //             Owned by these events. Must never be lost, so they queue and retry.
-        //
-        // This method still records the session's own history - its end time, its minutes, its
-        // money - because that is history and belongs here. Where the PC stands right now is
-        // the branch's to report, and it reports it three seconds from now regardless.
+        // The PC is free again as far as Head Office is concerned. Whether the branch shows it
+        // as awaiting billing is the branch's own business - that state exists to tell the
+        // operator standing there to collect money, and there is nobody standing at Head Office.
+        await SetPcStateAsync(session.PcId, PcState.Idle, currentSessionId: null);
     }
 
     // ── Payload readers ──
