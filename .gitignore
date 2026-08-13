@@ -62,3 +62,11 @@ dist/
 
 # Publish output — build artefacts, and the agent exe alone is 156 MB
 **/publish/
+
+# Build scratch for the branch installer. Never source, and enormous.
+# Committing it once put 21,428 PostgreSQL files in a single commit; this
+# branch does not carry the installer at all, so the folder only ever appears
+# here as a leftover from switching branches.
+installer/branch/staging/
+installer/branch/.cache/
+dist/
