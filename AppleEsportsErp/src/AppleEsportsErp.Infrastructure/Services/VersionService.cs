@@ -211,10 +211,30 @@ public class VersionService : IVersionService
 
         if (status == null)
         {
+            // The version Head Office would like this branch to be on. The column does not
+            // accept null, and this line never set it - so the very first report from any
+            // branch failed with a not-null violation, the endpoint answered 500, and the
+            // branch retried every fifteen minutes for ever.
+            //
+            // It was invisible for as long as it was untrue: no branch had ever reported, so
+            // the row-creation path had never once run. The first branch to report found it
+            // immediately, and the Updates page stayed empty while the branch log filled with
+            // refusals nobody was reading.
+            var latestApproved = await _unitOfWork.Repository<VersionInfo>()
+                .Query()
+                .Where(v => v.ApprovedForRollout)
+                .OrderByDescending(v => v.CreatedAt)
+                .Select(v => v.CurrentVersion)
+                .FirstOrDefaultAsync();
+
             status = new BranchVersionStatus
             {
                 BranchId = branchId,
                 CurrentVersion = currentVersion,
+                // Falls back to what the branch says it is running. "Nothing has been approved
+                // yet" and "this branch is behind" are different things, and an empty string
+                // here would read as the second.
+                LatestApprovedVersion = latestApproved ?? currentVersion,
                 // AutoUpdateEnabled is deliberately not set here. The entity defaults it to
                 // ON, and this is the line a branch takes the very first time it reports in -
                 // setting it false here switched automatic updates off for every branch at
