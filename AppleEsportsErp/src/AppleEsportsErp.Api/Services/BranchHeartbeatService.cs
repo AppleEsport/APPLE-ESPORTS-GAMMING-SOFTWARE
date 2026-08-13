@@ -32,7 +32,23 @@ public class BranchHeartbeatService : BackgroundService
     private readonly IServiceProvider _serviceProvider;
     private readonly IHttpClientFactory _httpClientFactory;
 
-    private static readonly TimeSpan Every = TimeSpan.FromSeconds(30);
+    /// <summary>
+    /// Three seconds, so Head Office is watching the shop rather than reading a report about it.
+    ///
+    /// Thirty was chosen to be frugal and was simply too slow to trust: an owner who starts a
+    /// session and stares at an unchanged screen for half a minute concludes sync is broken, and
+    /// checking by waiting is no way to run four branches. At three seconds the two screens
+    /// agree while you are still looking at them.
+    ///
+    /// What makes this affordable is on the receiving side, not here: Head Office now writes only
+    /// rows whose values actually changed. A quiet shop therefore costs one small row update per
+    /// beat no matter how many PCs it has, instead of rewriting every PC twenty times a minute.
+    ///
+    /// The cost that remains is bandwidth - a few KB each way, so roughly 100 MB a day per
+    /// branch. Nothing on a broadband line. Worth knowing if a branch ever runs on a phone
+    /// tether for a day.
+    /// </summary>
+    private static readonly TimeSpan Every = TimeSpan.FromSeconds(3);
 
     /// <summary>
     /// Logged at most this often when the line is down. Without it a shop offline for a night

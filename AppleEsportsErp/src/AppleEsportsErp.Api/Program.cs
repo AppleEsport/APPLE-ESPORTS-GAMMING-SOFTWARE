@@ -476,10 +476,39 @@ app.UseRateLimiter();
 // which removes a whole moving part from every operator PC. In Docker the client container
 // still serves the UI and wwwroot simply does not exist, so this stays inert there.
 var dashboardRoot = Path.Combine(app.Environment.ContentRootPath, "wwwroot");
+
+// How the browser is allowed to keep the dashboard's files.
+//
+// This is what decides whether an update is actually visible after it installs. The build
+// gives every file under /assets a name containing a hash of its contents, so index-Bh2pXVML.js
+// can never change meaning - a different build produces a different name. Those are safe to
+// keep for ever. index.html is the opposite: its name never changes and it is the thing that
+// names which bundle to load. Cache that and the browser goes on loading last week's app from
+// disk, no matter what was installed underneath it.
+//
+// That is precisely what happened on a real branch. 2.2.5 installed correctly, and the counter
+// still showed 2.2.4 until somebody pressed Ctrl+Shift+R. No operator will ever do that; they
+// would have reported updates as broken, and they would have been right to. Every release after
+// this one would have hit the same wall.
+//
+// favicon, logo and icons sit at the root and are not hashed either, so they revalidate too.
+// One conditional request each, answered 304 in a few bytes.
+static void CacheDashboardFiles(Microsoft.AspNetCore.StaticFiles.StaticFileResponseContext ctx)
+{
+    var path = ctx.Context.Request.Path.Value ?? string.Empty;
+
+    ctx.Context.Response.Headers.CacheControl =
+        path.StartsWith("/assets/", StringComparison.OrdinalIgnoreCase)
+            ? "public, max-age=31536000, immutable"
+            : "no-cache, must-revalidate";
+}
+
+var dashboardFiles = new StaticFileOptions { OnPrepareResponse = CacheDashboardFiles };
+
 if (Directory.Exists(dashboardRoot))
 {
     app.UseDefaultFiles();
-    app.UseStaticFiles();
+    app.UseStaticFiles(dashboardFiles);
     Log.Information("Serving the dashboard from {Root}", dashboardRoot);
 }
 
@@ -502,7 +531,11 @@ app.MapHub<PcOverlayHub>("/hubs/pc-overlay");
 // controllers and hubs so it can never shadow a real endpoint.
 if (Directory.Exists(dashboardRoot))
 {
-    app.MapFallbackToFile("index.html");
+    // The same no-cache rules, passed in explicitly: the fallback does not inherit the options
+    // given to UseStaticFiles. Miss this and every deep link - /app/sessions, the page an
+    // operator actually has open all day - still serves a cached index.html and still shows
+    // the old app, while a plain visit to the root correctly shows the new one.
+    app.MapFallbackToFile("index.html", dashboardFiles);
 }
 
 // ── Startup banner ──
