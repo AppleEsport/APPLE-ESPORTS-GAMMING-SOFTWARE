@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using AppleEsportsErp.Application.Interfaces;
 using AppleEsportsErp.Infrastructure.Configuration;
 using AppleEsportsErp.Infrastructure.Data;
 
@@ -30,7 +31,12 @@ public class BranchVersionReporterService : BackgroundService
     private readonly IServiceProvider _serviceProvider;
     private readonly IHttpClientFactory _httpClientFactory;
 
-    private static readonly TimeSpan ReportEvery = TimeSpan.FromMinutes(15);
+    // Every two minutes, not every fifteen. Fifteen was chosen for something that changes
+    // perhaps once a month, which is true of the VERSION but not of what a person watching the
+    // screen expects: after an update they look straight away, and being told "not reported
+    // yet" for a quarter of an hour reads as broken rather than as pending. The call is a few
+    // hundred bytes.
+    private static readonly TimeSpan ReportEvery = TimeSpan.FromMinutes(2);
 
     public BranchVersionReporterService(
         ILogger<BranchVersionReporterService> logger,
@@ -64,9 +70,10 @@ public class BranchVersionReporterService : BackgroundService
             return;
         }
 
-        // The API and the database both need to be up before this means anything, and a branch
-        // PC starting after a power cut brings several services up at once.
-        await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
+        // Long enough for the database to be accepting connections, short enough that somebody
+        // watching after an update is not left staring at a stale screen. A branch PC starting
+        // after a power cut brings several services up at once, so this is not instant.
+        await Task.Delay(TimeSpan.FromSeconds(20), stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -108,6 +115,26 @@ public class BranchVersionReporterService : BackgroundService
         // PCs themselves last reported rather than assumed, so "12 of 16 up to date" means
         // twelve machines said so.
         var totalPcs = await db.Pcs.CountAsync(p => p.BranchId == branch.Id && !p.IsDeleted, ct);
+
+        // Written to the branch's OWN database first, before Head Office is even contacted.
+        //
+        // The branch's Updates page reads locally, and nothing local ever filled this in - the
+        // reporter only sent upward - so a counter PC said "Not reported yet" for ever while
+        // Head Office showed the version perfectly. It was reading a drawer nothing put
+        // anything into.
+        //
+        // Local first also means it is right with no internet, which is the state a branch is
+        // designed to survive. What version am I running is a question a shop can always answer
+        // about itself; it should never depend on a line to Head Office.
+        var versions = scope.ServiceProvider.GetRequiredService<IVersionService>();
+        try
+        {
+            await versions.UpdateBranchVersionStatusAsync(branch.Id, RunningVersion, 0, totalPcs);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not record this branch's own version locally.");
+        }
 
         var payload = JsonSerializer.Serialize(new
         {
