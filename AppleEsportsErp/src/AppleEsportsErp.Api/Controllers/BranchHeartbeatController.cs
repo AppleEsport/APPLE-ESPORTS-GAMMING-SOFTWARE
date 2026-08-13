@@ -74,7 +74,26 @@ public class BranchHeartbeatController : ControllerBase
         }
 
         beat.LastSeenAt = now;
-        beat.BranchLocalTime = dto.BranchLocalTime;
+
+        // Converted here, and this one line is why no heartbeat ever reached Head Office.
+        //
+        // The branch sends its own wall clock, offset and all - 22:44 +05:30. PostgreSQL's
+        // "timestamp with time zone" does not store an offset; it stores an instant, and
+        // Npgsql refuses anything that is not already UTC rather than silently guessing.
+        // So every beat threw on save and came back 500. Twenty a minute, from every branch,
+        // for hours, and nothing on either screen said a word - Head Office looked like a
+        // shop that had simply gone quiet.
+        //
+        // Nothing is lost. ToUniversalTime keeps the instant exactly, and the instant is the
+        // whole point: comparing it against Head Office's own clock is how a branch with the
+        // wrong time gets noticed. The +05:30 carried no information anyway - every branch
+        // in this business is in India.
+        //
+        // Done on the receiving side deliberately. Head Office cannot assume every branch is
+        // running today's build, and one shop with an odd clock must not be able to knock
+        // over the endpoint that every other shop reports through.
+        beat.BranchLocalTime = dto.BranchLocalTime.ToUniversalTime();
+
         beat.Version = dto.Version;
         beat.OperatorsOnDuty = JsonSerializer.Serialize(dto.OperatorsOnDuty);
         beat.OperatorsOnDutyCount = dto.OperatorsOnDuty.Count;
