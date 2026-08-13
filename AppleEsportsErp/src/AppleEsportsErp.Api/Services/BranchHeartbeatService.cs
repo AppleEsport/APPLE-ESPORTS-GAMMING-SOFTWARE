@@ -2,9 +2,7 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
-using AppleEsportsErp.Application.DTOs.Sessions;
 using AppleEsportsErp.Application.DTOs.Sync;
-using AppleEsportsErp.Application.Interfaces;
 using AppleEsportsErp.Application.Services;
 using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
@@ -189,7 +187,6 @@ public class BranchHeartbeatService : BackgroundService
             DrawerExpected = drawer,
             TakingsToday = takings,
             UndeliveredRecords = undelivered,
-            CommandResults = _pendingCommandResults,
         };
 
         var client = _httpClientFactory.CreateClient();
@@ -210,193 +207,8 @@ public class BranchHeartbeatService : BackgroundService
             return;
         }
 
-        // Head Office has now applied these - see it acknowledged them by getting here at all.
-        // Clearing before the body is even read means a crash mid-beat re-sends rather than
-        // silently drops, which is the safe direction to err in.
-        _pendingCommandResults = new List<BranchCommandResultDto>();
-
-        var body = await response.Content.ReadAsStringAsync(ct);
-        await ApplyConfigFromReplyAsync(db, body, ct);
-        await ExecuteCommandsFromReplyAsync(branchId, body, ct);
+        await ApplyConfigFromReplyAsync(db, await response.Content.ReadAsStringAsync(ct), ct);
     }
-
-    /// <summary>
-    /// Results waiting to be reported on the next beat, for commands this process has already
-    /// carried out. Held in memory only - a restart between execution and acknowledgement means
-    /// Head Office keeps re-sending the same command, which this branch has already finished
-    /// and will simply do nothing further about (see the duplicate-session guard below).
-    /// </summary>
-    private List<BranchCommandResultDto> _pendingCommandResults = new();
-
-    /// <summary>
-    /// Carries out whatever Head Office asked for in this heartbeat's reply, through the exact
-    /// same session service a counter operator's own click goes through - so a remotely started
-    /// or stopped session appears on this PC's screen precisely as if someone here had done it.
-    /// </summary>
-    private async Task ExecuteCommandsFromReplyAsync(Guid branchId, string body, CancellationToken ct)
-    {
-        List<BranchCommandDto>? commands;
-        try
-        {
-            using var doc = JsonDocument.Parse(body);
-            if (!doc.RootElement.TryGetProperty("data", out var data)) return;
-            if (!data.TryGetProperty("commands", out var node) || node.ValueKind != JsonValueKind.Array) return;
-
-            commands = JsonSerializer.Deserialize<List<BranchCommandDto>>(node.GetRawText(),
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning("Could not read the commands Head Office sent ({Reason}).",
-                ex.GetBaseException().Message);
-            return;
-        }
-
-        if (commands is null || commands.Count == 0) return;
-
-        foreach (var command in commands)
-        {
-            // Head Office keeps re-sending a command until it hears back, so the same id can
-            // arrive again before this branch has managed to report the first result. Running
-            // a start twice would seat two customers on the same PC.
-            if (_pendingCommandResults.Any(r => r.CommandId == command.Id)) continue;
-
-            _pendingCommandResults.Add(await ExecuteOneCommandAsync(branchId, command, ct));
-        }
-    }
-
-    private async Task<BranchCommandResultDto> ExecuteOneCommandAsync(Guid branchId, BranchCommandDto command, CancellationToken ct)
-    {
-        using var scope = _serviceProvider.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var sessionService = scope.ServiceProvider.GetRequiredService<ISessionService>();
-
-        try
-        {
-            if (!Enum.TryParse<CommandType>(command.Type, out var type))
-                return Failed(command.Id, $"Unknown command type '{command.Type}'.");
-
-            using var payload = JsonDocument.Parse(command.PayloadJson);
-            var root = payload.RootElement;
-
-            if (type == CommandType.StartSession)
-            {
-                if (command.PcId is null) return Failed(command.Id, "No PC named.");
-
-                var (operatorId, shiftId) = await ResolveActingContextAsync(db, branchId, ct);
-
-                var startDto = new SessionStartDto
-                {
-                    PcId = command.PcId.Value,
-                    CustomerName = ReadString(root, "customerName"),
-                    MemberId = ReadGuid(root, "memberId"),
-                    DurationMinutes = ReadDecimal(root, "durationMinutes") ?? 0,
-                    PackageName = ReadString(root, "packageName") ?? "Remote start",
-                    ExpectedAmount = ReadDecimal(root, "expectedAmount") ?? 0,
-                };
-
-                var session = await sessionService.StartSessionAsync(branchId, operatorId, shiftId, startDto);
-                return new BranchCommandResultDto { CommandId = command.Id, Success = true, SessionId = session.Id };
-            }
-            else
-            {
-                var sessionId = ReadGuid(root, "sessionId");
-                if (sessionId is null) return Failed(command.Id, "No session named to stop.");
-
-                var (operatorId, _) = await ResolveActingContextAsync(db, branchId, ct);
-                var deferPayment = root.TryGetProperty("deferPayment", out var dp) && dp.ValueKind == JsonValueKind.True;
-
-                var session = await sessionService.StopSessionAsync(branchId, operatorId, sessionId.Value, deferPayment);
-                return new BranchCommandResultDto { CommandId = command.Id, Success = true, SessionId = session.Id };
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning("Could not carry out remote command {CommandId} ({Reason}).",
-                command.Id, ex.GetBaseException().Message);
-            return Failed(command.Id, ex.GetBaseException().Message);
-        }
-
-        static BranchCommandResultDto Failed(Guid id, string message) =>
-            new() { CommandId = id, Success = false, Message = message };
-    }
-
-    /// <summary>
-    /// Who a remote command runs as, locally. The same fallback ControllerExtensions already
-    /// uses when a super admin acts on a branch through the API: whoever is actually on duty
-    /// if anyone is, otherwise a System Administrator operator created (once) for this purpose,
-    /// with its own open shift and cash register. Never Head Office's own admin id - that
-    /// operator was never synced to this branch and starting a session under it would fail the
-    /// same foreign-key check UpsertSessionStartedAsync already enforces on the way back up.
-    /// </summary>
-    private static async Task<(Guid operatorId, Guid shiftId)> ResolveActingContextAsync(
-        AppDbContext db, Guid branchId, CancellationToken ct)
-    {
-        var activeShift = await db.Shifts
-            .Where(s => s.BranchId == branchId && s.Status == ShiftStatus.Active)
-            .OrderByDescending(s => s.LoginTime)
-            .FirstOrDefaultAsync(ct);
-
-        if (activeShift != null) return (activeShift.OperatorId, activeShift.Id);
-
-        var sysUsername = $"system_admin_{branchId:N}";
-        var sysOp = await db.Operators.FirstOrDefaultAsync(o => o.BranchId == branchId && o.Username == sysUsername, ct);
-        if (sysOp is null)
-        {
-            sysOp = new Operator
-            {
-                Id = Guid.NewGuid(),
-                BranchId = branchId,
-                FullName = "System Administrator",
-                Username = sysUsername,
-                Email = $"{sysUsername}@system.local",
-                PasswordHash = "LOCKED",
-                Status = OperatorStatus.Active,
-                CreatedAt = DateTimeOffset.UtcNow,
-                UpdatedAt = DateTimeOffset.UtcNow,
-            };
-            db.Operators.Add(sysOp);
-        }
-
-        activeShift = new Shift
-        {
-            Id = Guid.NewGuid(),
-            BranchId = branchId,
-            OperatorId = sysOp.Id,
-            LoginTime = DateTimeOffset.UtcNow,
-            CreatedAt = DateTimeOffset.UtcNow,
-            Status = ShiftStatus.Active,
-        };
-        db.Shifts.Add(activeShift);
-
-        db.CashRegisters.Add(new CashRegister
-        {
-            Id = Guid.NewGuid(),
-            BranchId = branchId,
-            OperatorId = sysOp.Id,
-            ShiftId = activeShift.Id,
-            OpeningBalance = 0,
-            ExpectedDrawerCash = 0,
-            TotalCashSales = 0,
-            TotalSplitCash = 0,
-            Status = CashRegisterStatus.Open,
-            OpenedAt = DateTimeOffset.UtcNow,
-        });
-
-        await db.SaveChangesAsync(ct);
-        return (sysOp.Id, activeShift.Id);
-    }
-
-    private static Guid? ReadGuid(JsonElement root, string name) =>
-        root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
-        && Guid.TryParse(v.GetString(), out var g) ? g : null;
-
-    private static string? ReadString(JsonElement root, string name) =>
-        root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
-
-    private static decimal? ReadDecimal(JsonElement root, string name) =>
-        root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number
-        && v.TryGetDecimal(out var d) ? d : null;
 
     /// <summary>
     /// Takes whatever settings Head Office sent back and makes this branch match them.

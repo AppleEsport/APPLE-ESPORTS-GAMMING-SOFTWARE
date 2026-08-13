@@ -16,7 +16,6 @@ import { startReservedSession, overrideReservation } from '../../api/reservation
 import { getRangeReport } from '../../api/food.api';
 import { getActiveBills, getBill, processPayment } from '../../api/billing.api';
 import { markMaintenanceAsync, resolveMaintenance } from '../../api/maintenanceLogs.api';
-import { startSessionRemoteAware } from '../../api/branchCommands.api';
 import { logActivity } from '../../utils/sessionLog';
 import { roundBillTotal } from '../../utils/billRounding';
 import { useNavigate } from 'react-router-dom';
@@ -272,7 +271,7 @@ export default function SessionsPage() {
       const pc = pcs.find(p => p.name === req.pcId || p.id === req.pcId);
       const actualPcId = pc ? pc.id : req.pcId;
 
-      await startSessionRemoteAware(targetBranchId, actualPcId, {
+      const res = await api.post('/sessions/start', {
         pcId: actualPcId,
         memberId: null,
         customerName: req.customerName,
@@ -280,16 +279,18 @@ export default function SessionsPage() {
         packageName: req.packageName || 'Walk-in',
         expectedAmount: expectedAmount
       });
-      toast.success(`Walk-in session started for ${req.pcId}`);
-      logActivity(`${req.pcId}: Walk-in session approved for ${req.customerName}.`, 'success');
-      setWalkinRequests(prev => prev.filter(r => r.pcId !== req.pcId));
-      setPcs(current => {
-        const idx = current.findIndex(p => p.id === actualPcId);
-        if (idx === -1) return current;
-        const next = [...current];
-        next[idx] = { ...next[idx], state: 'Active' };
-        return next;
-      });
+      if (res.data.success) {
+        toast.success(`Walk-in session started for ${req.pcId}`);
+        logActivity(`${req.pcId}: Walk-in session approved for ${req.customerName}.`, 'success');
+        setWalkinRequests(prev => prev.filter(r => r.pcId !== req.pcId));
+        setPcs(current => {
+          const idx = current.findIndex(p => p.id === actualPcId);
+          if (idx === -1) return current;
+          const next = [...current];
+          next[idx] = { ...next[idx], state: 'Active' };
+          return next;
+        });
+      }
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to approve walk-in');
     }

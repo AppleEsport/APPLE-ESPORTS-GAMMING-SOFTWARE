@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from 'react';
 import { Monitor, User, Clock, Wrench, AlertTriangle, Square, RefreshCw, Receipt, Coffee, Gift, Banknote, X } from 'lucide-react';
 import api from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
-import { useBranch } from '../../contexts/BranchContext';
 import { useNavigate } from 'react-router-dom';
 import { useToast } from '../ui/Toast';
 import StartSessionForm from './StartSessionForm';
@@ -12,7 +11,6 @@ import { formatMoney } from '../../utils/money';
 import { computeRoundedBreakdown } from '../../utils/billRounding';
 import { logActivity } from '../../utils/sessionLog';
 import { getSessionActivities } from '../../api/sessions.api';
-import { stopSessionRemoteAware } from '../../api/branchCommands.api';
 
 function useElapsedTime(startTimeIso) {
   const [elapsed, setElapsed] = useState({ h: 0, m: 0, s: 0, totalMin: 0 });
@@ -66,7 +64,6 @@ export default function PcDetailPanel({
   onFlagMaintenance, onCreditClick,
 }) {
   const { user } = useAuth();
-  const { activeBranch } = useBranch();
   const navigate = useNavigate();
   const toast = useToast();
   const elapsed = useElapsedTime(pc?.sessionStartTime);
@@ -114,15 +111,7 @@ export default function PcDetailPanel({
     const key = loadingKey || action;
     setActionLoading(key);
     try {
-      if (action === 'stop') {
-        // At Head Office this is refused directly (a stop written straight into Head
-        // Office's database would leave the branch's own screen never knowing) — see
-        // stopSessionRemoteAware, which falls back to a command the branch carries out
-        // and confirms. At a branch itself this is just the normal direct call.
-        await stopSessionRemoteAware(activeBranch?.id, pc.id, pc.activeSessionId, payload);
-      } else {
-        await api.post(`/sessions/${pc.activeSessionId}/${action}`, payload);
-      }
+      await api.post(`/sessions/${pc.activeSessionId}/${action}`, payload);
       if (payload.deferPayment) {
         toast.success('Session stopped. Bill moved to Review Billing — PC is now free.');
         logActivity(`${pc.name}: Session stopped. [ Usage: ₹${formatMoney(liveCharge)}, Total: ₹${formatMoney(liveCharge)} ] Bill moved to Review Billing.`, 'warn');
@@ -141,7 +130,7 @@ export default function PcDetailPanel({
     } finally {
       setActionLoading(null);
     }
-  }, [pc, onRefresh, toast, liveCharge, activeBranch]);
+  }, [pc, onRefresh, toast, liveCharge]);
 
   if (!pc) {
     return (

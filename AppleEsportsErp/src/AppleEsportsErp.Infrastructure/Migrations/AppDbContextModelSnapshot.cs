@@ -392,62 +392,6 @@ namespace AppleEsportsErp.Infrastructure.Migrations
                     b.ToTable("branches", (string)null);
                 });
 
-            modelBuilder.Entity("AppleEsportsErp.Domain.Entities.BranchCommand", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasDefaultValueSql("uuid_generate_v4()");
-
-                    b.Property<Guid>("BranchId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset?>("ConfirmedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTimeOffset?>("DeliveredAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid?>("IssuedByOperatorId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("PayloadJson")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("jsonb")
-                        .HasDefaultValue("{}");
-
-                    b.Property<Guid?>("PcId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("ResultMessage")
-                        .HasMaxLength(500)
-                        .HasColumnType("character varying(500)");
-
-                    b.Property<Guid?>("ResultSessionId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)");
-
-                    b.Property<string>("Type")
-                        .IsRequired()
-                        .HasMaxLength(30)
-                        .HasColumnType("character varying(30)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("BranchId", "Status")
-                        .HasDatabaseName("idx_branch_commands_pending");
-
-                    b.ToTable("branch_commands", (string)null);
-                });
-
             modelBuilder.Entity("AppleEsportsErp.Domain.Entities.BranchHeartbeat", b =>
                 {
                     b.Property<Guid>("BranchId")

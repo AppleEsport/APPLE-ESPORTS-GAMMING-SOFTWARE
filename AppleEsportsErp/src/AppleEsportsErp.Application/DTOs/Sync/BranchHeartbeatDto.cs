@@ -54,35 +54,6 @@ public class BranchHeartbeatDto
 
     /// <summary>How far behind sync is. Zero means Head Office is seeing everything.</summary>
     public int UndeliveredRecords { get; set; }
-
-    /// <summary>
-    /// What became of commands this branch was handed on a previous beat.
-    ///
-    /// Carried on the next beat outward rather than as its own call, for the same reason
-    /// config rides the reply inward: the connection already exists and already runs every
-    /// three seconds. A result that never arrives here costs nothing but Head Office staying
-    /// on "starting..." a little longer - the PC's own state, reported a few lines above in
-    /// <see cref="Pcs"/>, catches up regardless and is the thing that can never lie.
-    /// </summary>
-    public List<BranchCommandResultDto> CommandResults { get; set; } = new();
-}
-
-/// <summary>What the branch did with a command Head Office sent down.</summary>
-public class BranchCommandResultDto
-{
-    public Guid CommandId { get; set; }
-    public bool Success { get; set; }
-    public string? Message { get; set; }
-    public Guid? SessionId { get; set; }
-}
-
-/// <summary>A command as the branch receives it - Head Office's own id, kept as the branch's own id too.</summary>
-public class BranchCommandDto
-{
-    public Guid Id { get; set; }
-    public string Type { get; set; } = string.Empty;
-    public Guid? PcId { get; set; }
-    public string PayloadJson { get; set; } = "{}";
 }
 
 public class OperatorOnDutyDto

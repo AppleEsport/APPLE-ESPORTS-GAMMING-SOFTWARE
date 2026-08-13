@@ -140,7 +140,6 @@ public class BranchHeartbeatController : ControllerBase
 
         await ApplyOperatorsOnDutyAsync(dto, ct);
         await ApplyPcStatesAsync(dto, ct);
-        await ApplyCommandResultsAsync(dto, ct);
 
         await _db.SaveChangesAsync(ct);
 
@@ -148,10 +147,8 @@ public class BranchHeartbeatController : ControllerBase
         // never existed. Null when the branch already has them, so almost every beat stays a
         // few hundred bytes.
         var config = await ConfigForBranchIfChangedAsync(dto.BranchId, dto.ConfigVersion, ct);
-        var commands = await CommandsToDeliverAsync(dto.BranchId, ct);
-        await _db.SaveChangesAsync(ct);   // marks the commands above as Delivered
 
-        return Ok(ApiResponse<object>.Ok(new { received = true, at = now, config, commands }));
+        return Ok(ApiResponse<object>.Ok(new { received = true, at = now, config }));
     }
 
     /// <summary>
@@ -285,67 +282,6 @@ public class BranchHeartbeatController : ControllerBase
             pc.LastActiveAt = DateTimeOffset.UtcNow;
             pc.UpdatedAt = DateTimeOffset.UtcNow;
         }
-    }
-
-    /// <summary>
-    /// Records what the branch did with any commands it was handed on a previous beat.
-    ///
-    /// Applied before the reply is built, so a result and the next batch of pending commands
-    /// can never cross in the same beat - a confirmed command is never handed back out.
-    /// </summary>
-    private async Task ApplyCommandResultsAsync(BranchHeartbeatDto dto, CancellationToken ct)
-    {
-        if (dto.CommandResults.Count == 0) return;
-
-        var ids = dto.CommandResults.Select(r => r.CommandId).ToList();
-        var commands = await _db.BranchCommands
-            .Where(c => c.BranchId == dto.BranchId && ids.Contains(c.Id))
-            .ToListAsync(ct);
-
-        foreach (var result in dto.CommandResults)
-        {
-            var command = commands.FirstOrDefault(c => c.Id == result.CommandId);
-            if (command is null || command.Status is CommandStatus.Confirmed or CommandStatus.Failed)
-                continue;   // unknown, or already settled by an earlier, re-sent result
-
-            command.Status = result.Success ? CommandStatus.Confirmed : CommandStatus.Failed;
-            command.ResultMessage = result.Message;
-            command.ResultSessionId = result.SessionId;
-            command.ConfirmedAt = DateTimeOffset.UtcNow;
-        }
-    }
-
-    /// <summary>
-    /// This branch's undelivered commands, marked Delivered as they go out.
-    ///
-    /// Kept small and re-sent every beat until acknowledged rather than removed on first
-    /// send: a beat can be lost same as any other message, and a command that silently
-    /// vanished with the packet would leave Head Office's screen stuck on "starting..."
-    /// forever with no way to tell the difference from a slow branch.
-    /// </summary>
-    private async Task<List<BranchCommandDto>> CommandsToDeliverAsync(Guid branchId, CancellationToken ct)
-    {
-        var pending = await _db.BranchCommands
-            .Where(c => c.BranchId == branchId && c.Status != CommandStatus.Confirmed && c.Status != CommandStatus.Failed)
-            .OrderBy(c => c.CreatedAt)
-            .Take(10)
-            .ToListAsync(ct);
-
-        if (pending.Count == 0) return new List<BranchCommandDto>();
-
-        foreach (var command in pending.Where(c => c.Status == CommandStatus.Pending))
-        {
-            command.Status = CommandStatus.Delivered;
-            command.DeliveredAt = DateTimeOffset.UtcNow;
-        }
-
-        return pending.Select(c => new BranchCommandDto
-        {
-            Id = c.Id,
-            Type = c.Type.ToString(),
-            PcId = c.PcId,
-            PayloadJson = c.PayloadJson,
-        }).ToList();
     }
 
     /// <summary>
