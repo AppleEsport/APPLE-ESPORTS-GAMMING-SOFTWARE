@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Common;
@@ -9,6 +10,7 @@ using AppleEsportsErp.Application.Interfaces;
 using AppleEsportsErp.Application.Services;
 using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
+using AppleEsportsErp.Infrastructure.Configuration;
 using AppleEsportsErp.Infrastructure.Data;
 
 namespace AppleEsportsErp.Infrastructure.Services;
@@ -24,6 +26,41 @@ public class SessionService : ISessionService
     private readonly IWalletService _walletService;
     private readonly ISessionActivityService _activityService;
     private readonly IOutboxService _outbox;
+    private readonly IConfiguration _configuration;
+
+    /// <summary>
+    /// Refuses to start or stop play from Head Office.
+    ///
+    /// Sync carries operations one way only: a branch tells Head Office what it did. There is
+    /// no path back, so a session created here is created here and nowhere else - and that is
+    /// not a display quirk, it is money that cannot be collected.
+    ///
+    /// Seen exactly this way on a real branch. A super admin started an hour on ADJ-PC-01 from
+    /// the server. The server showed it running and counting down. The counter showed PC-01 as
+    /// free, so the operator could not stop it and could not bill it, and a customer sitting
+    /// there would have played for nothing. It also explains a Stop button that "does not
+    /// work": start on one screen, stop on the other, and there is nothing on that side to stop.
+    ///
+    /// The counter PC is the only place that can do this, and that is not a limitation - it is
+    /// where the customer is, where the cash is, and the only machine that keeps working when
+    /// the internet does not. Head Office watching a shop is right; Head Office inventing a
+    /// shop's trading is not.
+    ///
+    /// Remote control of a branch is a reasonable thing to want and is a different mechanism: a
+    /// command sent down for the branch to carry out and report back, so both sides still agree.
+    /// Not this, which only ever wrote one side.
+    /// </summary>
+    private void RefuseIfHeadOffice(string what)
+    {
+        if (!_configuration.IsHeadOffice()) return;
+
+        throw new AppException(
+            $"A session cannot be {what} from Head Office - only at the branch's own counter PC. " +
+            "This screen shows what each shop is doing. Starting or stopping play here would be " +
+            "invisible to the counter, so nobody could bill it or collect the money.",
+            System.Net.HttpStatusCode.BadRequest,
+            "BRANCH_ONLY_OPERATION");
+    }
 
     public SessionService(
         IUnitOfWork uow,
@@ -34,8 +71,10 @@ public class SessionService : ISessionService
         ILogger<SessionService> logger,
         IWalletService walletService,
         ISessionActivityService activityService,
-        IOutboxService outbox)
+        IOutboxService outbox,
+        IConfiguration configuration)
     {
+        _configuration = configuration;
         _uow = uow;
         _db = db;
         _hubNotifier = hubNotifier;
@@ -95,6 +134,8 @@ public class SessionService : ISessionService
 
     public async Task<SessionDto> StartSessionAsync(Guid branchId, Guid operatorId, Guid shiftId, SessionStartDto dto)
     {
+        RefuseIfHeadOffice("started");
+
         await _uow.BeginTransactionAsync();
 
         try
@@ -326,6 +367,8 @@ public class SessionService : ISessionService
 
     public async Task<SessionDto> StopSessionAsync(Guid branchId, Guid operatorId, Guid sessionId, bool deferPayment = false)
     {
+        RefuseIfHeadOffice("stopped");
+
         await _uow.BeginTransactionAsync();
         try
         {
