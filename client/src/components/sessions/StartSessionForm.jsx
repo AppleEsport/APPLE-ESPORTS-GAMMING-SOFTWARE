@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
 import { Play, X, User, Clock, Users, Search, Loader2 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
+import { useBranch } from '../../contexts/BranchContext';
 import { getMembers } from '../../api/members.api';
+import { startSessionRemoteAware } from '../../api/branchCommands.api';
 import api from '../../config/api';
 import { logActivity } from '../../utils/sessionLog';
 
@@ -9,6 +11,7 @@ import { logActivity } from '../../utils/sessionLog';
 // inside the PC detail panel when the selected PC is Idle/Offline ──
 export default function StartSessionForm({ pc, onSuccess }) {
   const { isSuperAdmin, user } = useAuth();
+  const { activeBranch } = useBranch();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -110,7 +113,12 @@ export default function StartSessionForm({ pc, onSuccess }) {
     setLoading(true);
     setError(null);
     try {
-      await api.post('/sessions/start', {
+      // At Head Office this is refused directly (a session written straight into Head
+      // Office's database would be invisible to the counter that has to bill it) — see
+      // startSessionRemoteAware, which falls back to a command the branch carries out and
+      // confirms through its own StartSessionAsync, on its own database. At a branch itself
+      // this is just the normal direct call.
+      await startSessionRemoteAware(activeBranch?.id, pc.id, {
         pcId: pc.id,
         customerName: form.customerName.trim(),
         customerType: form.customerType,
