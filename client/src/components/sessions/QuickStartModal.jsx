@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Zap, X } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
-import api from '../../config/api';
+import { useBranch } from '../../contexts/BranchContext';
+import { startSessionRemoteAware } from '../../api/branchCommands.api';
 import { logActivity } from '../../utils/sessionLog';
 import { useToast } from '../ui/Toast';
 
@@ -10,6 +11,7 @@ import { useToast } from '../ui/Toast';
 // name and start an open-ended (Pay-As-You-Go) session immediately ──
 export default function QuickStartModal({ pc, onClose, onActionSuccess }) {
   const { isSuperAdmin, user } = useAuth();
+  const { activeBranch } = useBranch();
   const toast = useToast();
   const [customerName, setCustomerName] = useState('');
   const [loading, setLoading] = useState(false);
@@ -26,7 +28,7 @@ export default function QuickStartModal({ pc, onClose, onActionSuccess }) {
     setLoading(true);
     setError(null);
     try {
-      await api.post('/sessions/start', {
+      await startSessionRemoteAware(activeBranch?.id, pc.id, {
         pcId: pc.id,
         customerName: customerName.trim(),
         customerType: 'Walk-in',
