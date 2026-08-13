@@ -547,8 +547,9 @@ function BranchView({ latest, release, branch, busy, onSetAutoUpdate }) {
                   ? 'Looking now. If there is an update it downloads in the background and the ' +
                     'app restarts itself when it is ready — that can take a few minutes on a ' +
                     'slow line. You can carry on working.'
-                  : 'This branch looks for updates by itself every few minutes. Press this if ' +
-                    'you do not want to wait.'}
+                  : 'This branch looks for updates by itself every half a minute, and again ' +
+                    'as soon as the PC is switched on. Press this if you do not want to wait ' +
+                    'even that long.'}
               </p>
             </div>
           )}
