@@ -12,7 +12,7 @@
 ; ============================================================================
 
 #define AppName        "Apple Esports"
-#define AppVersion     "2.2.2"
+#define AppVersion     "2.2.3"
 #define AppPublisher   "Apple Esports"
 #define Staging        "branch\staging"
 
@@ -69,14 +69,14 @@ Source: "..\SHORTCUT_KEYS.md";                        DestDir: "{app}"; Componen
 ; carrying the dashboard gate password in plain text - it must never reach a branch.
 
 ; -- Operator counter PC: the whole branch --
-Source: "{#Staging}\api\*";   DestDir: "{app}\api";   Components: server; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "{#Staging}\pgsql\*"; DestDir: "{app}\pgsql"; Components: server; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "branch\setup-database.ps1"; DestDir: "{app}"; Components: server; Flags: ignoreversion
+Source: "{#Staging}\api\*";   DestDir: "{app}\api";   Components: server; Check: InstallServerParts; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#Staging}\pgsql\*"; DestDir: "{app}\pgsql"; Components: server; Check: InstallServerParts; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "branch\setup-database.ps1"; DestDir: "{app}"; Components: server; Check: InstallServerParts; Flags: ignoreversion
 Source: "branch\stop-services.ps1"; Flags: dontcopy
-Source: "branch\setup-api.ps1";      DestDir: "{app}"; Components: server; Flags: ignoreversion
+Source: "branch\setup-api.ps1";      DestDir: "{app}"; Components: server; Check: InstallServerParts; Flags: ignoreversion
 
 ; -- Customer gaming PC --
-Source: "..\AppleEsportsErp\src\AppleEsportsErp.ClientAgent\publish\AppleEsportsAgent.exe"; DestDir: "{app}"; Components: agent; Flags: ignoreversion
+Source: "..\AppleEsportsErp\src\AppleEsportsErp.ClientAgent\publish\AppleEsportsAgent.exe"; DestDir: "{app}"; Components: agent; Check: InstallAgentParts; Flags: ignoreversion
 
 [Dirs]
 ; Created up front so the setup scripts are never the first thing to touch them.
@@ -113,6 +113,53 @@ Type: filesandordirs; Name: "{userappdata}\AppleEsports"
 ; UNINSTALL-EVERYTHING.ps1 removes it when a genuinely clean slate is wanted.
 
 [Code]
+
+{ Whether this machine is already an operator counter PC running the branch.
+
+  Decided from what is actually on disk and registered with Windows, never from what the
+  installer was told. This is what makes a silent update correct.
+
+  The fault it fixes: an update is launched with /VERYSILENT and no /TYPE or /COMPONENTS,
+  because the updater has no way of knowing what the machine chose when it was first set up.
+  Inno then falls back to the default type, "server" is not selected, and every file tagged
+  Components: server is skipped - the entire API and PostgreSQL. The dashboard window has no
+  component restriction, so THAT gets replaced.
+
+  The result is the worst kind of half-update: a new front end talking to an old engine, with
+  the version on screen reporting the new number. Seen on a real branch - the window said 2.2.2
+  while the API was still the previous build, and nothing anywhere said the update had only
+  partly happened. Worse, the script that restarts the services is guarded by the same check, so
+  an update could stop the branch and never start it again.
+
+  A machine that is already running the branch is always updated as one. }
+function IsExistingServerInstall(): Boolean;
+begin
+  Result :=
+    DirExists(ExpandConstant('{app}\api')) or
+    DirExists(ExpandConstant('{app}\pgsql')) or
+    RegKeyExists(HKLM, 'SYSTEM\CurrentControlSet\Services\AppleEsportsApi') or
+    RegKeyExists(HKLM, 'SYSTEM\CurrentControlSet\Services\AppleEsportsDb');
+end;
+
+{ Likewise for a gaming PC: the screen-lock agent being present says what this machine is. }
+function IsExistingAgentInstall(): Boolean;
+begin
+  Result := FileExists(ExpandConstant('{app}\AppleEsportsAgent.exe'));
+end;
+
+{ Used by Check: on every server file, so they are copied when the component is selected OR
+  when this machine plainly already is a branch. Belt and braces: the component selection is
+  still honoured on a fresh install, where there is nothing on disk to detect. }
+function InstallServerParts(): Boolean;
+begin
+  Result := IsComponentSelected('server') or IsExistingServerInstall();
+end;
+
+function InstallAgentParts(): Boolean;
+begin
+  Result := IsComponentSelected('agent') or IsExistingAgentInstall();
+end;
+
 function WebView2Installed(): Boolean;
 var
   Version: String;
@@ -134,7 +181,9 @@ var
 begin
   Result := '';
 
-  if not IsComponentSelected('server') then
+  { Also true when this machine already runs the branch, so a silent update given no
+    component flags still restarts the services it has just stopped. }
+  if not InstallServerParts() then
     Exit;
 
   ExtractTemporaryFile('stop-services.ps1');
