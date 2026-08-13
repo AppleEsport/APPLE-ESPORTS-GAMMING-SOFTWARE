@@ -45,6 +45,19 @@ Run **`UNINSTALL-EVERYTHING.ps1`** — right-click → *Run with PowerShell*. It
 Administrator. Do this **even on a laptop that has never had it**, so you know you are starting
 from nothing.
 
+> ### Only ever before a FIRST install
+>
+> That script **deletes the branch database**. Its own header says so — it is a clean-slate
+> script and is meant to.
+>
+> **Never run it before an upgrade.** An earlier version of this document said to run it every
+> time, which is wrong and cost a real test its trading data: the shop had traded offline, the
+> uninstaller wiped the database, and the fresh install adopted an empty branch. Nothing was
+> actually lost, because the takings had already reached Head Office — but nothing on screen
+> would have told you that.
+>
+> To upgrade, install straight over the top, or let the branch update itself. Both keep the data.
+
 ---
 
 # Part 2 — Things you will need during the tests
@@ -277,7 +290,11 @@ operator will not know to start a Windows service.
 
 ## Test 10 — Installing again does not break it
 
-Run the **same installer again**, over the top. This is what an update will do.
+Run the installer again **straight over the top**. Do NOT run the uninstaller first — that
+deletes the database, and then this test proves nothing except that a clean-slate script works.
+
+Better still, let the branch update itself: publish a newer version at Head Office and leave the
+app open. That is what will actually happen in the shop.
 
 **PASS:** it finishes, both services run, and **your data is still there** — same shop, same
 sessions, same members. `setup-database.log` should say *"Database 'gamecafe_erp' already exists -
