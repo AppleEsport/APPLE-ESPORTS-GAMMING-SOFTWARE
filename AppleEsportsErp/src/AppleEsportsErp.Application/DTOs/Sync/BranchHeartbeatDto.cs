@@ -28,6 +28,15 @@ public class BranchHeartbeatDto
     /// </summary>
     public string? MachineName { get; set; }
 
+    /// <summary>
+    /// The configuration fingerprint this branch is currently running on.
+    ///
+    /// Head Office compares it with its own and sends the settings back only when they differ,
+    /// which is what makes carrying configuration on a three-second beat affordable. Null from
+    /// a branch that has never been told anything, and that is treated as "different".
+    /// </summary>
+    public string? ConfigVersion { get; set; }
+
     /// <summary>The branch's own clock. A shop with the wrong time produces reports nobody can reconcile.</summary>
     public DateTimeOffset BranchLocalTime { get; set; }
 

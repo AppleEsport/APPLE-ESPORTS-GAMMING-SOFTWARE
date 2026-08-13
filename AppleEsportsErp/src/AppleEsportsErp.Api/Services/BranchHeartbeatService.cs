@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using AppleEsportsErp.Application.DTOs.Sync;
 using AppleEsportsErp.Application.Services;
+using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
 using AppleEsportsErp.Infrastructure.Configuration;
 using AppleEsportsErp.Infrastructure.Data;
@@ -117,8 +118,14 @@ public class BranchHeartbeatService : BackgroundService
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
         // One branch row, its own, once adopted. Before that there is nothing to report about.
-        var branchId = await db.Branches.AsNoTracking().Select(b => b.Id).FirstOrDefaultAsync(ct);
+        // Ordered, so a branch whose local database somehow holds more than one row reports
+        // the same one every time. Unordered, PostgreSQL is free to return them in any order
+        // and the shop could report itself as a different branch between beats.
+        var branchId = await db.Branches.AsNoTracking()
+            .OrderBy(b => b.Id).Select(b => b.Id).FirstOrDefaultAsync(ct);
+
         if (branchId == Guid.Empty) return;
+        _branchId = branchId;
 
         var today = IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow);
         var (dayStart, dayEnd) = IndiaTime.BusinessDayRange(today);
@@ -172,6 +179,7 @@ public class BranchHeartbeatService : BackgroundService
             BranchId = branchId,
             Version = RunningVersion,
             MachineName = Environment.MachineName,
+            ConfigVersion = _configVersion,
             BranchLocalTime = IndiaTime.Now,
             OperatorsOnDuty = onDuty,
             Pcs = pcs,
@@ -189,10 +197,118 @@ public class BranchHeartbeatService : BackgroundService
             new StringContent(JsonSerializer.Serialize(beat), Encoding.UTF8, "application/json"),
             ct);
 
-        if (!response.IsSuccessStatusCode && DateTimeOffset.UtcNow - _lastComplaint > ComplainAtMost)
+        if (!response.IsSuccessStatusCode)
         {
-            _lastComplaint = DateTimeOffset.UtcNow;
-            _logger.LogWarning("Head Office refused this branch's status: {Status}.", response.StatusCode);
+            if (DateTimeOffset.UtcNow - _lastComplaint > ComplainAtMost)
+            {
+                _lastComplaint = DateTimeOffset.UtcNow;
+                _logger.LogWarning("Head Office refused this branch's status: {Status}.", response.StatusCode);
+            }
+            return;
         }
+
+        await ApplyConfigFromReplyAsync(db, await response.Content.ReadAsStringAsync(ct), ct);
     }
+
+    /// <summary>
+    /// Takes whatever settings Head Office sent back and makes this branch match them.
+    ///
+    /// This is the direction that never existed. A super admin could grant an operator End of
+    /// Day, watch the server save it, and the counter would never hear - every permission
+    /// screen on the server was decoration, and an operator hired at Head Office could not log
+    /// in at the shop they had been hired for.
+    ///
+    /// Head Office sends nothing at all when this branch is already correct, so the usual case
+    /// is a few hundred bytes and this method does nothing.
+    /// </summary>
+    private async Task ApplyConfigFromReplyAsync(AppDbContext db, string body, CancellationToken ct)
+    {
+        BranchConfigDto? config;
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (!doc.RootElement.TryGetProperty("data", out var data)) return;
+            if (!data.TryGetProperty("config", out var node) || node.ValueKind == JsonValueKind.Null) return;
+
+            config = JsonSerializer.Deserialize<BranchConfigDto>(node.GetRawText(),
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Could not read the settings Head Office sent ({Reason}).",
+                ex.GetBaseException().Message);
+            return;
+        }
+
+        if (config is null || config.Operators.Count == 0) return;
+
+        var known = await db.Operators.ToDictionaryAsync(o => o.Id, ct);
+        var changed = 0;
+
+        foreach (var incoming in config.Operators)
+        {
+            if (!known.TryGetValue(incoming.Id, out var op))
+            {
+                // Somebody hired at Head Office who has never existed here. Created with the
+                // same id, so everything they later do lines up on both sides rather than
+                // arriving as a stranger.
+                op = new Operator
+                {
+                    Id = incoming.Id,
+                    BranchId = _branchId,
+                    Status = OperatorStatus.LoggedOut,
+                    CreatedAt = DateTimeOffset.UtcNow,
+                };
+                db.Operators.Add(op);
+                changed++;
+            }
+
+            op.FullName = incoming.FullName;
+            op.Username = incoming.Username;
+            op.Email = incoming.Email;
+            op.PasswordHash = incoming.PasswordHash;
+            op.MobileNumber = incoming.MobileNumber;
+            op.AccessPin = incoming.AccessPin;
+            op.IsGlobalAdmin = incoming.IsGlobalAdmin;
+            op.DashboardPermissions = incoming.DashboardPermissions;
+            op.UpdatedAt = DateTimeOffset.UtcNow;
+
+            // Only the barred/not-barred decision comes down. Active and LoggedOut say whether
+            // somebody is standing at this counter, which Head Office cannot know and must
+            // never overwrite - doing so would sign out the operator halfway through a shift.
+            if (incoming.IsBlocked)
+            {
+                if (op.Status is not (OperatorStatus.Suspended or OperatorStatus.Disabled))
+                    op.Status = OperatorStatus.Suspended;
+            }
+            else if (op.Status is OperatorStatus.Suspended or OperatorStatus.Disabled)
+            {
+                op.Status = OperatorStatus.LoggedOut;   // unbarred; duty is decided here
+            }
+        }
+
+        if (db.ChangeTracker.HasChanges())
+        {
+            await db.SaveChangesAsync(ct);
+
+            // Recorded once, not every beat: the fingerprint now matches so Head Office stops
+            // sending it. Worth a line in the log, because "the shop suddenly behaves
+            // differently" should always have something to point at.
+            _logger.LogInformation(
+                "Settings updated from Head Office: {Count} operator(s), {New} new. Version {Version}.",
+                config.Operators.Count, changed, config.Version);
+        }
+
+        _configVersion = config.Version;
+    }
+
+    /// <summary>
+    /// The settings fingerprint this branch is running on, sent with every beat so Head Office
+    /// can stay silent while it matches. Held in memory only - after a restart the branch
+    /// simply asks once more and is told once more, which costs one message.
+    /// </summary>
+    private string? _configVersion;
+
+    /// <summary>This branch's own id, remembered from the beat that was just built.</summary>
+    private Guid _branchId;
 }
