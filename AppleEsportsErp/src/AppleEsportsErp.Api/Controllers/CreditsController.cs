@@ -26,19 +26,25 @@ public class CreditsController : ControllerBase
 
     private Guid GetBranchId() => Guid.Parse(HttpContext.Items["BranchId"]!.ToString()!);
 
+    /// <summary>
+    /// Money customers still owe this branch.
+    ///
+    /// There used to be a debugging leftover here that wrote any failure to
+    /// c:\Users\harsh\Desktop\credit_error.txt - one developer's own desktop, on one machine.
+    /// On every other PC in the world that folder does not exist, so the write threw
+    /// DirectoryNotFoundException from inside the catch block: the real error was destroyed
+    /// and replaced with a meaningless one about a missing path.
+    ///
+    /// That is the worst possible place for a hardcoded path. It only ever ran when something
+    /// had already gone wrong, and it guaranteed nobody could find out what. Removed
+    /// entirely - unhandled exceptions already go to the branch's own log through the global
+    /// handler, which is where somebody would actually look.
+    /// </summary>
     [HttpGet]
     public async Task<IActionResult> GetCredits([FromQuery] string status = "pending", [FromQuery] int page = 1, [FromQuery] int pageSize = 50)
     {
-        try
-        {
-            var result = await _creditService.GetCreditsAsync(GetBranchId(), status, page, pageSize);
-            return Ok(ApiResponse<PaginatedResult<CreditDto>>.Ok(result));
-        }
-        catch (Exception ex)
-        {
-            System.IO.File.WriteAllText(@"c:\Users\harsh\Desktop\credit_error.txt", ex.ToString());
-            throw;
-        }
+        var result = await _creditService.GetCreditsAsync(GetBranchId(), status, page, pageSize);
+        return Ok(ApiResponse<PaginatedResult<CreditDto>>.Ok(result));
     }
 
     [HttpPost("{id}/clear")]
