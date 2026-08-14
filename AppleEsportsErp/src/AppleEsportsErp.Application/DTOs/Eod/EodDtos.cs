@@ -9,6 +9,10 @@ public class EodReportDto
     public RevenueSummaryDto Revenue { get; set; } = new();
     public CashSummaryDto Cash { get; set; } = new();
     public PaymentMethodSummaryDto PaymentMethods { get; set; } = new();
+
+    /// <summary>Whether what was billed agrees with what was taken. See EodReconciliationDto.</summary>
+    public EodReconciliationDto Reconciliation { get; set; } = new();
+
     public ShiftSummaryDto Shifts { get; set; } = new();
     public OperationalStatsDto Operations { get; set; } = new();
     public List<EodCreditLogDto> CreditLogs { get; set; } = new();
@@ -77,10 +81,108 @@ public class CashSummaryDto
 
 public class PaymentMethodSummaryDto
 {
+    /// <summary>Cash taken against bills. Does NOT include cash taken for wallet top-ups.</summary>
     public decimal TotalCash { get; set; }
+
+    /// <summary>Online taken against bills. Does NOT include online wallet top-ups.</summary>
     public decimal TotalOnline { get; set; }
+
+    /// <summary>
+    /// Bill value settled out of members' wallet balances.
+    ///
+    /// This is <b>not money arriving today</b> and must never be added to a total of takings.
+    /// The rupees were collected when the wallet was topped up - possibly weeks ago - and this
+    /// is them being spent. Adding both the top-up and the later deduction counts the same
+    /// rupee twice, which is exactly what the payment summary was doing.
+    /// </summary>
     public decimal TotalWalletDeductions { get; set; }
+
+    /// <summary>
+    /// The <c>Amount</c> recorded against today's top-ups.
+    ///
+    /// <b>Do not treat this as money taken.</b> It is not reliably the customer's payment: on
+    /// live data some rows carry payment-plus-bonus here (Rs 550 recorded against Rs 500 of
+    /// notes and a Rs 50 promotional bonus) while others carry the payment alone. Summing it
+    /// therefore counts free promotional credit as though it were cash through the door - Rs 100
+    /// of it on one branch on one day.
+    ///
+    /// Kept because it is what the row says and hiding it would only move the confusion. The
+    /// figures to trust are the two below, which are the amounts explicitly recorded against a
+    /// payment method and never include bonus.
+    /// </summary>
     public decimal TotalWalletTopUps { get; set; }
+
+    /// <summary>Free credit given away in top-up bonuses today. A cost, not income.</summary>
+    public decimal TotalWalletBonusGiven { get; set; }
+
+    /// <summary>
+    /// The part of today's top-ups actually handed over as notes.
+    ///
+    /// Split out because the summary was adding <see cref="TotalWalletTopUps"/> - every method -
+    /// straight into the cash line. A Rs 500 top-up paid by UPI then showed as Rs 500 of cash in
+    /// the drawer, and the operator counting that drawer came up Rs 500 short against a figure
+    /// nobody had ever handed them.
+    /// </summary>
+    public decimal TotalWalletTopUpsCash { get; set; }
+
+    /// <summary>The part of today's top-ups paid by UPI or card.</summary>
+    public decimal TotalWalletTopUpsOnline { get; set; }
+
+    /// <summary>
+    /// Every rupee that actually entered the business today: bill cash and online, plus wallet
+    /// top-ups by either method.
+    ///
+    /// This is the one figure to put next to the word "Total". It was previously assembled in
+    /// the display component out of four other figures and got it wrong in three separate ways -
+    /// it added wallet deductions (money collected on an earlier day, counted a second time),
+    /// it put every top-up into the cash line regardless of how it was paid, and through
+    /// <see cref="TotalWalletTopUps"/> it counted promotional bonus as takings.
+    ///
+    /// Built from the per-method amounts precisely because those are the only ones that mean
+    /// "this much was handed over, by this method".
+    /// </summary>
+    public decimal TotalCollected { get; set; }
+}
+
+/// <summary>
+/// Does what was billed agree with what was taken, and if not, by how much.
+///
+/// The payment summary showed two columns side by side - revenue on the left, payment methods
+/// on the right - under a single total, and there was no arithmetic connecting them. They can
+/// legitimately differ, by discounts, by credit given to a customer who left owing money, and
+/// by credit collected today for a bill from an earlier day. None of those appeared, so the two
+/// halves of the screen simply disagreed and the reader had no way to tell whether that was
+/// normal or a fault.
+///
+/// Every line below is one of those legitimate reasons, in order, ending in a difference that
+/// should be zero. When it is not zero it is shown rather than hidden: an unexplained gap is
+/// the single most useful thing this screen can report, and burying it is how a real shortfall
+/// goes unnoticed for a week.
+/// </summary>
+public class EodReconciliationDto
+{
+    /// <summary>Gaming plus food, before any discount, across every completed bill today.</summary>
+    public decimal GrossBilled { get; set; }
+
+    public decimal Discounts { get; set; }
+
+    /// <summary>Bills a customer left today without paying. Earned, not collected.</summary>
+    public decimal CreditGivenToday { get; set; }
+
+    /// <summary>Old debts settled today. Collected today, earned on an earlier day.</summary>
+    public decimal CreditClearedToday { get; set; }
+
+    /// <summary>What today's trading should have produced in payments: gross, less discounts, less new credit, plus old credit collected.</summary>
+    public decimal ShouldHaveBeenCollected { get; set; }
+
+    /// <summary>What was actually taken against bills: cash, online and wallet deductions.</summary>
+    public decimal ActuallySettled { get; set; }
+
+    /// <summary>
+    /// <see cref="ActuallySettled"/> minus <see cref="ShouldHaveBeenCollected"/>. Zero on a day
+    /// that adds up. Anything else is worth looking at before the day is finalised.
+    /// </summary>
+    public decimal Difference { get; set; }
 }
 
 public class ShiftSummaryDto

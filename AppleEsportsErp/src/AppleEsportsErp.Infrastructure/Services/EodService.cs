@@ -146,7 +146,66 @@ public class EodService : IEodService
         report.PaymentMethods.TotalCash = payments.Sum(p => p.CashAmount);
         report.PaymentMethods.TotalOnline = payments.Sum(p => p.OnlineAmount);
         report.PaymentMethods.TotalWalletDeductions = payments.Sum(p => p.WalletAmount);
-        report.PaymentMethods.TotalWalletTopUps = walletTxs.Where(w => w.Action == WalletAction.Recharge).Sum(w => w.Amount);
+
+        var topUps = walletTxs.Where(w => w.Action == WalletAction.Recharge).ToList();
+        report.PaymentMethods.TotalWalletTopUps = topUps.Sum(w => w.Amount);
+
+        // Split by how the top-up was actually paid, because the summary screen was adding the
+        // whole figure into its cash line - so a UPI top-up inflated the cash the operator was
+        // expected to be holding, and they came up short by exactly the amount nobody had
+        // handed them.
+        report.PaymentMethods.TotalWalletTopUpsCash = topUps.Sum(w => w.CashAmount);
+        report.PaymentMethods.TotalWalletTopUpsOnline = topUps.Sum(w => w.OnlineAmount);
+
+        // What the shop gave away in promotional bonus. Never money in; the owner is buying
+        // loyalty with it, and it appeared nowhere at all before.
+        report.PaymentMethods.TotalWalletBonusGiven = topUps.Sum(w => w.BonusAmount);
+
+        // Every rupee that genuinely arrived today.
+        //
+        // Wallet deductions are deliberately absent. They are members spending balance that was
+        // collected when they topped up, which may have been weeks ago - and if it was today,
+        // it is already in the top-up figure. The screen was adding both, so a Rs 500 top-up
+        // followed by Rs 90 of play reported Rs 590 of takings on a day Rs 500 came in.
+        report.PaymentMethods.TotalCollected =
+            report.PaymentMethods.TotalCash
+            + report.PaymentMethods.TotalOnline
+            + report.PaymentMethods.TotalWalletTopUpsCash
+            + report.PaymentMethods.TotalWalletTopUpsOnline;
+
+        // ── Does what was billed agree with what was taken ────────────────────────
+        //
+        // The two halves of the payment summary were shown side by side under one total with
+        // no arithmetic joining them, so they simply disagreed whenever a discount was given or
+        // a customer left owing money, and nothing said whether that was normal.
+        var creditGivenToday = credits
+            .Where(c => c.CreatedAt >= dayStart && c.CreatedAt < dayEnd)
+            .Sum(c => c.CreditAmount);
+
+        var creditClearedToday = credits
+            .Where(c => c.ClearedAt >= dayStart && c.ClearedAt < dayEnd)
+            .Sum(c => c.CreditAmount);
+
+        report.Reconciliation.GrossBilled =
+            report.Revenue.TotalGamingRevenue + report.Revenue.TotalFoodRevenue;
+        report.Reconciliation.Discounts = report.Revenue.TotalDiscounts;
+        report.Reconciliation.CreditGivenToday = creditGivenToday;
+        report.Reconciliation.CreditClearedToday = creditClearedToday;
+
+        report.Reconciliation.ShouldHaveBeenCollected =
+            report.Reconciliation.GrossBilled
+            - report.Reconciliation.Discounts
+            - creditGivenToday
+            + creditClearedToday;
+
+        // Only what settled bills - top-ups are not bill payments and belong on the other side.
+        report.Reconciliation.ActuallySettled =
+            report.PaymentMethods.TotalCash
+            + report.PaymentMethods.TotalOnline
+            + report.PaymentMethods.TotalWalletDeductions;
+
+        report.Reconciliation.Difference =
+            report.Reconciliation.ActuallySettled - report.Reconciliation.ShouldHaveBeenCollected;
 
         // ── Cash Summary ──────────────────────────────────────────────────────────
         //

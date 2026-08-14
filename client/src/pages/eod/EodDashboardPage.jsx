@@ -132,34 +132,55 @@ export default function EodDashboardPage() {
     fetchEodData();
   }, [fetchEodData]);
 
-  // Real-time EOD updates via SignalR + aggressive polling
+  // ── Keep the figures current ──────────────────────────────────────────────
+  //
+  // Polling is deliberately NOT gated on the live connection, and that is the fix.
+  //
+  // Everything below used to sit behind `if (!connected) return`, so when the SignalR hub
+  // dropped - a restart, a flaky line, an update installing - the page stopped refreshing
+  // entirely and went on displaying whatever it had loaded, with nothing on screen admitting
+  // it. Money figures that are quietly minutes old are worse than none: they look live, so
+  // nobody thinks to reload, and the drawer gets counted against a stale expectation.
+  //
+  // The live connection is now what makes it *instant*. The timer is what makes it *reliable*,
+  // and it runs either way.
+  //
+  // This also matters at Head Office specifically. A branch's bill raises its SignalR event on
+  // the branch's own machine, not here, so Head Office was never going to be pushed anything
+  // about a branch - the timer is the only thing that was ever updating those figures.
+  useEffect(() => {
+    if (isHistorical) return;   // a finalised day cannot change; polling it is pure waste
+
+    const REFRESH_EVERY_MS = 10000;
+
+    const tick = () => {
+      if (document.visibilityState !== 'visible') return;
+      fetchEodData();
+    };
+
+    const pollInterval = setInterval(tick, REFRESH_EVERY_MS);
+
+    // Come back to the tab and see today's figures, not the ones from when you left it.
+    document.addEventListener('visibilitychange', tick);
+
+    return () => {
+      clearInterval(pollInterval);
+      document.removeEventListener('visibilitychange', tick);
+    };
+  }, [fetchEodData, isHistorical]);
+
+  // Instant refresh when something actually happens on this machine, on top of the timer above.
   useEffect(() => {
     if (!connected || isHistorical) return;
 
-    // Immediate refresh on changes
-    const unsubCash = subscribe(SIGNALR_HUBS.CASH, 'CashRegisterUpdated', () => {
-      console.log('💰 Cash updated - refetching EOD');
-      fetchEodData();
-    });
-    const unsubBill = subscribe(SIGNALR_HUBS.BILLING, 'BillUpdated', () => {
-      console.log('📄 Bill updated - refetching EOD');
-      fetchEodData();
-    });
-    const unsubSession = subscribe(SIGNALR_HUBS.SESSIONS, 'SessionUpdated', () => {
-      console.log('⏱️ Session updated - refetching EOD');
-      fetchEodData();
-    });
-
-    // Safety-net polling; SignalR events above already push immediate refreshes
-    const pollInterval = setInterval(() => {
-      fetchEodData();
-    }, 20000);
+    const unsubCash = subscribe(SIGNALR_HUBS.CASH, 'CashRegisterUpdated', fetchEodData);
+    const unsubBill = subscribe(SIGNALR_HUBS.BILLING, 'BillUpdated', fetchEodData);
+    const unsubSession = subscribe(SIGNALR_HUBS.SESSIONS, 'SessionUpdated', fetchEodData);
 
     return () => {
       unsubCash();
       unsubBill();
       unsubSession();
-      clearInterval(pollInterval);
     };
   }, [connected, subscribe, SIGNALR_HUBS.CASH, SIGNALR_HUBS.BILLING, SIGNALR_HUBS.SESSIONS, fetchEodData, isHistorical]);
 
