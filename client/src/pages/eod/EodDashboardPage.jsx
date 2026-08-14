@@ -9,13 +9,17 @@ import { useSocket } from '../../contexts/SocketContext';
 import { createReport, addStatGrid, addTable, save, ROW_TINT_RED, ROW_TINT_GREEN } from '../../utils/pdfReport';
 import EodPaymentSummaryBar from '../../components/eod/EodPaymentSummaryBar';
 import { getBranchMaintenanceLogs } from '../../api/maintenanceLogs.api';
+import { currentTradingDayIst, tradingDayRangeIst, toIstDateString } from '../../utils/timeUtils';
 
 export default function EodDashboardPage() {
   const { isSuperAdmin, user } = useAuth();
   const { activeBranch } = useBranch();
   const { subscribe, connected, SIGNALR_HUBS } = useSocket();
 
-  const [targetDate, setTargetDate] = useState(new Date().toISOString().split('T')[0]); // YYYY-MM-DD
+  // The IST trading day (06:00-06:00), not the UTC calendar date - opening
+  // this screen at 1am IST while closing up must still default to tonight's
+  // report, not tomorrow's UTC date.
+  const [targetDate, setTargetDate] = useState(currentTradingDayIst()); // YYYY-MM-DD
   const [summaryBarHeight, setSummaryBarHeight] = useState(140);
   const [report, setReport] = useState(null);
   const [validation, setValidation] = useState(null);
@@ -80,13 +84,17 @@ export default function EodDashboardPage() {
         }
       }
 
-      // Also fetch range-report to get allBills and PCs for PC-Wise Grid, and maintenance logs
+      // Also fetch range-report to get allBills and PCs for PC-Wise Grid, and maintenance logs.
+      // Window must be the same 06:00-06:00 IST trading day /eod/preview uses above, not
+      // midnight-to-midnight UTC - otherwise this table and the revenue cards above it
+      // disagree about which bills belong to "today".
+      const { startIso, endIso } = tradingDayRangeIst(targetDate);
       const [pcsRes, billsRes] = await Promise.all([
         api.get('/pcs', { params: { branchId: targetBranchId } }),
         api.get('/eod/range-report', {
           params: {
-            startDate: `${targetDate}T00:00:00Z`,
-            endDate: `${targetDate}T23:59:59Z`,
+            startDate: startIso,
+            endDate: endIso,
             branchId: targetBranchId
           }
         })
@@ -103,8 +111,8 @@ export default function EodDashboardPage() {
         // - Either not resolved yet, OR resolved on/after the target date
         //   (">=", not ">": a PC marked and restored on the same day must still show up)
         const logsActiveOnDate = (maintenanceRes.data || []).filter(log => {
-          const markedDate = new Date(log.markedAt).toISOString().split('T')[0];
-          const resolvedDate = log.resolvedAt ? new Date(log.resolvedAt).toISOString().split('T')[0] : null;
+          const markedDate = toIstDateString(log.markedAt);
+          const resolvedDate = log.resolvedAt ? toIstDateString(log.resolvedAt) : null;
 
           const markedOnOrBefore = markedDate <= targetDate;
           const notResolvedOrResolvedAfter = !resolvedDate || resolvedDate >= targetDate;
