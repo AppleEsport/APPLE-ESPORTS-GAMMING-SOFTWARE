@@ -241,6 +241,18 @@ public class SyncInboxController : ControllerBase
                 await UpsertRowAsync<InventoryItem>(held, root);
                 break;
 
+            // Food orders never travelled up at all before this. A walk-in order's money
+            // happened to arrive because its Bill is separately watched, but a session-linked
+            // order updated nothing synced until the food was marked delivered - and even then
+            // Head Office only ever learned a total, never which dishes or how many.
+            case "food_order.placed":
+                await UpsertFoodOrderPlacedAsync(held, root);
+                break;
+
+            case "food_order.status_changed":
+                await ApplyFoodOrderStatusAsync(held, root);
+                break;
+
             // Who did what, at any branch, readable at Head Office without needing to be
             // standing at that branch's own counter.
             case "audit_log.changed":
@@ -828,6 +840,100 @@ public class SyncInboxController : ControllerBase
         // This method still records the session's own history - its end time, its minutes, its
         // money - because that is history and belongs here. Where the PC stands right now is
         // the branch's to report, and it reports it three seconds from now regardless.
+    }
+
+    /// <summary>
+    /// Builds Head Office's record of a food order from scratch, items and all - the part that
+    /// never existed before. A walk-in order's total happened to arrive anyway, because it
+    /// creates a Bill and Bill is separately watched; a session-linked order updated nothing
+    /// synced until the food was later marked delivered, and even then only a total ever
+    /// crossed - never which dishes, how many, or that an order existed at all while it was
+    /// still being cooked.
+    /// </summary>
+    private async Task UpsertFoodOrderPlacedAsync(SyncInboxEntry held, JsonElement root)
+    {
+        var orderId = held.AggregateId;
+        if (await _db.Set<FoodOrder>().AnyAsync(o => o.Id == orderId))
+            return;   // already known: a redelivery
+
+        var order = new FoodOrder
+        {
+            Id = orderId,
+            OrderNumber = ReadString(root, "orderNumber") ?? orderId.ToString("N")[..8],
+            BranchId = held.BranchId,
+            SessionId = await KnownHereOnly<Session>(ReadGuid(root, "sessionId")),
+            PcId = await KnownHereOnly<Pc>(ReadGuid(root, "pcId")),
+            BillId = await KnownHereOnly<Bill>(ReadGuid(root, "billId")),
+            OperatorId = await KnownHereOnly<Operator>(ReadGuid(root, "operatorId")),
+            MemberId = await KnownHereOnly<Member>(ReadGuid(root, "memberId")),
+            CustomerName = ReadString(root, "customerName"),
+            PaymentType = ReadString(root, "paymentType"),
+            TotalAmount = ReadDecimal(root, "totalAmount") ?? 0m,
+            Status = OrderStatus.Pending,
+            OrderTime = ReadDate(root, "orderTime") ?? held.OccurredAt,
+            CreatedAt = held.OccurredAt,
+            UpdatedAt = held.ReceivedAt,
+        };
+
+        if (root.TryGetProperty("items", out var items) && items.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in items.EnumerateArray())
+            {
+                var inventoryId = ReadGuid(item, "inventoryId");
+
+                // Unlike the FKs above, this one is not nullable on the row itself - a food
+                // order line with no product is not a real line. Left unresolved (not silently
+                // dropped), so the whole entry is marked unapplied and retried once the menu
+                // item's own inventory_item.changed event has landed, rather than arriving here
+                // as a plate of food nobody can identify.
+                if (inventoryId is null || !await _db.Set<InventoryItem>().AnyAsync(i => i.Id == inventoryId))
+                    throw new InvalidOperationException(
+                        $"Head Office does not yet know menu item {inventoryId} for order {orderId}.");
+
+                order.Items.Add(new FoodOrderItem
+                {
+                    InventoryId = inventoryId.Value,
+                    ItemName = ReadString(item, "itemName") ?? "Item",
+                    Quantity = ReadInt(item, "quantity") ?? 1,
+                    UnitPrice = ReadDecimal(item, "unitPrice") ?? 0m,
+                    TotalPrice = ReadDecimal(item, "totalPrice") ?? 0m,
+                    CreatedAt = held.OccurredAt,
+                });
+            }
+        }
+
+        _db.Add(order);
+    }
+
+    /// <summary>
+    /// Moves Head Office's copy of an order through the same states the kitchen actually moved
+    /// it through - accepted, ready, delivered, cancelled and why - none of which reached here
+    /// before at all.
+    /// </summary>
+    private async Task ApplyFoodOrderStatusAsync(SyncInboxEntry held, JsonElement root)
+    {
+        var order = await _db.Set<FoodOrder>().FirstOrDefaultAsync(o => o.Id == held.AggregateId);
+
+        // The order's own "placed" event should always arrive first - it is written first, at
+        // the branch, in the same outbox that delivers in that order. If it has not yet, this
+        // entry is marked unapplied and retried once it has, rather than guessed at: a status
+        // change carries none of what was actually ordered, so there is nothing safe to
+        // reconstruct from it alone.
+        if (order is null)
+            throw new InvalidOperationException(
+                $"Head Office has no food order {held.AggregateId} yet to apply this status change to.");
+
+        var status = ReadString(root, "status");
+        if (status is not null && Enum.TryParse<OrderStatus>(status, ignoreCase: true, out var parsed))
+            order.Status = parsed;
+
+        order.CancelledReason = ReadString(root, "reason");
+        order.AcceptedAt = ReadDate(root, "acceptedAt");
+        order.ReadyAt = ReadDate(root, "readyAt");
+        order.DeliveredAt = ReadDate(root, "deliveredAt");
+        order.CompletedAt = ReadDate(root, "completedAt");
+        order.TotalAmount = ReadDecimal(root, "totalAmount") ?? order.TotalAmount;
+        order.UpdatedAt = held.ReceivedAt;
     }
 
     // ── Payload readers ──

@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Common;
 using AppleEsportsErp.Application.DTOs.FoodOrders;
@@ -7,6 +8,7 @@ using AppleEsportsErp.Application.Interfaces;
 using AppleEsportsErp.Application.Services;
 using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
+using AppleEsportsErp.Infrastructure.Configuration;
 
 namespace AppleEsportsErp.Infrastructure.Services;
 
@@ -15,15 +17,43 @@ public class FoodOrderService : IFoodOrderService
     private readonly IUnitOfWork _unitOfWork;
     private readonly IAuditService _auditService;
     private readonly IHubNotificationService _hubNotification;
+    private readonly IOutboxService _outbox;
+    private readonly IConfiguration _configuration;
 
     public FoodOrderService(
         IUnitOfWork unitOfWork,
         IAuditService auditService,
-        IHubNotificationService hubNotification)
+        IHubNotificationService hubNotification,
+        IOutboxService outbox,
+        IConfiguration configuration)
     {
         _unitOfWork = unitOfWork;
         _auditService = auditService;
         _hubNotification = hubNotification;
+        _outbox = outbox;
+        _configuration = configuration;
+    }
+
+    /// <summary>
+    /// Refuses to place or move a food order forward from Head Office.
+    ///
+    /// The same rule as a session, and for the same reason: a walk-in order placed here writes
+    /// only Head Office's own copy of the kitchen. Nobody in the kitchen is told, nothing gets
+    /// cooked, and the customer standing at the counter is left waiting on an order that exists
+    /// nowhere real. Food orders never even had this refusal - they could be placed and marked
+    /// delivered from Head Office's screen with no branch involved at all, silently, because
+    /// unlike a session there was no error to notice anything had gone wrong.
+    /// </summary>
+    private void RefuseIfHeadOffice(string what)
+    {
+        if (!_configuration.IsHeadOffice()) return;
+
+        throw new AppException(
+            $"A food order cannot be {what} from Head Office - only at the branch's own counter. " +
+            "This screen shows what each shop is doing. Doing it here would be invisible to the " +
+            "kitchen, so nothing would actually be prepared or served.",
+            System.Net.HttpStatusCode.BadRequest,
+            "BRANCH_ONLY_OPERATION");
     }
 
     public async Task<PaginatedResult<FoodOrderDto>> GetActiveOrdersAsync(Guid branchId, int page = 1, int pageSize = 50)
@@ -54,6 +84,8 @@ public class FoodOrderService : IFoodOrderService
 
     public async Task<FoodOrderDto> PlaceOrderAsync(Guid branchId, Guid operatorId, Guid shiftId, CreateFoodOrderDto dto)
     {
+        RefuseIfHeadOffice("placed");
+
         await _unitOfWork.BeginTransactionAsync();
         try
         {
@@ -163,13 +195,41 @@ public class FoodOrderService : IFoodOrderService
 
             await _unitOfWork.Repository<FoodOrder>().AddAsync(order);
 
+            // Tell Head Office this order exists, with everything actually ordered - not just
+            // its eventual money. Until now nothing did: a walk-in order's Bill happened to
+            // sync because Bill is separately watched, but a session-linked order updated no
+            // synced row at all until the food was marked delivered, and even then Head Office
+            // only ever learned a total, never which dishes or how many.
+            await _outbox.RecordEventAsync(branchId, "FoodOrder", order.Id, "food_order.placed", new
+            {
+                orderId = order.Id,
+                orderNumber = orderNum,
+                branchId,
+                sessionId = order.SessionId,
+                pcId = order.PcId,
+                billId = order.BillId,
+                operatorId,
+                memberId = order.MemberId,
+                customerName = order.CustomerName,
+                paymentType = order.PaymentType,
+                totalAmount,
+                orderTime = order.OrderTime,
+                items = order.Items.Select(i => new
+                {
+                    inventoryId = i.InventoryId,
+                    itemName = i.ItemName,
+                    quantity = i.Quantity,
+                    unitPrice = i.UnitPrice,
+                    totalPrice = i.TotalPrice,
+                }),
+            });
+
             // Audit
             await _auditService.LogAsync(new AuditEntry
             {
                 OperatorId = operatorId,
                 UserRole = "Operator",
-                UserName = "System",
-                Action = "food_order_create",
+                Action = AuditActions.FoodOrderPlace,
                 BranchId = branchId,
                 TargetType = "food_order",
                 TargetId = order.Id,
@@ -186,15 +246,27 @@ public class FoodOrderService : IFoodOrderService
 
             return MapToDto(order);
         }
-        catch
+        catch (Exception ex)
         {
             await _unitOfWork.RollbackTransactionAsync();
+            await _auditService.LogAsync(new AuditEntry
+            {
+                OperatorId = operatorId,
+                UserRole = "Operator",
+                Action = AuditActions.FoodOrderPlace,
+                TargetType = "food_order",
+                Success = false,
+                BranchId = branchId,
+                Details = new { error = ex.GetBaseException().Message },
+            });
             throw;
         }
     }
 
     public async Task<FoodOrderDto> UpdateOrderStatusAsync(Guid branchId, Guid operatorId, Guid id, UpdateOrderStatusDto dto)
     {
+        RefuseIfHeadOffice("updated");
+
         await _unitOfWork.BeginTransactionAsync();
         try
         {
@@ -307,12 +379,26 @@ public class FoodOrderService : IFoodOrderService
 
             _unitOfWork.Repository<FoodOrder>().Update(order);
 
+            // Same status the kitchen just reached, told to Head Office explicitly rather than
+            // left to arrive only as a side effect of the bill changing on delivery - the
+            // status itself (accepted, ready, cancelled and why) was never visible there at all.
+            await _outbox.RecordEventAsync(branchId, "FoodOrder", order.Id, "food_order.status_changed", new
+            {
+                orderId = order.Id,
+                status = order.Status.ToString(),
+                reason = order.CancelledReason,
+                acceptedAt = order.AcceptedAt,
+                readyAt = order.ReadyAt,
+                deliveredAt = order.DeliveredAt,
+                completedAt = order.CompletedAt,
+                totalAmount = order.TotalAmount,
+            });
+
             await _auditService.LogAsync(new AuditEntry
             {
                 OperatorId = operatorId,
                 UserRole = "Operator",
-                UserName = "System",
-                Action = "food_order_update",
+                Action = AuditActions.FoodOrderStatusChange,
                 BranchId = branchId,
                 TargetType = "food_order",
                 TargetId = order.Id,
@@ -324,9 +410,20 @@ public class FoodOrderService : IFoodOrderService
 
             return MapToDto(order);
         }
-        catch
+        catch (Exception ex)
         {
             await _unitOfWork.RollbackTransactionAsync();
+            await _auditService.LogAsync(new AuditEntry
+            {
+                OperatorId = operatorId,
+                UserRole = "Operator",
+                Action = AuditActions.FoodOrderStatusChange,
+                TargetType = "food_order",
+                TargetId = id,
+                Success = false,
+                BranchId = branchId,
+                Details = new { error = ex.GetBaseException().Message },
+            });
             throw;
         }
     }
