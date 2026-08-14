@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using AppleEsportsErp.Api.Controllers;
+using AppleEsportsErp.Application.Constants;
+using AppleEsportsErp.Application.Interfaces;
 using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Infrastructure.Configuration;
 using AppleEsportsErp.Infrastructure.Data;
@@ -57,12 +59,15 @@ public class RemoteBranchControl : IRemoteBranchControl
 {
     private readonly AppDbContext _db;
     private readonly IConfiguration _configuration;
+    private readonly IAuditService _audit;
     private readonly ILogger<RemoteBranchControl> _logger;
 
-    public RemoteBranchControl(AppDbContext db, IConfiguration configuration, ILogger<RemoteBranchControl> logger)
+    public RemoteBranchControl(
+        AppDbContext db, IConfiguration configuration, IAuditService audit, ILogger<RemoteBranchControl> logger)
     {
         _db = db;
         _configuration = configuration;
+        _audit = audit;
         _logger = logger;
     }
 
@@ -98,6 +103,33 @@ public class RemoteBranchControl : IRemoteBranchControl
         _logger.LogInformation(
             "Queued {CommandType} for branch {BranchId}, requested by {UserId}. Branch reporting: {Reporting}.",
             commandType, branchId, requestedByUserId, reporting);
+
+        // The half of this story that belongs to the person who asked, not the branch that
+        // carried it out. Once the branch actually runs the command it logs its own entry the
+        // normal way - StartSessionAsync's SessionStart, StopSessionAsync's SessionStop, and so
+        // on - exactly as if it had happened at the counter, because it is the same code doing
+        // it. Neither entry alone answers both questions a real incident needs answered: this
+        // one says who decided and when; the branch's own says what actually happened and
+        // whether it worked. Logged even for a branch that is not currently reporting - the
+        // decision was still made the moment the button was pressed, whatever happens after.
+        var requestedBy = await _db.Set<Domain.Entities.User>().AsNoTracking()
+            .FirstOrDefaultAsync(u => u.Id == requestedByUserId, ct);
+
+        var branchName = await _db.Branches.AsNoTracking()
+            .Where(b => b.Id == branchId).Select(b => b.Name).FirstOrDefaultAsync(ct);
+
+        await _audit.LogAsync(new AuditEntry
+        {
+            UserId = requestedByUserId,
+            UserRole = requestedBy?.Role ?? "super_admin",
+            UserName = requestedBy?.FullName ?? "Head Office",
+            Action = AuditActions.RemoteCommandIssued,
+            TargetType = "branch_command",
+            TargetId = command.Id,
+            BranchId = branchId,
+            BranchName = branchName,
+            Details = new { commandType, branchReporting = reporting, payload },
+        });
 
         var message = reporting
             ? "Sent to the branch. It carries this out within a few seconds and reports back."

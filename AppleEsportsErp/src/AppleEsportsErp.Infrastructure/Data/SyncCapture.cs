@@ -75,6 +75,16 @@ public static class SyncCapture
         // half that structurally could not arrive.
         [typeof(Bill)] = "bill",
 
+        // Who did what, where, and when - written already at every login, session, payment,
+        // wallet change and member edit, and until now kept entirely to itself.
+        //
+        // This is written INSERT-only (AuditService never updates a row), so there is nothing
+        // to reconcile on conflict and nothing a later write could clobber - the simplest shape
+        // this file deals with. Head Office ends up with the same trail a branch would show at
+        // its own counter, which is what makes it possible to answer "what actually happened at
+        // Katargam this afternoon" without driving to Katargam.
+        [typeof(AuditLog)] = "audit_log",
+
         // The menu, because it only ever travelled downward.
         //
         // Head Office could push a price or a new dish out to a shop, and that half works. But

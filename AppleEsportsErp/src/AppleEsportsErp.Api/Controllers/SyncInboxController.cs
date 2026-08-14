@@ -241,6 +241,12 @@ public class SyncInboxController : ControllerBase
                 await UpsertRowAsync<InventoryItem>(held, root);
                 break;
 
+            // Who did what, at any branch, readable at Head Office without needing to be
+            // standing at that branch's own counter.
+            case "audit_log.changed":
+                await UpsertRowAsync<AuditLog>(held, root);
+                break;
+
             case "email.send_requested":
                 await SendQueuedEmailAsync(held, root);
                 break;

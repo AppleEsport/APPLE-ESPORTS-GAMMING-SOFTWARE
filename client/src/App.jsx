@@ -58,6 +58,7 @@ import PcStatusPage from './pages/admin/PcStatusPage';
 import SettingsPage from './pages/admin/SettingsPage';
 import ReportsPage from './pages/admin/ReportsPage';
 import UpdatesPage from './pages/admin/UpdatesPage';
+import AuditTrailPage from './pages/admin/AuditTrailPage';
 
 // ── HR ──
 import EmployeeFormsPage from './pages/hr/EmployeeFormsPage';
@@ -251,6 +252,14 @@ export default function App() {
                     element={
                       <ProtectedRoute allowedRoles={[ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.OPERATOR]} dashboardKey={DASHBOARDS.UPDATES}>
                         <UpdatesPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="audit-trail"
+                    element={
+                      <ProtectedRoute allowedRoles={[ROLES.SUPER_ADMIN, ROLES.ADMIN]} dashboardKey={DASHBOARDS.SETTINGS}>
+                        <AuditTrailPage />
                       </ProtectedRoute>
                     }
                   />

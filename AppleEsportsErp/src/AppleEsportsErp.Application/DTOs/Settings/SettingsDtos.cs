@@ -86,6 +86,14 @@ public class AuditLogDto
     public string? Details { get; set; }
     public string? IpAddress { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
+
+    /// <summary>
+    /// Added for the Activity Log screen. Every branch's rows now land in the same table at
+    /// Head Office, so which shop a row belongs to is no longer implied by which branch you
+    /// happened to be looking at when you asked - it has to be said outright.
+    /// </summary>
+    public Guid? BranchId { get; set; }
+    public string? BranchName { get; set; }
 }
 
 public class CreatePcDto
