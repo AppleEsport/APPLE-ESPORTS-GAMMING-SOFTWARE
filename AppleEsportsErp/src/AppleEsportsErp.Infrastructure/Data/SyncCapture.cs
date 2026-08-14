@@ -74,6 +74,21 @@ public static class SyncCapture
         // Unpaid money is the half of the ledger an owner most needs to see, and it was the
         // half that structurally could not arrive.
         [typeof(Bill)] = "bill",
+
+        // The menu, because it only ever travelled downward.
+        //
+        // Head Office could push a price or a new dish out to a shop, and that half works. But
+        // an item created or repriced at the counter existed only at that counter: Head Office
+        // showed the old price, so every report of what a branch sold was priced against a
+        // menu that branch had stopped using. It also made the downward direction unsafe to
+        // trust, because Head Office's copy was not a record of the branch's menu - it was a
+        // record of the last thing Head Office had said about it.
+        //
+        // CurrentStock and SoldQty ride along in the snapshot, which is a bonus rather than a
+        // risk: they let Head Office see what a shop has actually got left. They never travel
+        // back down - the config reply carries catalogue fields only - so Head Office cannot
+        // restock a branch that has just sold out.
+        [typeof(InventoryItem)] = "inventory_item",
     };
 
     /// <summary>

@@ -233,6 +233,14 @@ public class SyncInboxController : ControllerBase
                 await UpsertRowAsync<Bill>(held, root);
                 break;
 
+            // The menu as the branch actually has it. Head Office's copy used to be a record of
+            // the last thing Head Office had said, not of what the shop is really selling, so a
+            // price changed at the counter never showed up here and every sales report was
+            // priced against a menu that branch had abandoned.
+            case "inventory_item.changed":
+                await UpsertRowAsync<InventoryItem>(held, root);
+                break;
+
             case "email.send_requested":
                 await SendQueuedEmailAsync(held, root);
                 break;

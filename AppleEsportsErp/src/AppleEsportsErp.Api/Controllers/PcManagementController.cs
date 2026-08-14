@@ -6,6 +6,7 @@ using AppleEsportsErp.Application.DTOs.PcManagement;
 using AppleEsportsErp.Application.Interfaces;
 using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Infrastructure.Services;
+using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
 
 namespace AppleEsportsErp.Api.Controllers;
@@ -17,13 +18,19 @@ public class PcManagementController : ControllerBase
 {
     private readonly IPcManagementService _pcManagementService;
     private readonly IMaintenanceLogService _maintenanceLogService;
+    private readonly AppleEsportsErp.Api.Services.IRemoteBranchControl _remote;
+    private readonly AppleEsportsErp.Infrastructure.Data.AppDbContext _db;
 
     public PcManagementController(
         IPcManagementService pcManagementService,
-        IMaintenanceLogService maintenanceLogService)
+        IMaintenanceLogService maintenanceLogService,
+        AppleEsportsErp.Api.Services.IRemoteBranchControl remote,
+        AppleEsportsErp.Infrastructure.Data.AppDbContext db)
     {
         _pcManagementService = pcManagementService;
         _maintenanceLogService = maintenanceLogService;
+        _remote = remote;
+        _db = db;
     }
 
     private Guid GetSuperAdminId() => Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
@@ -61,10 +68,46 @@ public class PcManagementController : ControllerBase
         return Ok(ApiResponse<PcDto>.Ok(result));
     }
 
+    /// <summary>
+    /// Takes a PC out of service, or puts it back.
+    ///
+    /// From Head Office this travels to the branch instead of being written here, for a reason
+    /// that is specific to PC state rather than general squeamishness: the branch reports the
+    /// state of every one of its PCs in each heartbeat, three seconds apart, and Head Office
+    /// takes the branch's word for it. So a maintenance flag set here was overwritten by the
+    /// very next beat - it appeared to work, then silently undid itself, and the machine that
+    /// was supposed to be out of service went on taking customers.
+    ///
+    /// Sent down, the branch sets it, and the heartbeat that follows reports maintenance
+    /// because maintenance is now the truth there. Nothing to overwrite.
+    /// </summary>
     [HttpPost("{pcId:guid}/maintenance")]
     [Authorize(Roles = Roles.SuperAdmin + "," + Roles.Admin + "," + Roles.Operator)]
-    public async Task<IActionResult> MarkMaintenance(Guid pcId, [FromQuery] bool enable)
+    public async Task<IActionResult> MarkMaintenance(Guid pcId, [FromQuery] bool enable, CancellationToken ct)
     {
+        if (_remote.MustTravel)
+        {
+            var branchId = await _db.Pcs.AsNoTracking()
+                .Where(p => p.Id == pcId).Select(p => p.BranchId).FirstOrDefaultAsync(ct);
+
+            if (branchId == Guid.Empty)
+                return NotFound(ApiResponse<object>.Fail("Head Office has no such PC.", "PC_NOT_FOUND"));
+
+            var receipt = await _remote.SendAsync(branchId, AppleEsportsErp.Api.Services.BranchCommands.SetPcState, new
+            {
+                pcId,
+                state = enable ? "maintenance" : "idle",
+            }, GetSuperAdminId(), ct);
+
+            return Accepted(ApiResponse<object>.Ok(new
+            {
+                queued = true,
+                commandId = receipt.CommandId,
+                branchIsReporting = receipt.BranchIsReporting,
+                message = receipt.Message,
+            }));
+        }
+
         var result = await _pcManagementService.MarkMaintenanceAsync(pcId, GetSuperAdminId(), GetActorRole(), enable);
         return Ok(ApiResponse<PcDto>.Ok(result));
     }

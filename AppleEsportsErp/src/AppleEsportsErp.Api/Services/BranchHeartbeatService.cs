@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using AppleEsportsErp.Application.DTOs.Sessions;
 using AppleEsportsErp.Application.DTOs.Sync;
 using AppleEsportsErp.Application.Interfaces;
 using AppleEsportsErp.Application.Services;
@@ -290,12 +291,138 @@ public class BranchHeartbeatService : BackgroundService
     {
         switch (command.CommandType)
         {
-            case "stop_session":
+            case BranchCommands.StopSession:
                 return await RunStopSessionAsync(scoped, command.Payload, ct);
+
+            case BranchCommands.StartSession:
+                return await RunStartSessionAsync(scoped, command.Payload, ct);
+
+            case BranchCommands.SetPcState:
+                return await RunSetPcStateAsync(scoped, command.Payload, ct);
 
             default:
                 return (false, $"This branch does not know the command '{command.CommandType}' yet.");
         }
+    }
+
+    /// <summary>
+    /// Starts play on one of this branch's PCs because Head Office asked.
+    ///
+    /// Every check an operator's own Start would hit still applies - PC free, pricing profile
+    /// present, member's wallet funded, member not already playing elsewhere - because this is
+    /// literally the same method. A remote start that skipped them would be the old bug wearing
+    /// a different hat: a session the counter cannot account for.
+    ///
+    /// The operator recorded is whoever is on shift here right now, since the session's takings
+    /// belong in that person's shift and till. If nobody is on shift the branch refuses, and
+    /// says so - money taken outside a shift has nowhere to be counted at End of Day.
+    /// </summary>
+    private static async Task<(bool, string)> RunStartSessionAsync(
+        IServiceProvider scoped, string payload, CancellationToken ct)
+    {
+        Guid pcId;
+        SessionStartDto dto;
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            var root = doc.RootElement;
+
+            pcId = root.GetProperty("pcId").GetGuid();
+
+            dto = new SessionStartDto
+            {
+                PcId = pcId,
+                MemberId = root.TryGetProperty("memberId", out var m) && m.ValueKind != JsonValueKind.Null
+                    ? m.GetGuid() : null,
+                CustomerName = root.TryGetProperty("customerName", out var c) && c.ValueKind == JsonValueKind.String
+                    ? c.GetString() : null,
+                DurationMinutes = root.TryGetProperty("durationMinutes", out var d) && d.ValueKind == JsonValueKind.Number
+                    ? d.GetDecimal() : 0m,
+                PackageName = root.TryGetProperty("packageName", out var p) && p.ValueKind == JsonValueKind.String
+                    ? p.GetString() ?? "Head Office" : "Head Office",
+                ExpectedAmount = root.TryGetProperty("expectedAmount", out var e) && e.ValueKind == JsonValueKind.Number
+                    ? e.GetDecimal() : 0m,
+                Notes = root.TryGetProperty("notes", out var n) && n.ValueKind == JsonValueKind.String
+                    ? n.GetString() : null,
+            };
+        }
+        catch
+        {
+            return (false, "The start command arrived without a readable PC and duration.");
+        }
+
+        var db = scoped.GetRequiredService<AppDbContext>();
+
+        var pc = await db.Pcs.AsNoTracking().FirstOrDefaultAsync(p => p.Id == pcId, ct);
+        if (pc is null) return (false, "No such PC exists at this branch.");
+
+        var shift = await db.Shifts.AsNoTracking()
+            .Where(s => s.BranchId == pc.BranchId && s.Status == ShiftStatus.Active)
+            .OrderByDescending(s => s.LoginTime)
+            .FirstOrDefaultAsync(ct);
+
+        if (shift is null)
+            return (false,
+                "Nobody is on shift at this branch, so there is no till to bill this into. " +
+                "Start a shift at the counter first.");
+
+        try
+        {
+            var sessionService = scoped.GetRequiredService<ISessionService>();
+            var result = await sessionService.StartSessionAsync(pc.BranchId, shift.OperatorId, shift.Id, dto);
+
+            return (true, $"Started on {result.PcName} for {result.DurationMinutes} min, Rs {result.ExpectedAmount}.");
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.GetBaseException().Message);
+        }
+    }
+
+    /// <summary>
+    /// Takes a PC out of service, or puts it back, because Head Office asked.
+    ///
+    /// Refuses while somebody is playing on it. Flipping a busy machine to maintenance would
+    /// leave a live session attached to a PC that no longer admits to having one, and the
+    /// operator would be unable to bill it - the exact shape of the original problem. Stop the
+    /// session first; that is a separate command and Head Office can send both.
+    /// </summary>
+    private static async Task<(bool, string)> RunSetPcStateAsync(
+        IServiceProvider scoped, string payload, CancellationToken ct)
+    {
+        Guid pcId;
+        string wanted;
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            pcId = doc.RootElement.GetProperty("pcId").GetGuid();
+            wanted = doc.RootElement.GetProperty("state").GetString() ?? string.Empty;
+        }
+        catch
+        {
+            return (false, "The PC state command arrived without a readable PC and state.");
+        }
+
+        if (!Enum.TryParse<PcState>(wanted.Replace("_", string.Empty), ignoreCase: true, out var state))
+            return (false, $"This branch does not recognise the PC state '{wanted}'.");
+
+        var db = scoped.GetRequiredService<AppDbContext>();
+        var pc = await db.Pcs.FirstOrDefaultAsync(p => p.Id == pcId, ct);
+        if (pc is null) return (false, "No such PC exists at this branch.");
+
+        if (pc.State == state)
+            return (true, $"Already {state.ToString().ToLowerInvariant()} - nothing to do.");
+
+        if (pc.State is PcState.Active or PcState.AwaitingBilling)
+            return (false,
+                $"{pc.PcNumber} is {pc.State.ToString().ToLowerInvariant()} - stop the session first, " +
+                "or the bill for it could not be collected.");
+
+        pc.State = state;
+        pc.UpdatedAt = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync(ct);
+
+        return (true, $"{pc.PcNumber} is now {state.ToString().ToLowerInvariant()}.");
     }
 
     private static async Task<(bool, string)> RunStopSessionAsync(
@@ -488,21 +615,40 @@ public class BranchHeartbeatService : BackgroundService
                 added++;
             }
 
-            row.ItemName = item.ItemName;
-            row.Category = item.Category;
-            row.Price = item.Price;
-            row.ImageUrl = item.ImageUrl;
+            // Compared before writing, and this matters more than it looks now that the menu
+            // also travels upward. Assigning the same value still marks the row Modified, which
+            // SyncCapture would faithfully record as a change and send back to Head Office -
+            // every item, every time a config arrived, describing nothing that had happened.
+            var differs =
+                row.ItemName != item.ItemName
+                || row.Category != item.Category
+                || row.Price != item.Price
+                || row.ImageUrl != item.ImageUrl;
+
+            if (differs)
+            {
+                row.ItemName = item.ItemName;
+                row.Category = item.Category;
+                row.Price = item.Price;
+                row.ImageUrl = item.ImageUrl;
+            }
 
             // A branch marking something Out of Stock is its own call and stays exactly as it
             // is; only Head Office's Disabled/not-Disabled decision moves this needle, and only
             // when it actually says something - "disabled" pulls an item from sale everywhere,
             // "not disabled" must not silently un-hide something the branch itself paused.
             if (item.IsDisabled && row.Status != FoodAvailability.Disabled)
+            {
                 row.Status = FoodAvailability.Disabled;
+                differs = true;
+            }
             else if (!item.IsDisabled && row.Status == FoodAvailability.Disabled)
+            {
                 row.Status = FoodAvailability.Available;
+                differs = true;
+            }
 
-            row.UpdatedAt = DateTimeOffset.UtcNow;
+            if (differs) row.UpdatedAt = DateTimeOffset.UtcNow;
         }
 
         return added;

@@ -10,18 +10,26 @@ namespace AppleEsportsErp.Api.Services;
 // time has run out. Until this existed, PlannedDurationMin/EndTime were only
 // ever used to render a countdown/"Overdue" label — nothing actually stopped
 // the session, so it kept running (and billing) indefinitely past the plan.
-public class FixedDurationSessionMonitorService : BackgroundService
+//
+// Branch-only. At Head Office every branch's synced sessions look exactly like local ones, so
+// this would stop and re-bill all four shops' customers in a database nobody is standing in.
+// See BranchOnlyBackgroundService.
+public class FixedDurationSessionMonitorService : BranchOnlyBackgroundService
 {
     private readonly IServiceProvider _services;
     private readonly ILogger<FixedDurationSessionMonitorService> _logger;
 
-    public FixedDurationSessionMonitorService(IServiceProvider services, ILogger<FixedDurationSessionMonitorService> logger)
+    public FixedDurationSessionMonitorService(
+        IServiceProvider services,
+        IConfiguration configuration,
+        ILogger<FixedDurationSessionMonitorService> logger)
+        : base(configuration, logger)
     {
         _services = services;
         _logger = logger;
     }
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task RunAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("FixedDurationSessionMonitorService is starting.");
 

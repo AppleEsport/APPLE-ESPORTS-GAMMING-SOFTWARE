@@ -17,7 +17,12 @@ namespace AppleEsportsErp.Api.Services;
 /// It also said nothing to the member. From the seat, a session that ends by itself is
 /// indistinguishable from a machine that has died.
 /// </summary>
-public class OpenSessionMonitorService : BackgroundService
+/// <remarks>
+/// Branch-only. This one draws money out of a member's wallet, and at Head Office it would do
+/// so against every branch's synced sessions at once - the same member debited twice for one
+/// hour of play. See BranchOnlyBackgroundService.
+/// </remarks>
+public class OpenSessionMonitorService : BranchOnlyBackgroundService
 {
     /// <summary>
     /// Three times a minute. Frequent enough that the stop lands close to the calculated moment,
@@ -39,13 +44,17 @@ public class OpenSessionMonitorService : BackgroundService
     /// </summary>
     private readonly HashSet<Guid> _warned = new();
 
-    public OpenSessionMonitorService(IServiceProvider services, ILogger<OpenSessionMonitorService> logger)
+    public OpenSessionMonitorService(
+        IServiceProvider services,
+        IConfiguration configuration,
+        ILogger<OpenSessionMonitorService> logger)
+        : base(configuration, logger)
     {
         _services = services;
         _logger = logger;
     }
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task RunAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("OpenSessionMonitorService is starting.");
 
