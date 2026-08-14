@@ -65,4 +65,14 @@ public static class AuditActions
     public const string EodFinalize = "eod_finalize";
     public const string ForceClose = "force_close";
     public const string SettingsChange = "settings_change";
+
+    /// <summary>
+    /// Head Office asked a branch to do something - stop a session, start one, move it to
+    /// another PC, take a PC out of service - through the command queue rather than a direct
+    /// write. Recorded the moment it is queued, by whoever is at Head Office, separately from
+    /// the branch's own record of actually carrying it out (which still logs under its usual
+    /// action - SessionStop, SessionStart and so on - exactly as if the counter had done it).
+    /// Reading both together answers two different questions: who asked, and what happened.
+    /// </summary>
+    public const string RemoteCommandIssued = "remote_command_issued";
 }
