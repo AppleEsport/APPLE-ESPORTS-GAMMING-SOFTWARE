@@ -219,8 +219,26 @@ public class SessionsController : ControllerBase
     }
 
     [HttpPost("{id}/transfer")]
-    public async Task<IActionResult> TransferSession(Guid id, [FromBody] SessionTransferDto dto)
+    public async Task<IActionResult> TransferSession(Guid id, [FromBody] SessionTransferDto dto, CancellationToken ct)
     {
+        // Same shape as Start and Stop: from Head Office this becomes an instruction the
+        // branch carries out on its own PCs, rather than a write against Head Office's own
+        // disconnected copy that the branch is never told about.
+        if (_remote.MustTravel)
+        {
+            var branchId = await _db.Sessions.AsNoTracking()
+                .Where(s => s.Id == id).Select(s => s.BranchId).FirstOrDefaultAsync(ct);
+
+            if (branchId == Guid.Empty)
+                return NotFound(ApiResponse<object>.Fail("Head Office has no such session.", "SESSION_NOT_FOUND"));
+
+            return await SendToBranchAsync(branchId, Services.BranchCommands.TransferSession, new
+            {
+                sessionId = id,
+                targetPcId = dto.TargetPcId,
+            }, ct);
+        }
+
         var result = await _sessionService.TransferSessionAsync(GetBranchId(), (await this.GetOperatorIdAsync()), id, dto);
         return Ok(ApiResponse<SessionDto>.Ok(result));
     }

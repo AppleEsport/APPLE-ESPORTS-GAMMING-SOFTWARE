@@ -869,6 +869,23 @@ public class SessionService : ISessionService
 
     public async Task<SessionDto> TransferSessionAsync(Guid branchId, Guid operatorId, Guid sessionId, SessionTransferDto dto)
     {
+        // The gap that let a transfer write itself into thin air. Start and Stop have refused
+        // to run at Head Office since the very first version of this file; this method was
+        // added later and never got the same line.
+        //
+        // What that gap does: dragging a session onto another PC while looking at Head Office's
+        // own screen runs this method against Head Office's OWN database - which faithfully
+        // sets the old PC idle and the new one active RIGHT THERE, so the screen shows the move
+        // succeeding immediately. The real branch, on a different machine, was never told
+        // anything. Its actual PC-1 keeps the customer playing exactly as before. Three seconds
+        // later that branch's own heartbeat reports its real, unchanged truth, and Head Office's
+        // "moved" PC states are overwritten straight back - but the session's own PcId, which
+        // heartbeat does not touch, is left pointing at the new PC forever. The result is a
+        // session Head Office believes is on PC-7 while every PC state screen correctly, and
+        // confusingly, shows PC-1 still occupied - not a flicker, a permanent split between two
+        // records that will never agree again on their own.
+        RefuseIfHeadOffice("transferred");
+
         await _uow.BeginTransactionAsync();
         try
         {

@@ -353,6 +353,9 @@ public class BranchHeartbeatService : BackgroundService
             case BranchCommands.SetPcState:
                 return await RunSetPcStateAsync(scoped, command.Payload, ct);
 
+            case BranchCommands.TransferSession:
+                return await RunTransferSessionAsync(scoped, command.Payload, ct);
+
             default:
                 return (false, $"This branch does not know the command '{command.CommandType}' yet.");
         }
@@ -425,6 +428,58 @@ public class BranchHeartbeatService : BackgroundService
             var result = await sessionService.StartSessionAsync(pc.BranchId, shift.OperatorId, shift.Id, dto);
 
             return (true, $"Started on {result.PcName} for {result.DurationMinutes} min, Rs {result.ExpectedAmount}.");
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.GetBaseException().Message);
+        }
+    }
+
+    /// <summary>
+    /// Moves an active session to a different PC at this branch, because Head Office asked.
+    ///
+    /// Runs through ISessionService.TransferSessionAsync - the exact method a drag on the
+    /// counter's own screen calls - so a remote transfer is never anything but the branch
+    /// physically doing what it looks like it did. This exists because the direct write it
+    /// replaces was worse than doing nothing: it made Head Office's own screen show the move
+    /// as complete while the real PC and the real customer had not moved at all, and left the
+    /// session's own PcId pointing at the wrong machine for good, with no heartbeat ever going
+    /// to correct it back.
+    /// </summary>
+    private static async Task<(bool, string)> RunTransferSessionAsync(
+        IServiceProvider scoped, string payload, CancellationToken ct)
+    {
+        Guid sessionId, targetPcId;
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            sessionId = doc.RootElement.GetProperty("sessionId").GetGuid();
+            targetPcId = doc.RootElement.GetProperty("targetPcId").GetGuid();
+        }
+        catch
+        {
+            return (false, "The transfer command arrived without a readable session and target PC.");
+        }
+
+        var db = scoped.GetRequiredService<AppDbContext>();
+        var session = await db.Sessions.AsNoTracking().FirstOrDefaultAsync(s => s.Id == sessionId, ct);
+
+        if (session is null)
+            return (false, "No such session exists at this branch.");
+
+        if (session.PcId == targetPcId)
+            return (true, "Already on that PC - nothing to do.");
+
+        if (session.State != SessionState.Active)
+            return (false, $"Session is {session.State.ToString().ToLowerInvariant()}, not active - cannot transfer.");
+
+        try
+        {
+            var sessionService = scoped.GetRequiredService<ISessionService>();
+            var result = await sessionService.TransferSessionAsync(
+                session.BranchId, session.OperatorId, sessionId, new SessionTransferDto { TargetPcId = targetPcId });
+
+            return (true, $"Moved to {result.PcName}.");
         }
         catch (Exception ex)
         {

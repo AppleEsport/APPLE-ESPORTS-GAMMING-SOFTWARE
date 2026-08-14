@@ -118,4 +118,5 @@ public static class BranchCommands
     public const string StopSession = "stop_session";
     public const string StartSession = "start_session";
     public const string SetPcState = "set_pc_state";
+    public const string TransferSession = "transfer_session";
 }
