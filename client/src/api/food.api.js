@@ -26,6 +26,14 @@ export const reconcileStock = async (id, reconcileData) => {
   return response.data;
 };
 
+// Records a delivery - adds to whatever the branch already has, Admin/Super Admin only.
+// From Head Office this is accepted (202) and queued for the real branch to carry out;
+// from a branch it applies immediately. See InventoryController.AddStock.
+export const addStock = async (id, { quantity, reason }) => {
+  const response = await api.post(`/inventory/${id}/stock/add`, { quantity, reason });
+  return response.data;
+};
+
 export const getDiscrepancies = async (params = {}) => {
   const response = await api.get('/inventory/discrepancies', { params });
   return response.data;

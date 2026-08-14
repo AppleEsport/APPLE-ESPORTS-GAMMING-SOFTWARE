@@ -151,4 +151,14 @@ public static class BranchCommands
     public const string StartSession = "start_session";
     public const string SetPcState = "set_pc_state";
     public const string TransferSession = "transfer_session";
+    public const string ProcessPayment = "process_payment";
+
+    /// <summary>
+    /// A stock delivery, told to the branch rather than typed into a number that would only
+    /// ever be overwritten. See InventoryController.AddStock for why this exists at all: Head
+    /// Office cannot know a shelf's real count, only the branch standing in front of it can -
+    /// so this carries how many units arrived, not what the total should now read, and the
+    /// branch adds that to whatever it already honestly has.
+    /// </summary>
+    public const string AdjustStock = "adjust_stock";
 }
