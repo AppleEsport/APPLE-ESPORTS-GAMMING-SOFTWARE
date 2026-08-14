@@ -8,7 +8,6 @@ using AppleEsportsErp.Application.Exceptions;
 using AppleEsportsErp.Application.Interfaces;
 using System.Security.Claims;
 using Microsoft.AspNetCore.SignalR;
-using Microsoft.EntityFrameworkCore;
 
 namespace AppleEsportsErp.Api.Controllers;
 
@@ -20,48 +19,16 @@ public class BillingController : ControllerBase
 {
     private readonly IBillingService _billingService;
     private readonly IHubContext<AppleEsportsErp.Api.Hubs.PcOverlayHub> _pcOverlayHub;
-    private readonly AppleEsportsErp.Infrastructure.Data.AppDbContext _db;
-    private readonly AppleEsportsErp.Api.Services.IRemoteBranchControl _remote;
-
+    
     public static readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, AppleEsportsErp.Application.DTOs.Billing.PendingWalletApproval> PendingApprovals = new();
 
-    public BillingController(
-        IBillingService billingService,
-        IHubContext<AppleEsportsErp.Api.Hubs.PcOverlayHub> pcOverlayHub,
-        AppleEsportsErp.Infrastructure.Data.AppDbContext db,
-        AppleEsportsErp.Api.Services.IRemoteBranchControl remote)
+    public BillingController(IBillingService billingService, IHubContext<AppleEsportsErp.Api.Hubs.PcOverlayHub> pcOverlayHub)
     {
         _billingService = billingService;
         _pcOverlayHub = pcOverlayHub;
-        _db = db;
-        _remote = remote;
     }
 
     private Guid GetBranchId() => Guid.Parse(HttpContext.Items["BranchId"]!.ToString()!);
-
-    private Guid CurrentUserId() =>
-        Guid.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : Guid.Empty;
-
-    /// <summary>
-    /// Turns "Head Office pressed Pay" into an instruction for the branch that actually has the
-    /// customer, the till and the cash - same reasoning as SessionsController.SendToBranchAsync.
-    /// A payment recorded only at Head Office is invisible to the counter: the register is never
-    /// credited, and the PC stays locked showing Billing forever, no matter what Head Office's
-    /// own copy says.
-    /// </summary>
-    private async Task<IActionResult> SendToBranchAsync(
-        Guid branchId, string commandType, object payload, CancellationToken ct)
-    {
-        var receipt = await _remote.SendAsync(branchId, commandType, payload, CurrentUserId(), ct);
-
-        return Accepted(ApiResponse<object>.Ok(new
-        {
-            queued = true,
-            commandId = receipt.CommandId,
-            branchIsReporting = receipt.BranchIsReporting,
-            message = receipt.Message,
-        }));
-    }
 
     [HttpGet]
     public async Task<IActionResult> GetActiveBills([FromQuery] int page = 1, [FromQuery] int pageSize = 50)
@@ -122,35 +89,8 @@ public class BillingController : ControllerBase
 
     [HttpPost("{id:guid}/pay")]
     [Idempotent]
-    public async Task<IActionResult> ProcessPayment(Guid id, [FromBody] ProcessPaymentDto dto, CancellationToken ct)
+    public async Task<IActionResult> ProcessPayment(Guid id, [FromBody] ProcessPaymentDto dto)
     {
-        // From Head Office this becomes an instruction for the branch, exactly like Stop
-        // Session - a payment written only into Head Office's synced copy leaves the branch's
-        // own register uncredited and its PC locked on Billing forever, since the branch was
-        // never actually told the customer paid.
-        if (_remote.MustTravel)
-        {
-            var branchId = await _db.Set<AppleEsportsErp.Domain.Entities.Bill>().AsNoTracking()
-                .Where(b => b.Id == id).Select(b => b.BranchId).FirstOrDefaultAsync(ct);
-
-            if (branchId == Guid.Empty)
-                return NotFound(ApiResponse<object>.Fail("Head Office has no such bill.", "BILL_NOT_FOUND"));
-
-            return await SendToBranchAsync(branchId, AppleEsportsErp.Api.Services.BranchCommands.ProcessPayment, new
-            {
-                billId = id,
-                dto.PaymentType,
-                dto.CashAmount,
-                dto.OnlineAmount,
-                dto.WalletAmount,
-                dto.CashReceived,
-                dto.CreditAmount,
-                dto.MemberId,
-                dto.CustomerName,
-                dto.CustomerPhone,
-            }, ct);
-        }
-
         var result = await _billingService.ProcessPaymentAsync(GetBranchId(), (await this.GetOperatorIdAsync()), (await this.GetShiftIdAsync()), id, dto);
         return Ok(ApiResponse<BillDto>.Ok(result));
     }
