@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
 using AppleEsportsErp.Api.Extensions;
 using AppleEsportsErp.Api.Filters;
+using AppleEsportsErp.Infrastructure.Configuration;
 
 namespace AppleEsportsErp.Api.Controllers;
 
@@ -31,14 +32,29 @@ public class InventoryController : ControllerBase
 {
     private readonly AppleEsportsErp.Application.Interfaces.IUnitOfWork _unitOfWork;
     private readonly ILogger<InventoryController> _logger;
+    private readonly IConfiguration _configuration;
 
     public InventoryController(
         AppleEsportsErp.Application.Interfaces.IUnitOfWork unitOfWork,
-        ILogger<InventoryController> logger)
+        ILogger<InventoryController> logger,
+        IConfiguration configuration)
     {
         _unitOfWork = unitOfWork;
         _logger = logger;
+        _configuration = configuration;
     }
+
+    /// <summary>
+    /// A number typed into the stock field means nothing here and never has - Head Office is
+    /// not a shop with a shelf. It is silently zeroed for a new item, and silently left
+    /// untouched for an existing one, rather than written and forgotten: writing it briefly
+    /// made the screen agree with what was typed, until the real branch's own report arrived
+    /// a few seconds later and corrected it back to what stock actually is there. That looked
+    /// exactly like the number "not sticking" - it never stuck anywhere, because there was
+    /// nowhere at Head Office for it to genuinely mean anything.
+    /// </summary>
+    private int StockOwnedByThisDeployment(int requested, int fallbackIfHeadOffice) =>
+        _configuration.IsHeadOffice() ? fallbackIfHeadOffice : requested;
 
     [HttpGet]
     public async Task<IActionResult> GetAll([FromQuery] bool includeAll = false, [FromQuery] Guid? branchId = null)
@@ -118,7 +134,12 @@ public class InventoryController : ControllerBase
     public async Task<IActionResult> Create([FromBody] CreateInventoryItemDto dto)
     {
         var targetBranchId = dto.BranchId ?? Guid.Parse(HttpContext.Items["BranchId"]!.ToString()!);
-        var requestedStock = dto.CurrentStock;
+
+        // A brand new item has no real branch stock yet regardless of what was typed, if this
+        // is Head Office - see StockOwnedByThisDeployment. Zero here is not a bug being
+        // reintroduced; it is the honest starting point until the real branch reports what it
+        // actually has.
+        var requestedStock = StockOwnedByThisDeployment(dto.CurrentStock, fallbackIfHeadOffice: 0);
 
         await _unitOfWork.BeginTransactionAsync();
         try
@@ -210,8 +231,6 @@ public class InventoryController : ControllerBase
     [Authorize(Policy = "Dashboard:menu_editor")]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateInventoryItemDto dto)
     {
-        var requestedStock = dto.CurrentStock;
-
         await _unitOfWork.BeginTransactionAsync();
         try
         {
@@ -224,6 +243,11 @@ public class InventoryController : ControllerBase
             await _unitOfWork.RollbackTransactionAsync();
             return NotFound(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Fail("Inventory item not found"));
         }
+
+        // Left exactly as it already is if this is Head Office - see
+        // StockOwnedByThisDeployment. Only the real branch that actually holds this item can
+        // say what its stock is; a number typed here has nowhere real to apply to.
+        var requestedStock = StockOwnedByThisDeployment(dto.CurrentStock, fallbackIfHeadOffice: item.CurrentStock);
 
         var now = DateTimeOffset.UtcNow;
         var isOp = User.FindFirstValue(ClaimTypes.Role) == "operator";
@@ -264,7 +288,7 @@ public class InventoryController : ControllerBase
             await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.InventoryLog>().AddAsync(log);
         }
 
-        if (item.CurrentStock != dto.CurrentStock)
+        if (item.CurrentStock != requestedStock)
         {
             var log = new AppleEsportsErp.Domain.Entities.InventoryLog
             {
@@ -273,9 +297,9 @@ public class InventoryController : ControllerBase
                 BranchId = item.BranchId,
                 OperatorId = logOperatorId,
                 Action = "refill",
-                Quantity = dto.CurrentStock - item.CurrentStock,
+                Quantity = requestedStock - item.CurrentStock,
                 OldValue = item.CurrentStock.ToString(),
-                NewValue = dto.CurrentStock.ToString(),
+                NewValue = requestedStock.ToString(),
                 Reason = "Stock count updated via menu editor",
                 CreatedAt = now
             };
@@ -330,8 +354,8 @@ public class InventoryController : ControllerBase
         catch (Exception ex)
         {
             await _unitOfWork.RollbackTransactionAsync();
-            _logger.LogError(ex, "Failed to update menu item {ItemId} with stock {RequestedStock}.",
-                id, requestedStock);
+            _logger.LogError(ex, "Failed to update menu item {ItemId} with requested stock {RequestedStock}.",
+                id, dto.CurrentStock);
             throw;
         }
     }
