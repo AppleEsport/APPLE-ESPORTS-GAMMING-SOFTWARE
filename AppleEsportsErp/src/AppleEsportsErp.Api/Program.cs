@@ -98,6 +98,13 @@ builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection"))
 );
 
+// Branches record their shifts, tills and credits for Head Office as they save them; Head
+// Office records nothing, having nowhere to send it and no wish to mail itself the rows it
+// has just received. Set here because a deployment's role is fixed for the life of the
+// process - it is read from configuration once, at the only moment it can possibly change.
+AppleEsportsErp.Infrastructure.Data.SyncCapture.IsEnabled =
+    !AppleEsportsErp.Infrastructure.Configuration.DeploymentRole.IsHeadOffice(builder.Configuration);
+
 // ── 2. JWT Authentication (SOP §21 + Q1: full claims embedded) ──
 //
 // Checked explicitly rather than dereferenced with "!". In Docker these arrive as
