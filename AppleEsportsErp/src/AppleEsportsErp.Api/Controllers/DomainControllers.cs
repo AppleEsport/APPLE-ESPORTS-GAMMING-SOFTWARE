@@ -30,10 +30,14 @@ namespace AppleEsportsErp.Api.Controllers;
 public class InventoryController : ControllerBase
 {
     private readonly AppleEsportsErp.Application.Interfaces.IUnitOfWork _unitOfWork;
+    private readonly ILogger<InventoryController> _logger;
 
-    public InventoryController(AppleEsportsErp.Application.Interfaces.IUnitOfWork unitOfWork)
+    public InventoryController(
+        AppleEsportsErp.Application.Interfaces.IUnitOfWork unitOfWork,
+        ILogger<InventoryController> logger)
     {
         _unitOfWork = unitOfWork;
+        _logger = logger;
     }
 
     [HttpGet]
@@ -91,75 +95,135 @@ public class InventoryController : ControllerBase
         return Ok(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Ok(dtos));
     }
 
+    /// <summary>
+    /// Adds a menu item.
+    ///
+    /// Confirmed on the live server, twice, from real data: the initial stock a person typed
+    /// was correctly written to this item's own history log, in the same request, and the
+    /// item's own CurrentStock ended up at zero anyway - not "eventually drifted", zero from
+    /// the very first row written; UpdatedAt never moved again afterward. Reading every line
+    /// of this method does not explain how that is possible, since both the item and the log
+    /// read the same dto.CurrentStock a few lines apart with nothing between them that touches
+    /// it. It happened on two items out of four tested and not on the other two, which rules
+    /// out a plain logic error - a logic error would be wrong every time.
+    ///
+    /// This did not have the transaction every other multi-write action in this codebase uses
+    /// (SessionService, FoodOrderService, BillingService all wrap theirs) - added here now as a
+    /// real safety net regardless of the exact mechanism, plus a loud, specific log line the
+    /// moment the two values disagree, so the next occurrence is caught with a stack trace and
+    /// exact timing instead of only being noticed the next time someone happens to check stock.
+    /// </summary>
     [HttpPost]
     [Authorize(Policy = "Dashboard:menu_editor")]
     public async Task<IActionResult> Create([FromBody] CreateInventoryItemDto dto)
     {
         var targetBranchId = dto.BranchId ?? Guid.Parse(HttpContext.Items["BranchId"]!.ToString()!);
-        
-        var item = new AppleEsportsErp.Domain.Entities.InventoryItem
+        var requestedStock = dto.CurrentStock;
+
+        await _unitOfWork.BeginTransactionAsync();
+        try
         {
-            Id = Guid.NewGuid(),
-            BranchId = targetBranchId,
-            ItemName = dto.ItemName,
-            Category = dto.Category,
-            Price = dto.Price,
-            CurrentStock = dto.CurrentStock,
-            SoldQty = 0,
-            MinStockLimit = dto.MinStockLimit,
-            Status = dto.Status,
-            ImageUrl = dto.ImageUrl,
-            CreatedAt = DateTimeOffset.UtcNow,
-            UpdatedAt = DateTimeOffset.UtcNow
-        };
+            var item = new AppleEsportsErp.Domain.Entities.InventoryItem
+            {
+                Id = Guid.NewGuid(),
+                BranchId = targetBranchId,
+                ItemName = dto.ItemName,
+                Category = dto.Category,
+                Price = dto.Price,
+                CurrentStock = requestedStock,
+                SoldQty = 0,
+                MinStockLimit = dto.MinStockLimit,
+                Status = dto.Status,
+                ImageUrl = dto.ImageUrl,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow
+            };
 
-        await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.InventoryItem>().AddAsync(item);
-        
-        // Log initial stock creation as "refill"
-        var isOp = User.FindFirstValue(ClaimTypes.Role) == "operator";
-        var log = new AppleEsportsErp.Domain.Entities.InventoryLog
+            await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.InventoryItem>().AddAsync(item);
+
+            // Log initial stock creation as "refill"
+            var isOp = User.FindFirstValue(ClaimTypes.Role) == "operator";
+            var log = new AppleEsportsErp.Domain.Entities.InventoryLog
+            {
+                Id = Guid.NewGuid(),
+                InventoryId = item.Id,
+                BranchId = targetBranchId,
+                OperatorId = isOp ? Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!) : (Guid?)null,
+                Action = "refill",
+                Quantity = requestedStock,
+                OldValue = "0",
+                NewValue = requestedStock.ToString(),
+                Reason = "Initial menu item creation",
+                CreatedAt = DateTimeOffset.UtcNow
+            };
+            await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.InventoryLog>().AddAsync(log);
+
+            _logger.LogInformation(
+                "Creating menu item {ItemName} ({ItemId}): CurrentStock set to {RequestedStock} " +
+                "before save.", dto.ItemName, item.Id, requestedStock);
+
+            await _unitOfWork.CommitTransactionAsync();
+
+            // Read back from the database rather than trusting the in-memory object - if
+            // something between the assignment above and the physical write is silently
+            // reverting the value, trusting `item.CurrentStock` here would hide the very bug
+            // this is here to catch.
+            var persisted = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.InventoryItem>()
+                .GetByIdAsync(item.Id);
+
+            if (persisted is not null && persisted.CurrentStock != requestedStock)
+            {
+                _logger.LogError(
+                    "STOCK MISMATCH on create: {ItemName} ({ItemId}) was created with " +
+                    "CurrentStock requested as {Requested}, but reading it back immediately " +
+                    "afterward shows {Actual}. Branch {BranchId}, requested by {UserId}.",
+                    dto.ItemName, item.Id, requestedStock, persisted.CurrentStock,
+                    targetBranchId, User.FindFirstValue(ClaimTypes.NameIdentifier));
+            }
+
+            return Ok(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Ok(new {
+                item.Id,
+                item.ItemName,
+                item.Category,
+                item.Price,
+                CurrentStock = persisted?.CurrentStock ?? item.CurrentStock,
+                item.SoldQty,
+                item.MinStockLimit,
+                Status = item.Status.ToString(),
+                IsLowStock = item.CurrentStock <= item.MinStockLimit,
+                item.ImageUrl,
+                item.CreatedAt,
+                item.UpdatedAt
+            }));
+        }
+        catch (Exception ex)
         {
-            Id = Guid.NewGuid(),
-            InventoryId = item.Id,
-            BranchId = targetBranchId,
-            OperatorId = isOp ? Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!) : (Guid?)null,
-            Action = "refill",
-            Quantity = dto.CurrentStock,
-            OldValue = "0",
-            NewValue = dto.CurrentStock.ToString(),
-            Reason = "Initial menu item creation",
-            CreatedAt = DateTimeOffset.UtcNow
-        };
-        await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.InventoryLog>().AddAsync(log);
-
-        await _unitOfWork.SaveChangesAsync();
-
-        return Ok(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Ok(new {
-            item.Id,
-            item.ItemName,
-            item.Category,
-            item.Price,
-            item.CurrentStock,
-            item.SoldQty,
-            item.MinStockLimit,
-            Status = item.Status.ToString(),
-            IsLowStock = item.CurrentStock <= item.MinStockLimit,
-            item.ImageUrl,
-            item.CreatedAt,
-            item.UpdatedAt
-        }));
+            await _unitOfWork.RollbackTransactionAsync();
+            _logger.LogError(ex, "Failed to create menu item {ItemName} with stock {RequestedStock}.",
+                dto.ItemName, requestedStock);
+            throw;
+        }
     }
 
+    /// <summary>Same live-confirmed stock-write issue as Create - see its doc comment. Same defences here.</summary>
     [HttpPut("{id}")]
     [Authorize(Policy = "Dashboard:menu_editor")]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateInventoryItemDto dto)
     {
+        var requestedStock = dto.CurrentStock;
+
+        await _unitOfWork.BeginTransactionAsync();
+        try
+        {
         var item = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.InventoryItem>()
             .Query()
             .FirstOrDefaultAsync(i => i.Id == id);
 
         if (item == null)
+        {
+            await _unitOfWork.RollbackTransactionAsync();
             return NotFound(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Fail("Inventory item not found"));
+        }
 
         var now = DateTimeOffset.UtcNow;
         var isOp = User.FindFirstValue(ClaimTypes.Role) == "operator";
@@ -221,21 +285,39 @@ public class InventoryController : ControllerBase
         item.ItemName = dto.ItemName;
         item.Category = dto.Category;
         item.Price = dto.Price;
-        item.CurrentStock = dto.CurrentStock;
+        item.CurrentStock = requestedStock;
         item.MinStockLimit = dto.MinStockLimit;
         item.Status = dto.Status;
         item.ImageUrl = dto.ImageUrl;
         item.UpdatedAt = now;
 
         _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.InventoryItem>().Update(item);
-        await _unitOfWork.SaveChangesAsync();
+
+        _logger.LogInformation(
+            "Updating menu item {ItemName} ({ItemId}): CurrentStock set to {RequestedStock} " +
+            "before save.", dto.ItemName, item.Id, requestedStock);
+
+        await _unitOfWork.CommitTransactionAsync();
+
+        var persisted = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.InventoryItem>()
+            .GetByIdAsync(item.Id);
+
+        if (persisted is not null && persisted.CurrentStock != requestedStock)
+        {
+            _logger.LogError(
+                "STOCK MISMATCH on update: {ItemName} ({ItemId}) was saved with CurrentStock " +
+                "requested as {Requested}, but reading it back immediately afterward shows " +
+                "{Actual}. Requested by {UserId}.",
+                dto.ItemName, item.Id, requestedStock, persisted.CurrentStock,
+                User.FindFirstValue(ClaimTypes.NameIdentifier));
+        }
 
         return Ok(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Ok(new {
             item.Id,
             item.ItemName,
             item.Category,
             item.Price,
-            item.CurrentStock,
+            CurrentStock = persisted?.CurrentStock ?? item.CurrentStock,
             item.SoldQty,
             item.MinStockLimit,
             Status = item.Status.ToString(),
@@ -244,6 +326,14 @@ public class InventoryController : ControllerBase
             item.CreatedAt,
             item.UpdatedAt
         }));
+        }
+        catch (Exception ex)
+        {
+            await _unitOfWork.RollbackTransactionAsync();
+            _logger.LogError(ex, "Failed to update menu item {ItemId} with stock {RequestedStock}.",
+                id, requestedStock);
+            throw;
+        }
     }
 
     [HttpDelete("{id}")]
