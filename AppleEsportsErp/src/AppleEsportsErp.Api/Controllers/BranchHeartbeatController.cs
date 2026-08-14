@@ -434,12 +434,39 @@ public class BranchHeartbeatController : ControllerBase
             // open command, and only until the branch reports back, successfully or not. Every
             // other PC in the shop keeps updating as normal, and the moment the command closes
             // this one does too, carrying whatever the branch actually did.
-            if (awaitingOrders.Contains(pc.Id)) continue;
+            if (awaitingOrders.Contains(pc.Id))
+            {
+                _logger.LogWarning(
+                    "PC {PcNumber} ({PcId}) on branch {BranchId} was NOT updated from this " +
+                    "heartbeat - an open command is holding it. Head Office still shows " +
+                    "{HeadOfficeState}/{HeadOfficeSession}.",
+                    pc.PcNumber, pc.Id, dto.BranchId, pc.State, pc.CurrentSessionId);
+                continue;
+            }
 
-            var reported = dto.Pcs.First(p => p.PcId == pc.Id);
+            var reported = dto.Pcs.FirstOrDefault(p => p.PcId == pc.Id);
+            if (reported is null)
+            {
+                // Diagnostic for a real incident: a PC Head Office knows about that this
+                // specific heartbeat did not mention at all. First() used to throw here,
+                // which - since ApplyPcStatesAsync is now individually try/caught in
+                // Receive() - would have quietly aborted the whole loop for every PC still
+                // left to process this beat, not just this one.
+                _logger.LogWarning(
+                    "PC {PcNumber} ({PcId}) on branch {BranchId} was not present in this " +
+                    "heartbeat's PC list at all ({ReportedCount} PCs reported). Left unchanged.",
+                    pc.PcNumber, pc.Id, dto.BranchId, dto.Pcs.Count);
+                continue;
+            }
 
             if (!Enum.TryParse<PcState>(reported.State.Replace("_", ""), ignoreCase: true, out var state))
+            {
+                _logger.LogWarning(
+                    "PC {PcNumber} ({PcId}) on branch {BranchId} reported a state this build " +
+                    "does not recognise: '{ReportedState}'. Left unchanged.",
+                    pc.PcNumber, pc.Id, dto.BranchId, reported.State);
                 continue;   // a state this Head Office build does not know; leave it alone
+            }
 
             // Nothing is written for a PC that has not moved, and this is what lets branches
             // report every three seconds instead of every thirty.
@@ -453,6 +480,11 @@ public class BranchHeartbeatController : ControllerBase
             // It also made UpdatedAt useless. "Last changed" that changes every three seconds
             // whether or not anything changed answers no question anybody would ask of it.
             if (pc.State == state && pc.CurrentSessionId == reported.CurrentSessionId) continue;
+
+            _logger.LogInformation(
+                "PC {PcNumber} ({PcId}) on branch {BranchId} moving {OldState}/{OldSession} -> " +
+                "{NewState}/{NewSession} from heartbeat.",
+                pc.PcNumber, pc.Id, dto.BranchId, pc.State, pc.CurrentSessionId, state, reported.CurrentSessionId);
 
             pc.State = state;
             pc.CurrentSessionId = reported.CurrentSessionId;
@@ -502,6 +534,15 @@ public class BranchHeartbeatController : ControllerBase
 
                 if (root.TryGetProperty("pcId", out var pc) && pc.TryGetGuid(out var pcId))
                     pcIds.Add(pcId);
+
+                // A transfer names two PCs, not one - the source (resolved below through the
+                // session it is currently attached to) and the destination it is moving onto.
+                // Both have to be held: the destination is exactly what a stray heartbeat would
+                // otherwise report as still idle a moment before the branch's own transfer has
+                // actually landed, undoing the move on Head Office's screen before it is even
+                // confirmed.
+                if (root.TryGetProperty("targetPcId", out var t) && t.TryGetGuid(out var targetPcId))
+                    pcIds.Add(targetPcId);
 
                 if (root.TryGetProperty("sessionId", out var s) && s.TryGetGuid(out var sessionId))
                     sessionIds.Add(sessionId);
