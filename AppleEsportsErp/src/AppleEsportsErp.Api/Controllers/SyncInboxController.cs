@@ -237,8 +237,13 @@ public class SyncInboxController : ControllerBase
             // the last thing Head Office had said, not of what the shop is really selling, so a
             // price changed at the counter never showed up here and every sales report was
             // priced against a menu that branch had abandoned.
+            // CurrentStock and SoldQty excluded on purpose - see UpsertRowAsync's own comment
+            // on excludeFields. Confirmed on the live server: without this, a menu item
+            // created at Head Office had its stock overwritten to zero within seconds by the
+            // branch's own echo of the catalogue entry Head Office had just sent it.
             case "inventory_item.changed":
-                await UpsertRowAsync<InventoryItem>(held, root);
+                await UpsertRowAsync<InventoryItem>(held, root,
+                    excludeFields: new HashSet<string> { "CurrentStock", "SoldQty" });
                 break;
 
             // Food orders never travelled up at all before this. A walk-in order's money
@@ -296,7 +301,8 @@ public class SyncInboxController : ControllerBase
     /// not arrived yet is kept, minus the reference, instead of being rejected outright and
     /// taking the day's takings with it.
     /// </summary>
-    private async Task UpsertRowAsync<TEntity>(SyncInboxEntry held, JsonElement root)
+    private async Task UpsertRowAsync<TEntity>(
+        SyncInboxEntry held, JsonElement root, IReadOnlySet<string>? excludeFields = null)
         where TEntity : class, new()
     {
         var set = _db.Set<TEntity>();
@@ -318,6 +324,20 @@ public class SyncInboxController : ControllerBase
             // value, or the till arrives reading zero.
             if (property.Metadata.ValueGenerated == Microsoft.EntityFrameworkCore.Metadata.ValueGenerated.OnAddOrUpdate)
                 continue;
+
+            // A field named by the caller as belonging to the branch alone, never to Head
+            // Office. Exists because of exactly one confirmed failure: a menu item created at
+            // Head Office was pushed down to a branch as a catalogue entry (deliberately
+            // without a stock count, the branch's own concern); the branch created its own
+            // local copy starting at zero, correctly, since it had genuinely never stocked it;
+            // that zero then synced straight back up here and overwrote the number Head Office
+            // had just been given. Proven on the live server, not a guess - the round trip's
+            // own payload named the exact millisecond it happened. It is not a race that only
+            // sometimes fires; it is the guaranteed outcome the first time the branch reports
+            // in, for any item created or edited from Head Office. CurrentStock and SoldQty are
+            // the branch's own trading state and must never travel this direction, the same
+            // rule a PC's busy/idle state already follows.
+            if (excludeFields?.Contains(name) == true) continue;
 
             if (!root.TryGetProperty(name, out var value)) continue;
 
