@@ -96,6 +96,11 @@ services:
       # - Redis__ConnectionString=redis:6379,password=${REDIS_PASSWORD}
     volumes:
       - releases_data:/releases
+      # The app already writes its own plain-text log to /app/logs inside the container
+      # (Program.cs's Serilog file sink) - it just was not reachable from outside without
+      # `docker exec`. Mounted onto the host here so it is an ordinary file at ./logs/api,
+      # readable with `tail`/`cat`/`less` like anything else, no docker vocabulary required.
+      - ./logs/api:/app/logs
     networks:
       - appleesports_net
     depends_on:
