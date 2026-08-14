@@ -206,6 +206,27 @@ public class SyncInboxController : ControllerBase
                 await RecordWalletDeductionAsync(held, root);
                 break;
 
+            // The four End of Day is computed from. Head Office never had any of them, which
+            // is why its figures could not match the counter's however the screens were fixed.
+            // They arrive as whole-row snapshots from SyncCapture and are applied as upserts,
+            // so an update landing before the insert it belongs to still produces the right
+            // row - which happens whenever a branch has been offline.
+            case "shift.changed":
+                await UpsertRowAsync<Shift>(held, root);
+                break;
+
+            case "cash_register.changed":
+                await UpsertRowAsync<CashRegister>(held, root);
+                break;
+
+            case "cash_transaction.changed":
+                await UpsertRowAsync<CashTransaction>(held, root);
+                break;
+
+            case "customer_credit.changed":
+                await UpsertRowAsync<CustomerCredit>(held, root);
+                break;
+
             case "email.send_requested":
                 await SendQueuedEmailAsync(held, root);
                 break;
@@ -230,6 +251,119 @@ public class SyncInboxController : ControllerBase
     /// operator's shifts it fell in is branch bookkeeping. The session is kept and the
     /// reference dropped, rather than the reverse.
     /// </summary>
+    /// <summary>
+    /// Applies a whole-row snapshot from a branch, creating the row or updating it in place.
+    ///
+    /// Written once and reused for shifts, cash registers, cash transactions and credits
+    /// rather than four near-identical handlers, because four hand-written copies is how the
+    /// fifth one gets forgotten - the exact failure this whole piece of work is undoing.
+    ///
+    /// Two things make it safe against a branch that has been offline. It upserts, so an
+    /// update that overtakes its own insert still lands correctly. And it drops any optional
+    /// reference to a row Head Office does not have - a cash register naming a shift that has
+    /// not arrived yet is kept, minus the reference, instead of being rejected outright and
+    /// taking the day's takings with it.
+    /// </summary>
+    private async Task UpsertRowAsync<TEntity>(SyncInboxEntry held, JsonElement root)
+        where TEntity : class, new()
+    {
+        var set = _db.Set<TEntity>();
+        var existing = await set.FindAsync(held.AggregateId);
+
+        var entity = existing ?? new TEntity();
+        var entry = existing is null ? _db.Entry(entity) : _db.Entry(existing);
+
+        foreach (var property in entry.Properties)
+        {
+            var name = property.Metadata.Name;
+
+            // Never write a row version or anything the database generates for itself. xmin
+            // in particular is PostgreSQL's own bookkeeping about a row in THIS database;
+            // taking a branch's copy of it and writing it here would be meaningless at best.
+            if (property.Metadata.IsConcurrencyToken) continue;
+            if (property.Metadata.ValueGenerated != Microsoft.EntityFrameworkCore.Metadata.ValueGenerated.Never
+                && !property.Metadata.IsPrimaryKey()) continue;
+
+            if (!root.TryGetProperty(name, out var value)) continue;
+
+            // The primary key is set from the branch's id when creating, and never touched
+            // afterwards - an update must not be able to move a row to a different id.
+            if (property.Metadata.IsPrimaryKey() && existing is not null) continue;
+
+            var clr = Nullable.GetUnderlyingType(property.Metadata.ClrType) ?? property.Metadata.ClrType;
+
+            object? converted;
+            try
+            {
+                converted = ConvertJson(value, clr);
+            }
+            catch
+            {
+                continue;   // a field this build cannot read is skipped, not fatal
+            }
+
+            // An optional link to something Head Office has never seen - most often a shift,
+            // which belongs to the branch and may arrive later or not at all.
+            if (converted is Guid g && g != Guid.Empty
+                && property.Metadata.IsForeignKey()
+                && property.Metadata.IsNullable
+                && !await ForeignRowExistsAsync(property.Metadata, g))
+            {
+                converted = null;
+            }
+
+            property.CurrentValue = converted;
+        }
+
+        if (existing is null)
+        {
+            entry.Property("Id").CurrentValue = held.AggregateId;
+            set.Add(entity);
+        }
+    }
+
+    /// <summary>
+    /// Whether the row a foreign key points at actually exists here yet.
+    ///
+    /// Asked of the principal table named by the relationship rather than a hard-coded list,
+    /// so a new nullable reference added to any of these entities is handled without anyone
+    /// remembering to extend this.
+    /// </summary>
+    private async Task<bool> ForeignRowExistsAsync(Microsoft.EntityFrameworkCore.Metadata.IProperty property, Guid id)
+    {
+        var principal = property.GetContainingForeignKeys().FirstOrDefault()?.PrincipalEntityType.ClrType;
+        if (principal is null) return true;   // cannot tell; leave the value alone
+
+        var rows = (IQueryable<object>)_db.GetType()
+            .GetMethod(nameof(DbContext.Set), 1, Type.EmptyTypes)!
+            .MakeGenericMethod(principal)
+            .Invoke(_db, null)!;
+
+        return await rows.AnyAsync(e => EF.Property<Guid>(e, "Id") == id);
+    }
+
+    private static object? ConvertJson(JsonElement value, Type target)
+    {
+        if (value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined) return null;
+
+        if (target == typeof(Guid)) return value.GetGuid();
+        if (target == typeof(string)) return value.GetString();
+        if (target == typeof(int)) return value.GetInt32();
+        if (target == typeof(long)) return value.GetInt64();
+        if (target == typeof(decimal)) return value.GetDecimal();
+        if (target == typeof(double)) return value.GetDouble();
+        if (target == typeof(bool)) return value.GetBoolean();
+        if (target == typeof(DateTimeOffset)) return value.GetDateTimeOffset().ToUniversalTime();
+        if (target == typeof(DateTime)) return value.GetDateTime().ToUniversalTime();
+        if (target == typeof(DateOnly)) return DateOnly.FromDateTime(value.GetDateTime());
+
+        // Enums travel as their name, so a value this build does not recognise is skipped by
+        // the caller rather than silently becoming whichever member happens to be zero.
+        if (target.IsEnum) return Enum.Parse(target, value.GetString()!, ignoreCase: true);
+
+        return value.GetString();
+    }
+
     private async Task<Guid?> KnownHereOnly<TEntity>(Guid? id) where TEntity : class
         => id is null || !await _db.Set<TEntity>().AnyAsync(e => EF.Property<Guid>(e, "Id") == id)
             ? null

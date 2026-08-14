@@ -66,6 +66,36 @@ public class AppDbContext : DbContext
     // Power cuts and lost connections, for the EOD and printed reports
     public DbSet<DowntimeEvent> DowntimeEvents => Set<DowntimeEvent>();
 
+    /// <summary>
+    /// Records anything a branch did that Head Office needs, in the same breath as doing it.
+    ///
+    /// Both overloads are here on purpose. Some of this codebase saves synchronously and some
+    /// asynchronously, and instrumenting only one is precisely the sort of half-coverage that
+    /// produced the bugs SyncCapture exists to end.
+    ///
+    /// The outbox entries are added before the save runs, so they are part of the same
+    /// transaction as the shift, till or credit that caused them. A crash between the two is
+    /// therefore not possible: either the branch took the money and has a record queued to
+    /// report it, or neither happened.
+    /// </summary>
+    public override async Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+    {
+        CaptureForSync();
+        return await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+    }
+
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        CaptureForSync();
+        return base.SaveChanges(acceptAllChangesOnSuccess);
+    }
+
+    private void CaptureForSync()
+    {
+        var entries = SyncCapture.Collect(ChangeTracker);
+        if (entries.Count > 0) SyncOutboxEntries.AddRange(entries);
+    }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
