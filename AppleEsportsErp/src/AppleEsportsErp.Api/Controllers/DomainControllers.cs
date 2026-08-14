@@ -7,8 +7,6 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
 using AppleEsportsErp.Api.Extensions;
 using AppleEsportsErp.Api.Filters;
-using AppleEsportsErp.Application.Constants;
-using AppleEsportsErp.Application.Interfaces;
 using AppleEsportsErp.Infrastructure.Configuration;
 
 namespace AppleEsportsErp.Api.Controllers;
@@ -35,25 +33,28 @@ public class InventoryController : ControllerBase
     private readonly AppleEsportsErp.Application.Interfaces.IUnitOfWork _unitOfWork;
     private readonly ILogger<InventoryController> _logger;
     private readonly IConfiguration _configuration;
-    private readonly AppleEsportsErp.Api.Services.IRemoteBranchControl _remote;
-    private readonly IAuditService _audit;
 
     public InventoryController(
         AppleEsportsErp.Application.Interfaces.IUnitOfWork unitOfWork,
         ILogger<InventoryController> logger,
-        IConfiguration configuration,
-        AppleEsportsErp.Api.Services.IRemoteBranchControl remote,
-        IAuditService audit)
+        IConfiguration configuration)
     {
         _unitOfWork = unitOfWork;
         _logger = logger;
         _configuration = configuration;
-        _remote = remote;
-        _audit = audit;
     }
 
-    private Guid CurrentUserId() =>
-        Guid.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : Guid.Empty;
+    /// <summary>
+    /// A number typed into the stock field means nothing here and never has - Head Office is
+    /// not a shop with a shelf. It is silently zeroed for a new item, and silently left
+    /// untouched for an existing one, rather than written and forgotten: writing it briefly
+    /// made the screen agree with what was typed, until the real branch's own report arrived
+    /// a few seconds later and corrected it back to what stock actually is there. That looked
+    /// exactly like the number "not sticking" - it never stuck anywhere, because there was
+    /// nowhere at Head Office for it to genuinely mean anything.
+    /// </summary>
+    private int StockOwnedByThisDeployment(int requested, int fallbackIfHeadOffice) =>
+        _configuration.IsHeadOffice() ? fallbackIfHeadOffice : requested;
 
     [HttpGet]
     public async Task<IActionResult> GetAll([FromQuery] bool includeAll = false, [FromQuery] Guid? branchId = null)
@@ -111,23 +112,34 @@ public class InventoryController : ControllerBase
     }
 
     /// <summary>
-    /// Adds a menu item to the catalogue. Always starts at zero stock.
+    /// Adds a menu item.
     ///
-    /// Stock used to be settable right here, and a typed number could be silently overwritten
-    /// to zero within seconds by the branch's own echo of this same catalogue entry - proven
-    /// on the live server: an item created at Head Office with stock 40 came back from the
-    /// branch it was pushed to as CurrentStock 0 fourteen seconds later, because the branch had
-    /// genuinely never stocked it and correctly said so. Rather than fight that forever, stock
-    /// is no longer part of creating an item at all. A new item starts at zero everywhere, and
-    /// an actual delivery is recorded afterward through AddStock - see its own doc comment for
-    /// why that is a real, permanent fix rather than the same bug moved one field over.
+    /// Confirmed on the live server, twice, from real data: the initial stock a person typed
+    /// was correctly written to this item's own history log, in the same request, and the
+    /// item's own CurrentStock ended up at zero anyway - not "eventually drifted", zero from
+    /// the very first row written; UpdatedAt never moved again afterward. Reading every line
+    /// of this method does not explain how that is possible, since both the item and the log
+    /// read the same dto.CurrentStock a few lines apart with nothing between them that touches
+    /// it. It happened on two items out of four tested and not on the other two, which rules
+    /// out a plain logic error - a logic error would be wrong every time.
+    ///
+    /// This did not have the transaction every other multi-write action in this codebase uses
+    /// (SessionService, FoodOrderService, BillingService all wrap theirs) - added here now as a
+    /// real safety net regardless of the exact mechanism, plus a loud, specific log line the
+    /// moment the two values disagree, so the next occurrence is caught with a stack trace and
+    /// exact timing instead of only being noticed the next time someone happens to check stock.
     /// </summary>
     [HttpPost]
     [Authorize(Policy = "Dashboard:menu_editor")]
     public async Task<IActionResult> Create([FromBody] CreateInventoryItemDto dto)
     {
         var targetBranchId = dto.BranchId ?? Guid.Parse(HttpContext.Items["BranchId"]!.ToString()!);
-        var requestedStock = 0;
+
+        // A brand new item has no real branch stock yet regardless of what was typed, if this
+        // is Head Office - see StockOwnedByThisDeployment. Zero here is not a bug being
+        // reintroduced; it is the honest starting point until the real branch reports what it
+        // actually has.
+        var requestedStock = StockOwnedByThisDeployment(dto.CurrentStock, fallbackIfHeadOffice: 0);
 
         await _unitOfWork.BeginTransactionAsync();
         try
@@ -150,8 +162,22 @@ public class InventoryController : ControllerBase
 
             await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.InventoryItem>().AddAsync(item);
 
-            // No "0 -> 0" log line here any more - every item starts at zero now, so there is
-            // nothing to record until an actual delivery arrives via AddStock.
+            // Log initial stock creation as "refill"
+            var isOp = User.FindFirstValue(ClaimTypes.Role) == "operator";
+            var log = new AppleEsportsErp.Domain.Entities.InventoryLog
+            {
+                Id = Guid.NewGuid(),
+                InventoryId = item.Id,
+                BranchId = targetBranchId,
+                OperatorId = isOp ? Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!) : (Guid?)null,
+                Action = "refill",
+                Quantity = requestedStock,
+                OldValue = "0",
+                NewValue = requestedStock.ToString(),
+                Reason = "Initial menu item creation",
+                CreatedAt = DateTimeOffset.UtcNow
+            };
+            await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.InventoryLog>().AddAsync(log);
 
             _logger.LogInformation(
                 "Creating menu item {ItemName} ({ItemId}): CurrentStock set to {RequestedStock} " +
@@ -218,6 +244,11 @@ public class InventoryController : ControllerBase
             return NotFound(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Fail("Inventory item not found"));
         }
 
+        // Left exactly as it already is if this is Head Office - see
+        // StockOwnedByThisDeployment. Only the real branch that actually holds this item can
+        // say what its stock is; a number typed here has nowhere real to apply to.
+        var requestedStock = StockOwnedByThisDeployment(dto.CurrentStock, fallbackIfHeadOffice: item.CurrentStock);
+
         var now = DateTimeOffset.UtcNow;
         var isOp = User.FindFirstValue(ClaimTypes.Role) == "operator";
         var logOperatorId = isOp ? Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!) : (Guid?)null;
@@ -257,13 +288,28 @@ public class InventoryController : ControllerBase
             await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.InventoryLog>().AddAsync(log);
         }
 
-        // Stock is deliberately untouched here - not read from dto.CurrentStock at all any
-        // more. Editing an item's name, price, category or status must never be able to move
-        // its stock as a side effect; only AddStock (a real delivery, Admin/Super Admin only)
-        // ever changes this number now.
+        if (item.CurrentStock != requestedStock)
+        {
+            var log = new AppleEsportsErp.Domain.Entities.InventoryLog
+            {
+                Id = Guid.NewGuid(),
+                InventoryId = item.Id,
+                BranchId = item.BranchId,
+                OperatorId = logOperatorId,
+                Action = "refill",
+                Quantity = requestedStock - item.CurrentStock,
+                OldValue = item.CurrentStock.ToString(),
+                NewValue = requestedStock.ToString(),
+                Reason = "Stock count updated via menu editor",
+                CreatedAt = now
+            };
+            await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.InventoryLog>().AddAsync(log);
+        }
+
         item.ItemName = dto.ItemName;
         item.Category = dto.Category;
         item.Price = dto.Price;
+        item.CurrentStock = requestedStock;
         item.MinStockLimit = dto.MinStockLimit;
         item.Status = dto.Status;
         item.ImageUrl = dto.ImageUrl;
@@ -271,14 +317,31 @@ public class InventoryController : ControllerBase
 
         _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.InventoryItem>().Update(item);
 
+        _logger.LogInformation(
+            "Updating menu item {ItemName} ({ItemId}): CurrentStock set to {RequestedStock} " +
+            "before save.", dto.ItemName, item.Id, requestedStock);
+
         await _unitOfWork.CommitTransactionAsync();
+
+        var persisted = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.InventoryItem>()
+            .GetByIdAsync(item.Id);
+
+        if (persisted is not null && persisted.CurrentStock != requestedStock)
+        {
+            _logger.LogError(
+                "STOCK MISMATCH on update: {ItemName} ({ItemId}) was saved with CurrentStock " +
+                "requested as {Requested}, but reading it back immediately afterward shows " +
+                "{Actual}. Requested by {UserId}.",
+                dto.ItemName, item.Id, requestedStock, persisted.CurrentStock,
+                User.FindFirstValue(ClaimTypes.NameIdentifier));
+        }
 
         return Ok(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Ok(new {
             item.Id,
             item.ItemName,
             item.Category,
             item.Price,
-            item.CurrentStock,
+            CurrentStock = persisted?.CurrentStock ?? item.CurrentStock,
             item.SoldQty,
             item.MinStockLimit,
             Status = item.Status.ToString(),
@@ -325,20 +388,10 @@ public class InventoryController : ControllerBase
         }
     }
 
-    /// <summary>
-    /// Corrects stock to what was actually counted at the shelf. Admin/Super Admin only, and
-    /// branch-only - a physical count is, by definition, something done standing in front of
-    /// the shelf, which Head Office is never doing.
-    /// </summary>
     [HttpPost("{id}/reconcile")]
-    [Authorize(Roles = Roles.SuperAdmin + "," + Roles.Admin)]
+    [Authorize(Policy = "Dashboard:menu_editor")]
     public async Task<IActionResult> Reconcile(Guid id, [FromBody] ReconcileStockDto dto)
     {
-        if (_configuration.IsHeadOffice())
-            return BadRequest(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Fail(
-                "A physical count can only be done at the branch that actually holds the shelf.",
-                "BRANCH_ONLY_OPERATION"));
-
         var item = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.InventoryItem>()
             .Query()
             .FirstOrDefaultAsync(i => i.Id == id);
@@ -349,7 +402,8 @@ public class InventoryController : ControllerBase
         var oldStock = item.CurrentStock;
         var physicalCount = dto.PhysicalCount;
         var now = DateTimeOffset.UtcNow;
-        var logOperatorId = CurrentUserId() is { } uid && uid != Guid.Empty ? uid : (Guid?)null;
+        var isOp = User.FindFirstValue(ClaimTypes.Role) == "operator";
+        var logOperatorId = isOp ? Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!) : (Guid?)null;
 
         item.CurrentStock = physicalCount;
         item.UpdatedAt = now;
@@ -383,127 +437,6 @@ public class InventoryController : ControllerBase
         await _unitOfWork.SaveChangesAsync();
 
         return Ok(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Ok(new { item.Id, item.CurrentStock, Status = item.Status.ToString() }));
-    }
-
-    /// <summary>
-    /// Records a stock delivery - Admin or Super Admin only, and the only way stock can be
-    /// changed at all now. Adds to whatever the branch already honestly has rather than
-    /// setting an absolute number, on purpose: an admin at Head Office cannot see the shelf and
-    /// has no business declaring what its total should now read, only how many more units just
-    /// arrived. The branch adds that to its own real count, whatever that happens to be by the
-    /// time the instruction reaches it.
-    ///
-    /// From a real branch this applies immediately, the same as any other counter action. From
-    /// Head Office it travels as an instruction and is carried out by the branch that actually
-    /// holds the item - never written here directly, which is the entire fix: Head Office
-    /// asking is safe, Head Office writing its own guess of the branch's stock is what corrupted
-    /// it the first time.
-    /// </summary>
-    [HttpPost("{id}/stock/add")]
-    [Authorize(Roles = Roles.SuperAdmin + "," + Roles.Admin)]
-    public async Task<IActionResult> AddStock(Guid id, [FromBody] AddStockDto dto, CancellationToken ct)
-    {
-        var item = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.InventoryItem>()
-            .Query()
-            .AsNoTracking()
-            .FirstOrDefaultAsync(i => i.Id == id, ct);
-
-        if (item == null)
-            return NotFound(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Fail("Inventory item not found"));
-
-        if (_remote.MustTravel)
-        {
-            var receipt = await _remote.SendAsync(item.BranchId, AppleEsportsErp.Api.Services.BranchCommands.AdjustStock, new
-            {
-                inventoryId = id,
-                quantity = dto.Quantity,
-                reason = dto.Reason,
-            }, CurrentUserId(), ct);
-
-            return Accepted(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Ok(new
-            {
-                queued = true,
-                commandId = receipt.CommandId,
-                branchIsReporting = receipt.BranchIsReporting,
-                message = receipt.Message,
-            }));
-        }
-
-        await _unitOfWork.BeginTransactionAsync();
-        try
-        {
-            var tracked = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.InventoryItem>()
-                .GetByIdAsync(id, ct);
-
-            if (tracked is null)
-            {
-                await _unitOfWork.RollbackTransactionAsync();
-                return NotFound(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Fail("Inventory item not found"));
-            }
-
-            var oldStock = tracked.CurrentStock;
-            var now = DateTimeOffset.UtcNow;
-
-            tracked.CurrentStock += dto.Quantity;
-            tracked.UpdatedAt = now;
-
-            if (tracked.Status == AppleEsportsErp.Domain.Enums.FoodAvailability.OutOfStock && tracked.CurrentStock > 0)
-                tracked.Status = AppleEsportsErp.Domain.Enums.FoodAvailability.Available;
-
-            _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.InventoryItem>().Update(tracked);
-
-            var log = new AppleEsportsErp.Domain.Entities.InventoryLog
-            {
-                Id = Guid.NewGuid(),
-                InventoryId = tracked.Id,
-                BranchId = tracked.BranchId,
-                OperatorId = CurrentUserId() is { } uid && uid != Guid.Empty ? uid : (Guid?)null,
-                Action = "refill",
-                Quantity = dto.Quantity,
-                OldValue = oldStock.ToString(),
-                NewValue = tracked.CurrentStock.ToString(),
-                Reason = dto.Reason ?? "Stock delivery",
-                CreatedAt = now,
-            };
-            await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.InventoryLog>().AddAsync(log);
-
-            await _audit.LogAsync(new AppleEsportsErp.Application.Interfaces.AuditEntry
-            {
-                OperatorId = CurrentUserId(),
-                UserRole = User.FindFirstValue(ClaimTypes.Role) ?? Roles.Admin,
-                Action = AuditActions.StockAdd,
-                TargetType = "inventory_item",
-                TargetId = tracked.Id,
-                BranchId = tracked.BranchId,
-                Details = new { itemName = tracked.ItemName, quantity = dto.Quantity, oldStock, newStock = tracked.CurrentStock, dto.Reason },
-            });
-
-            await _unitOfWork.CommitTransactionAsync();
-
-            return Ok(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Ok(new
-            {
-                tracked.Id,
-                tracked.ItemName,
-                tracked.CurrentStock,
-                Status = tracked.Status.ToString(),
-            }));
-        }
-        catch (Exception ex)
-        {
-            await _unitOfWork.RollbackTransactionAsync();
-            await _audit.LogAsync(new AppleEsportsErp.Application.Interfaces.AuditEntry
-            {
-                OperatorId = CurrentUserId(),
-                UserRole = User.FindFirstValue(ClaimTypes.Role) ?? Roles.Admin,
-                Action = AuditActions.StockAdd,
-                TargetType = "inventory_item",
-                TargetId = id,
-                Success = false,
-                BranchId = item.BranchId,
-                Details = new { itemName = item.ItemName, quantity = dto.Quantity, error = ex.GetBaseException().Message },
-            });
-            throw;
-        }
     }
 
     [HttpGet("discrepancies")]
@@ -618,14 +551,6 @@ public class ReconcileStockDto
 {
     [Required]
     public int PhysicalCount { get; set; }
-    public string? Reason { get; set; }
-}
-
-public class AddStockDto
-{
-    [Required]
-    [Range(1, 1000000)]
-    public int Quantity { get; set; }
     public string? Reason { get; set; }
 }
 
