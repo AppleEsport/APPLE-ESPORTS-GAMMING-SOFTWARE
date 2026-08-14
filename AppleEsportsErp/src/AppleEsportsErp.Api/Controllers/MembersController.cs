@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using AppleEsportsErp.Api.Extensions;
 using AppleEsportsErp.Api.Filters;
+using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Common;
 using AppleEsportsErp.Application.DTOs.Members;
 using AppleEsportsErp.Application.Interfaces;
@@ -59,12 +60,28 @@ public class MembersController : ControllerBase
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> UpdateMember(Guid id, [FromBody] UpdateMemberDto dto)
     {
-        Console.WriteLine($"[DEBUG UpdateMember] id: {id}, FullName: {dto.FullName}, DisableLogin: {dto.DisableLogin}, Username: {dto.Username}");
+        // A debug Console.WriteLine used to print every member's name and login details here on
+        // every edit, straight into the branch's service log where they sat in plain text.
         var result = await _memberService.UpdateMemberAsync(GetBranchId(), (await this.GetOperatorIdAsync()), id, dto);
         return Ok(ApiResponse<MemberDto>.Ok(result));
     }
 
+    /// <summary>
+    /// Removes a member. Super Admin only.
+    ///
+    /// It was open to any signed-in operator, which put the single most destructive action in
+    /// the system on the same screen as everyday counter work. A member carries a wallet
+    /// balance, a credit history and a share of every End of Day they have ever appeared in, so
+    /// removing one is not like clearing a typo - and a counter is a busy place where the wrong
+    /// row gets clicked. There is also no branch check on the way in, so an operator at one shop
+    /// could remove a member who belongs to another.
+    ///
+    /// Nothing legitimate is lost by restricting it. Suspending a member is the operator-level
+    /// action for somebody who should not be playing, it is reversible, and it keeps the money
+    /// trail intact.
+    /// </summary>
     [HttpDelete("{id:guid}")]
+    [Authorize(Roles = Roles.SuperAdmin)]
     public async Task<IActionResult> DeleteMember(Guid id)
     {
         await _memberService.DeleteMemberAsync(GetBranchId(), (await this.GetOperatorIdAsync()), id);

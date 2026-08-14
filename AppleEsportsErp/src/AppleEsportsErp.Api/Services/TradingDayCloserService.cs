@@ -12,7 +12,15 @@ namespace AppleEsportsErp.Api.Services;
 ///
 /// The tick still works and still closes the day early. This is the floor underneath it.
 /// </summary>
-public class TradingDayCloserService : BackgroundService
+/// <remarks>
+/// Branch-only, and this is the one where getting it wrong was most expensive. It closes
+/// shifts and cash registers and emails the owner about any difference. At Head Office it
+/// would close its own copies of all four branches' tills - so the shop closes its real till
+/// at 3am and finds Head Office already closed a different version of it hours earlier, with
+/// a different figure. That is two sets of books that disagree, and an owner emailed about a
+/// shortfall that never happened. See BranchOnlyBackgroundService.
+/// </remarks>
+public class TradingDayCloserService : BranchOnlyBackgroundService
 {
     /// <summary>
     /// Quarter-hourly. The work is a single indexed query that finds nothing almost every time,
@@ -25,13 +33,17 @@ public class TradingDayCloserService : BackgroundService
     private readonly IServiceProvider _services;
     private readonly ILogger<TradingDayCloserService> _logger;
 
-    public TradingDayCloserService(IServiceProvider services, ILogger<TradingDayCloserService> logger)
+    public TradingDayCloserService(
+        IServiceProvider services,
+        IConfiguration configuration,
+        ILogger<TradingDayCloserService> logger)
+        : base(configuration, logger)
     {
         _services = services;
         _logger = logger;
     }
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task RunAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("TradingDayCloserService is starting.");
 

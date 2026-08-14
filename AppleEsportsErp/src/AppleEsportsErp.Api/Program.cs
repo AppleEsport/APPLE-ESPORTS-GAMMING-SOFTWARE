@@ -4,6 +4,7 @@ using System.Threading.RateLimiting;
 using FluentValidation;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using AppleEsportsErp.Api.Filters;
@@ -241,27 +242,72 @@ builder.Services.AddCors(options =>
 });
 
 // ── 5. Rate Limiting (maps from rateLimit.js) ──
+//
+// Why an operator saw "Rate limit exceeded" while simply starting a session.
+//
+// The limit is per IP address, which is the right idea and was being fed the wrong address.
+// Head Office runs behind nginx, and nginx is what actually opens the connection to this
+// process - so RemoteIpAddress was nginx's own container address on every single request.
+// Every dashboard, every branch, every PC agent in the company shared one bucket. Worse, they
+// shared it with the heartbeats: four branches beating every three seconds is 80 requests a
+// minute of pure background chatter, before anybody touches a screen. Whoever happened to
+// press a button when the shared bucket ran dry got the 429, which is why it looked random and
+// why it landed on ordinary work like starting a session.
+//
+// Three things fix it, and all three are needed.
 var rateLimitConfig = builder.Configuration.GetSection("RateLimiting");
 builder.Services.AddRateLimiter(options =>
 {
+    var permitLimit = rateLimitConfig.GetValue("PermitLimit", 100);
+    var window = TimeSpan.FromSeconds(rateLimitConfig.GetValue("WindowSeconds", 60));
+
     options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
-        RateLimitPartition.GetFixedWindowLimiter(
-            partitionKey: context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-            factory: _ => new FixedWindowRateLimiterOptions
-            {
-                PermitLimit = rateLimitConfig.GetValue("PermitLimit", 100),
-                Window = TimeSpan.FromSeconds(rateLimitConfig.GetValue("WindowSeconds", 60)),
-                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                QueueLimit = 5,
-            }));
+    {
+        // 1. Branch-to-Head-Office traffic is not rate limited at all. It is machine traffic on
+        // a fixed schedule that cannot be told to slow down and must never be dropped: the
+        // heartbeat is how Head Office knows a shop is alive, the sync inbox is how money
+        // arrives, and a command result is a branch reporting what it just did. Throttling any
+        // of those loses a fact rather than delaying a click. They are also the endpoints most
+        // likely to trip a shared bucket, being the only ones that run all night.
+        var path = context.Request.Path;
+        if (path.StartsWithSegments("/api/branch-status")
+            || path.StartsWithSegments("/api/sync")
+            || path.StartsWithSegments("/api/health"))
+        {
+            return RateLimitPartition.GetNoLimiter("machine-traffic");
+        }
+
+        // 2. A signed-in person gets their own bucket, keyed on who they are rather than where
+        // they are connecting from. This is what stops one busy counter from throttling
+        // another, and it is correct even when every branch really does share one public IP -
+        // which, behind a single office connection, several of them do.
+        var userId = context.User.FindFirstValue(ClaimTypes.NameIdentifier);
+        var key = !string.IsNullOrEmpty(userId)
+            ? $"user:{userId}"
+            : $"ip:{context.Connection.RemoteIpAddress?.ToString() ?? "unknown"}";
+
+        return RateLimitPartition.GetFixedWindowLimiter(key, _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = permitLimit,
+            Window = window,
+            QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+            QueueLimit = 5,
+        });
+    });
 
     options.OnRejected = async (context, cancellationToken) =>
     {
         context.HttpContext.Response.StatusCode = 429;
+
+        // Tells the caller how long to wait instead of leaving them to guess. Without it a
+        // dashboard that retries immediately just spends the next window's budget too.
+        if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+            context.HttpContext.Response.Headers.RetryAfter = ((int)retryAfter.TotalSeconds).ToString();
+
         await context.HttpContext.Response.WriteAsJsonAsync(new
         {
             success = false,
-            error = "Rate limit exceeded. Please try again later.",
+            error = "Too many requests from this account in the last minute. Wait a moment and try again.",
             code = "RATE_LIMIT",
         }, cancellationToken: cancellationToken);
     };
@@ -308,7 +354,16 @@ builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IAuditService, AuditService>();
 builder.Services.AddScoped<IEmailService, EmailService>();
 // Resolves this deployment's own public URL for links inside outgoing emails.
+// Needed by AppUrlProvider, so an email link can fall back to the address the caller actually
+// reached this server on instead of localhost.
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddSingleton<ICurrentRequestUrl, AppleEsportsErp.Api.Services.CurrentRequestUrl>();
 builder.Services.AddSingleton<IAppUrlProvider, AppUrlProvider>();
+
+// How Head Office reaches out and drives a branch. Scoped, because it writes through the
+// request's own DbContext and so joins that request's transaction.
+builder.Services.AddScoped<AppleEsportsErp.Api.Services.IRemoteBranchControl,
+                           AppleEsportsErp.Api.Services.RemoteBranchControl>();
 builder.Services.AddScoped<IPcStatusService, PcStatusService>();
 builder.Services.AddScoped<ITokenRevocationService, TokenRevocationService>();
 builder.Services.AddScoped<ISessionService, SessionService>();
@@ -437,16 +492,42 @@ using (var scope = app.Services.CreateScope())
 // Must happen here, before app.Run() starts the hosted services: the fixed-duration
 // monitor auto-stops sessions whose EndTime has passed, and after an outage that
 // would close sessions which are only "expired" because the branch had no power.
+// Branch-only, for the same reason the monitors are. Head Office's downtime is not the
+// branches' downtime, so crediting every synced session for a Head Office restart would hand
+// back time to customers who played through it perfectly happily, at four shops at once.
 try
 {
-    var recoveryLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SessionDowntimeRecovery");
-    await AppleEsportsErp.Api.Services.SessionDowntimeRecovery.RunAsync(app.Services, recoveryLogger);
+    if (!AppleEsportsErp.Infrastructure.Configuration.DeploymentRole.IsHeadOffice(app.Configuration))
+    {
+        var recoveryLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SessionDowntimeRecovery");
+        await AppleEsportsErp.Api.Services.SessionDowntimeRecovery.RunAsync(app.Services, recoveryLogger);
+    }
 }
 catch (Exception ex)
 {
     // Never block start-up over this — worst case is that no time is credited back.
     Log.Warning("Session downtime recovery skipped: {Message}", ex.Message);
 }
+
+// ── 0. Who is actually calling ──
+//
+// Must be first, before anything reads an IP address. Head Office sits behind nginx, so every
+// request arrives from nginx's own container address and every caller in the company looked
+// like the same one machine. That is what made the rate limiter throttle the whole business at
+// once, and it would equally have made the audit log record one address for every action ever
+// taken.
+//
+// KnownNetworks/KnownProxies are cleared because the proxy is a Docker container on an address
+// that changes when the stack is recreated, and an unlisted proxy is silently ignored - the
+// header would be dropped and the symptom would come straight back with nothing to point at.
+// Safe here only because this port is not reachable from outside; nginx is the only thing that
+// can talk to it, so nothing else is in a position to forge the header.
+app.UseForwardedHeaders(new ForwardedHeadersOptions
+{
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
+    KnownNetworks = { },
+    KnownProxies = { },
+});
 
 // ── 1. Global Exception Handler (maps from errorHandler.js) ──
 app.UseMiddleware<GlobalExceptionMiddleware>();

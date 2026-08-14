@@ -23,17 +23,51 @@ public class SessionsController : ControllerBase
     private readonly ISessionService _sessionService;
     private readonly ISessionActivityService _activityService;
     private readonly AppleEsportsErp.Infrastructure.Data.AppDbContext _db;
+    private readonly AppleEsportsErp.Api.Services.IRemoteBranchControl _remote;
 
     public SessionsController(
         ISessionService sessionService,
         ISessionActivityService activityService,
-        AppleEsportsErp.Infrastructure.Data.AppDbContext db)
+        AppleEsportsErp.Infrastructure.Data.AppDbContext db,
+        AppleEsportsErp.Api.Services.IRemoteBranchControl remote)
     {
         _sessionService = sessionService;
         _activityService = activityService;
         _db = db;
+        _remote = remote;
     }
     private Guid GetBranchId() => Guid.Parse(HttpContext.Items["BranchId"]!.ToString()!);
+
+    private Guid CurrentUserId() =>
+        Guid.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : Guid.Empty;
+
+    /// <summary>
+    /// Turns "Head Office pressed Start/Stop" into an instruction for the branch that owns the
+    /// PC, and reports it back as a success.
+    ///
+    /// This is what makes the buttons on the Head Office screen work at all. They used to be
+    /// refused outright, with a message explaining that only the counter could do it - correct,
+    /// and useless to an owner who wants to shut down a session at a shop that has gone home
+    /// and left one running. Now the same button sends the same instruction to the shop, which
+    /// does it properly.
+    ///
+    /// 202 rather than 200, deliberately: this has been accepted, not completed. The body still
+    /// reports success so the existing screens behave normally, and the figures update on their
+    /// own within a few seconds when the branch's own record of doing it arrives.
+    /// </summary>
+    private async Task<IActionResult> SendToBranchAsync(
+        Guid branchId, string commandType, object payload, CancellationToken ct)
+    {
+        var receipt = await _remote.SendAsync(branchId, commandType, payload, CurrentUserId(), ct);
+
+        return Accepted(ApiResponse<object>.Ok(new
+        {
+            queued = true,
+            commandId = receipt.CommandId,
+            branchIsReporting = receipt.BranchIsReporting,
+            message = receipt.Message,
+        }));
+    }
 
     [HttpGet]
     public async Task<IActionResult> GetActiveSessions([FromQuery] int page = 1, [FromQuery] int pageSize = 50)
@@ -43,8 +77,34 @@ public class SessionsController : ControllerBase
     }
 
     [HttpPost("start")]
-    public async Task<IActionResult> StartSession([FromBody] SessionStartDto dto)
+    public async Task<IActionResult> StartSession([FromBody] SessionStartDto dto, CancellationToken ct)
     {
+        // From Head Office this becomes an instruction for the shop rather than a row written
+        // here. A session invented at Head Office exists only at Head Office: the counter never
+        // sees it, so nobody can bill it and the customer plays for nothing.
+        if (_remote.MustTravel)
+        {
+            // Taken from the PC rather than from the request's branch header. The PC is the
+            // thing being acted on and it belongs to exactly one shop, so this cannot send
+            // "start PC-04" to a branch that has no PC-04 because a header was stale or absent.
+            var pcBranchId = await _db.Pcs.AsNoTracking()
+                .Where(p => p.Id == dto.PcId).Select(p => p.BranchId).FirstOrDefaultAsync(ct);
+
+            if (pcBranchId == Guid.Empty)
+                return NotFound(ApiResponse<object>.Fail("Head Office has no such PC.", "PC_NOT_FOUND"));
+
+            return await SendToBranchAsync(pcBranchId, Services.BranchCommands.StartSession, new
+            {
+                pcId = dto.PcId,
+                memberId = dto.MemberId,
+                customerName = dto.CustomerName,
+                durationMinutes = dto.DurationMinutes,
+                packageName = dto.PackageName,
+                expectedAmount = dto.ExpectedAmount,
+                notes = dto.Notes,
+            }, ct);
+        }
+
         var result = await _sessionService.StartSessionAsync(GetBranchId(), (await this.GetOperatorIdAsync()), (await this.GetShiftIdAsync()), dto);
         // Remove any pending walk-in request for this PC now that a session has started
         PcOverlayHub.PendingWalkinRequests.TryRemove(dto.PcId.ToString(), out _);
@@ -116,8 +176,31 @@ public class SessionsController : ControllerBase
     }
 
     [HttpPost("{id}/stop")]
-    public async Task<IActionResult> StopSession(Guid id, [FromBody] StopSessionDto? dto = null)
+    public async Task<IActionResult> StopSession(Guid id, [FromBody] StopSessionDto? dto = null, CancellationToken ct = default)
     {
+        // The one the owner actually asked for: stop a session at any branch, from here.
+        // Sent down as an instruction, so the shop stops it, bills it into the right shift and
+        // reports back - rather than Head Office marking its own copy stopped while the counter
+        // carries on charging the customer.
+        if (_remote.MustTravel)
+        {
+            var branchId = await _db.Sessions.AsNoTracking()
+                .Where(s => s.Id == id).Select(s => s.BranchId).FirstOrDefaultAsync(ct);
+
+            if (branchId == Guid.Empty)
+                return NotFound(ApiResponse<object>.Fail("Head Office has no such session.", "SESSION_NOT_FOUND"));
+
+            return await SendToBranchAsync(branchId, Services.BranchCommands.StopSession, new
+            {
+                sessionId = id,
+                // Never true for a remote stop. Deferring marks the bill paid on the spot and
+                // writes the balance off as a customer credit - a debt forgiven that nobody
+                // decided to forgive. False gives exactly what the counter's own Stop gives.
+                deferPayment = false,
+                reason = "Stopped from Head Office",
+            }, ct);
+        }
+
         // Member wallet sessions are now deducted synchronously inside StopSessionAsync —
         // no separate wallet-approval overlay step for this path (that overlay flow
         // remains, unchanged, for other wallet-payable bills such as mid-session food orders).

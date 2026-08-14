@@ -222,6 +222,32 @@ public class BillingService : IBillingService
                 }
             }
 
+            // No leg of a payment may be negative, and this is where the negative figures came
+            // from.
+            //
+            // The only check was that the parts add up to the bill, which a negative leg passes
+            // effortlessly: Rs 500 cash and minus Rs 400 online sums to Rs 100 and settles a
+            // Rs 100 bill. Nothing else objected, because nothing else looked. Rs 500 then went
+            // into the till's expected cash while the takings recorded Rs 100, so the drawer
+            // over-counted by Rs 400 at End of Day; the online column went negative; and the
+            // session it belonged to reported a negative total in the reports.
+            //
+            // There is no validator on this DTO at all - only Auth and Sessions have any - so
+            // the guard belongs here in the service, where every route in (counter, member
+            // checkout, overlay) has to pass through it, rather than in one controller.
+            //
+            // Money moving the other way is a refund, which is a different operation with
+            // different rules about who may authorise it. It is not a payment with a minus sign.
+            if (dto.CashAmount < 0 || dto.OnlineAmount < 0 || dto.WalletAmount < 0
+                || dto.CreditAmount < 0 || dto.CashReceived < 0)
+            {
+                throw new AppException(
+                    "A payment cannot contain a negative amount. Cash, online, wallet, credit and " +
+                    "cash received must each be zero or more.",
+                    System.Net.HttpStatusCode.BadRequest,
+                    "NEGATIVE_PAYMENT_AMOUNT");
+            }
+
             // Calculate total paid vs expected
             decimal totalPayment = dto.CashAmount + dto.OnlineAmount + dto.WalletAmount;
             if (totalPayment + dto.CreditAmount != bill.TotalAmount)

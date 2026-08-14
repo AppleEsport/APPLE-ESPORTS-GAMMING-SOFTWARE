@@ -29,35 +29,33 @@ public class SessionService : ISessionService
     private readonly IConfiguration _configuration;
 
     /// <summary>
-    /// Refuses to start or stop play from Head Office.
+    /// The last line of defence against Head Office writing a branch's trading directly.
     ///
-    /// Sync carries operations one way only: a branch tells Head Office what it did. There is
-    /// no path back, so a session created here is created here and nowhere else - and that is
-    /// not a display quirk, it is money that cannot be collected.
+    /// Head Office can now start and stop play at any shop - that was asked for and it is
+    /// built. What it does not do is write the session itself. It sends the branch an
+    /// instruction, the branch runs this same method locally, and the result syncs back. So by
+    /// the time execution reaches here, it is always a branch doing its own work, and Head
+    /// Office reaching this point means something has bypassed the command queue.
     ///
-    /// Seen exactly this way on a real branch. A super admin started an hour on ADJ-PC-01 from
-    /// the server. The server showed it running and counting down. The counter showed PC-01 as
-    /// free, so the operator could not stop it and could not bill it, and a customer sitting
-    /// there would have played for nothing. It also explains a Stop button that "does not
-    /// work": start on one screen, stop on the other, and there is nothing on that side to stop.
+    /// Why that must still throw, when the feature exists: sync carries operations one way. A
+    /// session written into Head Office's copy is written nowhere else. The counter never sees
+    /// it, so no operator can stop or bill it, and a customer sits there playing for free.
+    /// Exactly that happened on ADJ-PC-01 - Head Office showed an hour running and counting
+    /// down while the counter showed PC-01 free. It also explains a Stop button that "does
+    /// nothing": start on one screen, stop on the other, and there is nothing there to stop.
     ///
-    /// The counter PC is the only place that can do this, and that is not a limitation - it is
-    /// where the customer is, where the cash is, and the only machine that keeps working when
-    /// the internet does not. Head Office watching a shop is right; Head Office inventing a
-    /// shop's trading is not.
-    ///
-    /// Remote control of a branch is a reasonable thing to want and is a different mechanism: a
-    /// command sent down for the branch to carry out and report back, so both sides still agree.
-    /// Not this, which only ever wrote one side.
+    /// The message names the queue, because anybody who hits this is one call away from the
+    /// thing they actually wanted.
     /// </summary>
     private void RefuseIfHeadOffice(string what)
     {
         if (!_configuration.IsHeadOffice()) return;
 
         throw new AppException(
-            $"A session cannot be {what} from Head Office - only at the branch's own counter PC. " +
-            "This screen shows what each shop is doing. Starting or stopping play here would be " +
-            "invisible to the counter, so nobody could bill it or collect the money.",
+            $"This session has to be {what} by the branch itself, not written here at Head Office - " +
+            "a session written here is invisible to the counter, so nobody could bill it. " +
+            "Send it as an instruction instead (api/branch-commands) and the branch will carry it " +
+            "out within a few seconds and report back.",
             System.Net.HttpStatusCode.BadRequest,
             "BRANCH_ONLY_OPERATION");
     }

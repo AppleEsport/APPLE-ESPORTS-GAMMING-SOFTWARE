@@ -1202,9 +1202,11 @@ export default function MembersPage() {
 
   const searchTimer = useRef(null);
 
-  const fetchMembers = useCallback(async (pg = 1, q = search) => {
+  // `quiet` skips the loading spinner. Used by the background refresh below, which would
+  // otherwise flash a spinner over the whole list every few seconds for no reason.
+  const fetchMembers = useCallback(async (pg = 1, q = search, quiet = false) => {
     // Global fetch allowed for members
-    setIsLoading(true);
+    if (!quiet) setIsLoading(true);
     try {
       const res = await getMembers(targetBranchId, q || undefined, pg, 100);
       const items = res?.items ?? (Array.isArray(res) ? res : []);
@@ -1220,11 +1222,42 @@ export default function MembersPage() {
       // Do not wipe out the existing members list on network errors
       // so the user doesn't see a sudden blank screen.
     } finally {
-      setIsLoading(false);
+      if (!quiet) setIsLoading(false);
     }
   }, [isSuperAdmin, targetBranchId, search]);
 
   useEffect(() => { fetchMembers(1); }, [targetBranchId]);
+
+  // Keeps the list current without anybody pressing F5.
+  //
+  // It was loaded once and then never again for the life of the page, which is wrong for a
+  // screen that four shops and Head Office all write to. A member registered at another
+  // branch, or a wallet topped up from the server, simply was not there - and the operator's
+  // reasonable conclusion was that the sync had failed, when the data had arrived perfectly
+  // well and only this list had not asked for it.
+  //
+  // Paused while the tab is hidden, so a dashboard left open overnight is not polling into an
+  // empty room. Whatever page and search the operator is on is preserved: a refresh that
+  // silently threw them back to page one mid-task would be its own bug.
+  useEffect(() => {
+    const REFRESH_EVERY_MS = 15000;
+
+    const tick = () => {
+      if (document.visibilityState !== 'visible') return;
+      fetchMembers(pagination.page, search, true);
+    };
+
+    const timer = setInterval(tick, REFRESH_EVERY_MS);
+
+    // Catch up the moment somebody comes back to the tab, rather than making them wait out
+    // the rest of the interval looking at figures that are minutes old.
+    document.addEventListener('visibilitychange', tick);
+
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', tick);
+    };
+  }, [fetchMembers, pagination.page, search]);
 
   const handleSearch = (val) => {
     setSearch(val);

@@ -41,6 +41,26 @@ public class BranchHeartbeatController : ControllerBase
     /// </summary>
     public static readonly TimeSpan SilentAfter = TimeSpan.FromMinutes(1);
 
+    /// <summary>
+    /// How long a command may go unanswered before Head Office stops waiting on it.
+    ///
+    /// Needed because two things hold while a command is open: the branch is handed it again on
+    /// every beat, and Head Office stops applying that PC's reported state so the instruction is
+    /// not overwritten before it lands. Both are right for the few seconds a command normally
+    /// takes. Neither is right for ever.
+    ///
+    /// A branch running a build that predates commands entirely never replies to one - it does
+    /// not know how. Without a bound, that command is re-sent twenty times a minute for the
+    /// life of the deployment, and the PC it names is frozen on the Head Office screen at
+    /// whatever it happened to be showing, with the branch faithfully reporting the truth
+    /// every three seconds and Head Office ignoring all of it. A stuck screen that cannot be
+    /// explained is worse than an instruction that visibly did not happen.
+    ///
+    /// Five minutes is far longer than any branch that is listening needs - they answer within
+    /// one beat - and short enough that nobody stares at a stale PC for long.
+    /// </summary>
+    public static readonly TimeSpan CommandGivenUpAfter = TimeSpan.FromMinutes(5);
+
     public BranchHeartbeatController(AppDbContext db, ILogger<BranchHeartbeatController> logger)
     {
         _db = db;
@@ -166,15 +186,37 @@ public class BranchHeartbeatController : ControllerBase
     /// </summary>
     private async Task<List<BranchCommandDto>> PendingCommandsAsync(Guid branchId, CancellationToken ct)
     {
-        var pending = await _db.Set<BranchCommand>()
+        var open = await _db.Set<BranchCommand>()
             .Where(c => c.BranchId == branchId
                 && (c.Status == BranchCommandStatus.Pending || c.Status == BranchCommandStatus.Sent))
             .OrderBy(c => c.CreatedAt)
             .ToListAsync(ct);
 
-        if (pending.Count == 0) return new List<BranchCommandDto>();
+        if (open.Count == 0) return new List<BranchCommandDto>();
 
         var now = DateTimeOffset.UtcNow;
+
+        // Given up on, and said so. A branch that was going to answer has answered long before
+        // this; one that has not is on a build too old to understand the command, and will
+        // never answer however many times it is asked. Closing it stops the retry and releases
+        // the PC back to reporting its own state - see CommandGivenUpAfter.
+        var abandoned = open.Where(c => now - c.CreatedAt > CommandGivenUpAfter).ToList();
+        foreach (var c in abandoned)
+        {
+            c.Status = BranchCommandStatus.Failed;
+            c.CompletedAt = now;
+            c.ResultMessage =
+                $"The branch did not pick this up within {CommandGivenUpAfter.TotalMinutes:0} minutes. " +
+                "It is most likely running a version that does not understand this instruction yet.";
+
+            _logger.LogWarning(
+                "Giving up on {CommandType} ({CommandId}) for branch {BranchId} - queued {Age:0} " +
+                "minutes ago and never confirmed.",
+                c.CommandType, c.Id, branchId, (now - c.CreatedAt).TotalMinutes);
+        }
+
+        var pending = open.Except(abandoned).ToList();
+
         foreach (var c in pending.Where(c => c.Status == BranchCommandStatus.Pending))
         {
             c.Status = BranchCommandStatus.Sent;
@@ -182,6 +224,8 @@ public class BranchHeartbeatController : ControllerBase
         }
 
         await _db.SaveChangesAsync(ct);
+
+        if (pending.Count == 0) return new List<BranchCommandDto>();
 
         return pending.Select(c => new BranchCommandDto
         {
@@ -371,8 +415,27 @@ public class BranchHeartbeatController : ControllerBase
             .Where(p => p.BranchId == dto.BranchId && ids.Contains(p.Id))
             .ToListAsync(ct);
 
+        var awaitingOrders = await PcsAwaitingAnOrderAsync(dto.BranchId, ct);
+
         foreach (var pc in pcs)
         {
+            // The authority rule, and the reason a remote instruction stops being undone.
+            //
+            // A command is in flight for anything from a few hundred milliseconds to the next
+            // beat, and during that window the branch is still reporting the old truth - it has
+            // not been told yet. Applying that report would overwrite what Head Office just
+            // asked for with the state it asked to change, and the screen would flick back
+            // within three seconds. Somebody presses "maintenance", watches it take, watches it
+            // undo itself, and concludes the button is broken. It was not: it was being
+            // outvoted by a stale heartbeat twenty times a minute.
+            //
+            // So while this branch owes an answer on a PC, Head Office stops writing that PC
+            // from heartbeats. This is deliberately narrow - only the PCs actually named by an
+            // open command, and only until the branch reports back, successfully or not. Every
+            // other PC in the shop keeps updating as normal, and the moment the command closes
+            // this one does too, carrying whatever the branch actually did.
+            if (awaitingOrders.Contains(pc.Id)) continue;
+
             var reported = dto.Pcs.First(p => p.PcId == pc.Id);
 
             if (!Enum.TryParse<PcState>(reported.State.Replace("_", ""), ignoreCase: true, out var state))
@@ -396,6 +459,74 @@ public class BranchHeartbeatController : ControllerBase
             pc.LastActiveAt = DateTimeOffset.UtcNow;
             pc.UpdatedAt = DateTimeOffset.UtcNow;
         }
+    }
+
+    /// <summary>
+    /// The PCs this branch still owes Head Office an answer about.
+    ///
+    /// Worked out from the open commands themselves rather than from a flag on the PC, so there
+    /// is nothing to set, nothing to clear, and nothing to leak. A crash between queuing a
+    /// command and the branch answering it cannot strand a PC in an un-updatable state: the
+    /// command is either still open, in which case the PC genuinely is still awaiting an
+    /// answer, or it is closed and this returns nothing.
+    ///
+    /// Both shapes of command are covered. set_pc_state names its PC outright. stop_session and
+    /// start_session name a session or a PC, and a stop has to be traced through the session to
+    /// the PC it is running on - that is the case that matters most, because a stop is precisely
+    /// when the branch's report and Head Office's intent disagree.
+    /// </summary>
+    private async Task<HashSet<Guid>> PcsAwaitingAnOrderAsync(Guid branchId, CancellationToken ct)
+    {
+        // Bounded by the same give-up window that closes an unanswered command, so a PC can
+        // never be held out of reporting indefinitely by an instruction nobody is coming for.
+        var oldestWorthWaitingFor = DateTimeOffset.UtcNow - CommandGivenUpAfter;
+
+        var open = await _db.Set<BranchCommand>().AsNoTracking()
+            .Where(c => c.BranchId == branchId
+                && c.CreatedAt > oldestWorthWaitingFor
+                && (c.Status == BranchCommandStatus.Pending || c.Status == BranchCommandStatus.Sent))
+            .Select(c => new { c.CommandType, c.Payload })
+            .ToListAsync(ct);
+
+        if (open.Count == 0) return new HashSet<Guid>();
+
+        var pcIds = new HashSet<Guid>();
+        var sessionIds = new List<Guid>();
+
+        foreach (var command in open)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(command.Payload);
+                var root = doc.RootElement;
+
+                if (root.TryGetProperty("pcId", out var pc) && pc.TryGetGuid(out var pcId))
+                    pcIds.Add(pcId);
+
+                if (root.TryGetProperty("sessionId", out var s) && s.TryGetGuid(out var sessionId))
+                    sessionIds.Add(sessionId);
+            }
+            catch (JsonException)
+            {
+                // A payload Head Office cannot read is a bug in whatever queued it, not a reason
+                // to stop protecting every other PC in the shop. Skip it and carry on.
+                _logger.LogWarning(
+                    "A {CommandType} command for branch {BranchId} has an unreadable payload; " +
+                    "its PC will keep taking heartbeat updates.", command.CommandType, branchId);
+            }
+        }
+
+        if (sessionIds.Count > 0)
+        {
+            var fromSessions = await _db.Sessions.AsNoTracking()
+                .Where(s => s.BranchId == branchId && sessionIds.Contains(s.Id))
+                .Select(s => s.PcId)
+                .ToListAsync(ct);
+
+            foreach (var pcId in fromSessions) pcIds.Add(pcId);
+        }
+
+        return pcIds;
     }
 
     /// <summary>
