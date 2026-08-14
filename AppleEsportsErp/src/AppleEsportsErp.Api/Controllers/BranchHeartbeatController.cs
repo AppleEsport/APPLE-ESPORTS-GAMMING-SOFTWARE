@@ -3,8 +3,10 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Common;
 using AppleEsportsErp.Application.DTOs.Sync;
+using AppleEsportsErp.Application.Interfaces;
 using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
 using AppleEsportsErp.Infrastructure.Data;
@@ -25,6 +27,7 @@ namespace AppleEsportsErp.Api.Controllers;
 public class BranchHeartbeatController : ControllerBase
 {
     private readonly AppDbContext _db;
+    private readonly IAuditService _audit;
     private readonly ILogger<BranchHeartbeatController> _logger;
 
     /// <summary>
@@ -61,9 +64,10 @@ public class BranchHeartbeatController : ControllerBase
     /// </summary>
     public static readonly TimeSpan CommandGivenUpAfter = TimeSpan.FromMinutes(5);
 
-    public BranchHeartbeatController(AppDbContext db, ILogger<BranchHeartbeatController> logger)
+    public BranchHeartbeatController(AppDbContext db, IAuditService audit, ILogger<BranchHeartbeatController> logger)
     {
         _db = db;
+        _audit = audit;
         _logger = logger;
     }
 
@@ -213,6 +217,11 @@ public class BranchHeartbeatController : ControllerBase
                 "Giving up on {CommandType} ({CommandId}) for branch {BranchId} - queued {Age:0} " +
                 "minutes ago and never confirmed.",
                 c.CommandType, c.Id, branchId, (now - c.CreatedAt).TotalMinutes);
+
+            // The one outcome that has no branch to report it, because the branch is exactly
+            // what never answered - so Head Office writes this closing entry itself, the only
+            // case anywhere in this file where that happens.
+            await LogCommandOutcomeAsync(c, succeeded: false, ct);
         }
 
         var pending = open.Except(abandoned).ToList();
@@ -261,7 +270,43 @@ public class BranchHeartbeatController : ControllerBase
 
         await _db.SaveChangesAsync(ct);
 
+        // What "remote_command_issued" was always missing the other half of: not just that
+        // somebody asked, but whether it worked. A failed remote command used to leave nothing
+        // behind but a message on one screen for the moment it happened - gone the instant
+        // somebody navigated away, with no way to look back the next morning and see that PC-7
+        // never actually got the memo.
+        await LogCommandOutcomeAsync(command, dto.Succeeded, ct, dto.Message);
+
         return Ok(ApiResponse<object>.Ok(new { received = true }));
+    }
+
+    /// <summary>
+    /// Closes the loop that <see cref="RemoteBranchControl"/> opened when the command was
+    /// queued: that entry said who asked and for what; this one says whether it actually
+    /// happened. Both carry the same command id in TargetId, so the two can be found together.
+    /// </summary>
+    private async Task LogCommandOutcomeAsync(
+        BranchCommand command, bool succeeded, CancellationToken ct, string? message = null)
+    {
+        var branchName = await _db.Branches.AsNoTracking()
+            .Where(b => b.Id == command.BranchId).Select(b => b.Name).FirstOrDefaultAsync(ct);
+
+        var requestedBy = await _db.Set<User>().AsNoTracking()
+            .Where(u => u.Id == command.RequestedByUserId).Select(u => u.FullName).FirstOrDefaultAsync(ct);
+
+        await _audit.LogAsync(new AuditEntry
+        {
+            UserId = command.RequestedByUserId,
+            UserRole = "SuperAdmin",
+            UserName = requestedBy ?? "Head Office",
+            Action = AuditActions.RemoteCommandIssued,
+            TargetType = "branch_command",
+            TargetId = command.Id,
+            Success = succeeded,
+            BranchId = command.BranchId,
+            BranchName = branchName,
+            Details = new { commandType = command.CommandType, outcome = succeeded ? "succeeded" : "failed", message },
+        });
     }
 
     /// <summary>

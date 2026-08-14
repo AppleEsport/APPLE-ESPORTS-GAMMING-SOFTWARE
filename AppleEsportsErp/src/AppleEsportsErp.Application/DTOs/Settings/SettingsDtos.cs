@@ -83,6 +83,7 @@ public class AuditLogDto
     public string Action { get; set; } = null!;
     public string? TargetType { get; set; }
     public Guid? TargetId { get; set; }
+    public bool Success { get; set; } = true;
     public string? Details { get; set; }
     public string? IpAddress { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
