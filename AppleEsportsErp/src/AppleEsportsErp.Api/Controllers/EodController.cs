@@ -6,6 +6,7 @@ using AppleEsportsErp.Application.DTOs.Common;
 using AppleEsportsErp.Application.DTOs.Eod;
 using AppleEsportsErp.Application.Interfaces;
 using AppleEsportsErp.Application.Constants;
+using AppleEsportsErp.Application.Services;
 using System.Security.Claims;
 
 using Microsoft.EntityFrameworkCore;
@@ -50,26 +51,34 @@ public class EodController : ControllerBase
                      && b.CompletedAt <= endUtc)
             .ToListAsync();
 
-        var dailyReport = bills
-            .GroupBy(b => b.CompletedAt!.Value.Date)
+        // Bucketed by the 06:00-06:00 IST trading day, the same day boundary
+        // /eod/preview and /eod/finalize use - not the raw UTC calendar date, which
+        // puts a bill rung up at 01:30 IST on the wrong day here and the right day
+        // everywhere else.
+        var billsByBusinessDay = bills
+            .Select(b => (Bill: b, BusinessDay: IndiaTime.BusinessDayOf(b.CompletedAt!.Value)))
+            .ToList();
+
+        var dailyReport = billsByBusinessDay
+            .GroupBy(x => x.BusinessDay)
             .Select(g => new {
                 Date = g.Key.ToString("yyyy-MM-dd"),
-                GamingRevenue = g.Sum(b => b.Subtotal > 0 ? b.GamingAmount - (b.GamingAmount / b.Subtotal * b.DiscountAmount) : b.GamingAmount),
-                FoodRevenue = g.Sum(b => b.Subtotal > 0 ? b.FoodAmount - (b.FoodAmount / b.Subtotal * b.DiscountAmount) : b.FoodAmount),
-                DiscountAmount = g.Sum(b => b.DiscountAmount),
-                TotalRevenue = g.Sum(b => b.TotalAmount)
+                GamingRevenue = g.Sum(x => x.Bill.Subtotal > 0 ? x.Bill.GamingAmount - (x.Bill.GamingAmount / x.Bill.Subtotal * x.Bill.DiscountAmount) : x.Bill.GamingAmount),
+                FoodRevenue = g.Sum(x => x.Bill.Subtotal > 0 ? x.Bill.FoodAmount - (x.Bill.FoodAmount / x.Bill.Subtotal * x.Bill.DiscountAmount) : x.Bill.FoodAmount),
+                DiscountAmount = g.Sum(x => x.Bill.DiscountAmount),
+                TotalRevenue = g.Sum(x => x.Bill.TotalAmount)
             })
             .OrderBy(r => r.Date)
             .ToList();
 
-        var monthlyReport = bills
-            .GroupBy(b => new { b.CompletedAt!.Value.Year, b.CompletedAt!.Value.Month })
+        var monthlyReport = billsByBusinessDay
+            .GroupBy(x => new { x.BusinessDay.Year, x.BusinessDay.Month })
             .Select(g => new {
                 Month = $"{g.Key.Year}-{g.Key.Month:D2}",
-                GamingRevenue = g.Sum(b => b.Subtotal > 0 ? b.GamingAmount - (b.GamingAmount / b.Subtotal * b.DiscountAmount) : b.GamingAmount),
-                FoodRevenue = g.Sum(b => b.Subtotal > 0 ? b.FoodAmount - (b.FoodAmount / b.Subtotal * b.DiscountAmount) : b.FoodAmount),
-                DiscountAmount = g.Sum(b => b.DiscountAmount),
-                TotalRevenue = g.Sum(b => b.TotalAmount)
+                GamingRevenue = g.Sum(x => x.Bill.Subtotal > 0 ? x.Bill.GamingAmount - (x.Bill.GamingAmount / x.Bill.Subtotal * x.Bill.DiscountAmount) : x.Bill.GamingAmount),
+                FoodRevenue = g.Sum(x => x.Bill.Subtotal > 0 ? x.Bill.FoodAmount - (x.Bill.FoodAmount / x.Bill.Subtotal * x.Bill.DiscountAmount) : x.Bill.FoodAmount),
+                DiscountAmount = g.Sum(x => x.Bill.DiscountAmount),
+                TotalRevenue = g.Sum(x => x.Bill.TotalAmount)
             })
             .OrderBy(r => r.Month)
             .ToList();
@@ -238,8 +247,8 @@ public class EodController : ControllerBase
                 : "Internet offline",
             // Formatted in IST here rather than left to the browser, because this is also
             // what goes onto the printed report.
-            From = AppleEsportsErp.Application.Services.IndiaTime.FormatTime(d.StartedAt),
-            To = AppleEsportsErp.Application.Services.IndiaTime.FormatTime(d.EndedAt),
+            From = IndiaTime.FormatTime(d.StartedAt),
+            To = IndiaTime.FormatTime(d.EndedAt),
             Minutes = Math.Round(d.DurationSeconds / 60.0, 0),
             d.SessionsAffected,
             // A power cut stops play and customers get their time back; losing the link to
