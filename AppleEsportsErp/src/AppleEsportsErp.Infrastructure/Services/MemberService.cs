@@ -139,6 +139,19 @@ public class MemberService : IMemberService
 
         var member = new Member
         {
+            // Set here, not left to the database, because the outbox event below is written
+            // before this member is ever saved - so anything reading the id now reads an empty
+            // one.
+            //
+            // That is exactly what went wrong. Head Office was told a member had been created
+            // with id 00000000-0000-0000-0000-000000000000, dated year 0001. It rejected that,
+            // and then rejected every wallet top-up naming the member's real id, because as far
+            // as Head Office was concerned that person had never been created - Rs 2,200 of
+            // real top-ups stranded at one branch. It looked like two PCs behaving differently
+            // when the only difference was which one created a new member.
+            Id = Guid.NewGuid(),
+            CreatedAt = DateTimeOffset.UtcNow,
+
             MemberNumber = memberNum,
             FullName = dto.FullName,
             MobileNumber = dto.MobileNumber,
