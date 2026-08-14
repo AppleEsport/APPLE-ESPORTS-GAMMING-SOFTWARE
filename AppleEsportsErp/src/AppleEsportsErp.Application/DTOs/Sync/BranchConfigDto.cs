@@ -32,6 +32,28 @@ public class BranchConfigDto
     public string Version { get; set; } = string.Empty;
 
     public List<BranchOperatorConfigDto> Operators { get; set; } = new();
+
+    /// <summary>
+    /// The food menu as Head Office defines it for this branch.
+    ///
+    /// This is the fix for a super admin adding an item at Head Office and it never appearing
+    /// at the counter: the Menu Editor is branch-scoped storage, so an item "added for Adajan"
+    /// while working at Head Office was written into Head Office's own copy of Adajan's table
+    /// and nowhere else - the physical Adajan counter runs an entirely separate database that
+    /// was never told.
+    /// </summary>
+    public List<BranchMenuItemConfigDto> MenuItems { get; set; } = new();
+
+    /// <summary>
+    /// Every member and their current wallet balance, as Head Office holds it.
+    ///
+    /// Members are deliberately not branch-scoped - someone joins at Adajan and should be able
+    /// to spend their wallet at Katargam - which means every branch legitimately needs to know
+    /// about every member, not just its own. Sent whole rather than as a delta because a
+    /// branch's local copy can be arbitrarily stale after time offline, and reconciling a
+    /// balance from a partial history invites exactly the kind of drift this exists to remove.
+    /// </summary>
+    public List<BranchMemberConfigDto> Members { get; set; } = new();
 }
 
 /// <summary>
@@ -71,5 +93,51 @@ public class BranchOperatorConfigDto
     /// must never be overwritten from here, or a heartbeat would sign out the operator who is
     /// mid-shift.
     /// </summary>
+    public bool IsBlocked { get; set; }
+}
+
+/// <summary>
+/// One food item's catalog details - what it is called, what it costs, whether it is for sale.
+///
+/// Deliberately not the whole InventoryItem. CurrentStock and SoldQty are the branch's own
+/// trading state, exactly like a PC's busy/idle - they change constantly at the counter and
+/// must never be overwritten by a heartbeat reply, or a shop that just sold its last plate of
+/// fries would have Head Office silently restock it on the next beat.
+/// </summary>
+public class BranchMenuItemConfigDto
+{
+    public Guid Id { get; set; }
+    public string ItemName { get; set; } = string.Empty;
+    public string? Category { get; set; }
+    public decimal Price { get; set; }
+    public string? ImageUrl { get; set; }
+
+    /// <summary>
+    /// Withdrawn from sale by Head Office, as opposed to Out of Stock - which is the branch's
+    /// own call and is deliberately not carried here, for the same reason CurrentStock is not.
+    /// </summary>
+    public bool IsDisabled { get; set; }
+}
+
+/// <summary>One member and the wallet balance Head Office currently holds for them.</summary>
+public class BranchMemberConfigDto
+{
+    public Guid Id { get; set; }
+    public string FullName { get; set; } = string.Empty;
+    public string MemberNumber { get; set; } = string.Empty;
+    public string MobileNumber { get; set; } = string.Empty;
+    public string? Email { get; set; }
+    public string? Username { get; set; }
+    public decimal GamingBalance { get; set; }
+    public decimal FoodBalance { get; set; }
+
+    /// <summary>
+    /// When this balance was last known correct. Sent so a branch can tell whether its own,
+    /// more recent, local activity for this member is actually newer than what Head Office is
+    /// handing back - and if so, keep its own figure rather than being overwritten by a beat
+    /// that has not caught up yet.
+    /// </summary>
+    public DateTimeOffset? BalanceAsOf { get; set; }
+
     public bool IsBlocked { get; set; }
 }

@@ -202,6 +202,10 @@ public class SyncInboxController : ControllerBase
                 await RecordWalletTopUpAsync(held, root);
                 break;
 
+            case "wallet.deducted":
+                await RecordWalletDeductionAsync(held, root);
+                break;
+
             case "email.send_requested":
                 await SendQueuedEmailAsync(held, root);
                 break;
@@ -442,17 +446,19 @@ public class SyncInboxController : ControllerBase
     }
 
     /// <summary>
-    /// A wallet top-up taken at a branch, recorded at Head Office.
+    /// A wallet top-up taken at a branch, recorded at Head Office - and, now, actually applied.
     ///
-    /// The earlier refusal was right about the danger and wrong about the remedy. Inferring a
-    /// balance from a single event IS how out-of-order delivery corrupts real money - but
-    /// dropping the event entirely means Rs 1,000 taken across the counter exists nowhere up
-    /// here at all, which is worse.
+    /// This used to record the transaction and deliberately leave the member's balance alone,
+    /// reasoning that "the branch owns that figure". That was half right: a single event
+    /// really cannot be trusted blindly, an out-of-order delivery really could corrupt real
+    /// money. But leaving it alone forever was not the fix - it meant Head Office's wallet
+    /// figure could only ever be zero or stale, which is exactly the "Members - wallet not in
+    /// sync" report this answers.
     ///
-    /// So the transaction is recorded, because it is a fact that happened at a known time for a
-    /// known amount. The member's stored balance is left alone: the branch took the money and
-    /// the branch owns that figure until there is a deliberate reconciliation. Head Office can
-    /// see and report every top-up without pretending to be the authority on the balance.
+    /// The actual fix is the same rule as everywhere else in this file: newest wins, and
+    /// "newest" is judged by when the money moved, not by which batch happened to arrive
+    /// last. ApplyBalanceIfNewerAsync only accepts this figure if nothing fresher has already
+    /// been applied.
     /// </summary>
     private async Task RecordWalletTopUpAsync(SyncInboxEntry held, JsonElement root)
     {
@@ -463,14 +469,16 @@ public class SyncInboxController : ControllerBase
             return;
 
         var memberId = ReadGuid(root, "memberId") ?? held.AggregateId;
-        if (!await _db.Members.AnyAsync(m => m.Id == memberId))
-            throw new InvalidOperationException(
+        var member = await _db.Members.FirstOrDefaultAsync(m => m.Id == memberId)
+            ?? throw new InvalidOperationException(
                 $"Head Office has no member {memberId}. The member.created event should arrive first.");
 
         var cash = ReadDecimal(root, "cashAmount") ?? 0m;
         var bonus = ReadDecimal(root, "bonusAmount") ?? 0m;
         var credited = ReadDecimal(root, "totalCredit") ?? (cash + bonus);
-        var balanceAfter = ReadDecimal(root, "gamingBalanceAfter") ?? 0m;
+        var gamingAfter = ReadDecimal(root, "gamingBalanceAfter") ?? 0m;
+        var foodAfter = ReadDecimal(root, "foodBalanceAfter");
+        var occurredAt = ReadDate(root, "occurredAt") ?? held.OccurredAt;
 
         _db.WalletTransactions.Add(new WalletTransaction
         {
@@ -482,13 +490,81 @@ public class SyncInboxController : ControllerBase
             Action = WalletAction.Recharge,
             TargetWallet = WalletType.Gaming,
             Amount = credited,
-            BalanceBefore = balanceAfter - credited,
-            BalanceAfter = balanceAfter,
+            BalanceBefore = gamingAfter - credited,
+            BalanceAfter = gamingAfter,
             PaymentType = ReadString(root, "paymentType"),
             CashAmount = cash,
             BonusAmount = bonus,
-            CreatedAt = ReadDate(root, "occurredAt") ?? held.OccurredAt,
+            CreatedAt = occurredAt,
         });
+
+        ApplyBalanceIfNewer(member, gamingAfter, foodAfter, occurredAt);
+    }
+
+    /// <summary>
+    /// A member spending their own wallet at the counter, recorded at Head Office.
+    ///
+    /// The far more common half of wallet activity, and until now the branch never sent it at
+    /// all - top-ups travelled up, spending did not, so Head Office's figure could only climb.
+    /// A confident number that only ever goes up is worse than an honestly stale one: it looks
+    /// correct right up until it lets a member spend a balance twice at two different shops.
+    /// </summary>
+    private async Task RecordWalletDeductionAsync(SyncInboxEntry held, JsonElement root)
+    {
+        var txId = ReadGuid(root, "walletTransactionId") ?? held.AggregateId;
+        if (await _db.WalletTransactions.AnyAsync(w => w.Id == txId))
+            return;
+
+        var memberId = ReadGuid(root, "memberId") ?? held.AggregateId;
+        var member = await _db.Members.FirstOrDefaultAsync(m => m.Id == memberId)
+            ?? throw new InvalidOperationException(
+                $"Head Office has no member {memberId}. The member.created event should arrive first.");
+
+        var amount = ReadDecimal(root, "amount") ?? 0m;
+        var targetWalletRaw = ReadString(root, "targetWallet") ?? "Gaming";
+        var isGaming = string.Equals(targetWalletRaw, "Gaming", StringComparison.OrdinalIgnoreCase);
+        var gamingAfter = ReadDecimal(root, "gamingBalanceAfter") ?? member.GamingBalance;
+        var foodAfter = ReadDecimal(root, "foodBalanceAfter") ?? member.FoodBalance;
+        var occurredAt = ReadDate(root, "occurredAt") ?? held.OccurredAt;
+
+        _db.WalletTransactions.Add(new WalletTransaction
+        {
+            Id = txId,
+            MemberId = memberId,
+            BranchId = held.BranchId,
+            OperatorId = await KnownHereOnly<Operator>(ReadGuid(root, "operatorId")),
+            ShiftId = await KnownHereOnly<Shift>(ReadGuid(root, "shiftId")),
+            Action = WalletAction.Correction,
+            TargetWallet = isGaming ? WalletType.Gaming : WalletType.Food,
+            Amount = amount,
+            BalanceBefore = (isGaming ? gamingAfter : foodAfter) + amount,
+            BalanceAfter = isGaming ? gamingAfter : foodAfter,
+            PaymentType = "Wallet",
+            BillId = await KnownHereOnly<Bill>(ReadGuid(root, "billId")),
+            Reason = ReadString(root, "reason"),
+            CreatedAt = occurredAt,
+        });
+
+        ApplyBalanceIfNewer(member, gamingAfter, foodAfter, occurredAt);
+    }
+
+    /// <summary>
+    /// The one rule that keeps a wallet correct across four branches touching it independently:
+    /// the figure that happened most recently wins, never the one that merely arrived most
+    /// recently.
+    ///
+    /// Without this, a branch's sync batch delayed by a slow connection could land after a
+    /// newer one from a different branch and quietly drag the balance backwards - undoing a
+    /// spend nobody undid, or resurrecting money that was already spent elsewhere.
+    /// </summary>
+    private static void ApplyBalanceIfNewer(Member member, decimal gamingAfter, decimal? foodAfter, DateTimeOffset occurredAt)
+    {
+        if (member.BalanceAsOf is { } asOf && asOf >= occurredAt) return;
+
+        member.GamingBalance = gamingAfter;
+        if (foodAfter is { } f) member.FoodBalance = f;
+        member.BalanceAsOf = occurredAt;
+        member.UpdatedAt = DateTimeOffset.UtcNow;
     }
 
     private async Task UpsertSessionStartedAsync(SyncInboxEntry held, JsonElement root)

@@ -178,6 +178,14 @@ public class WalletService : IWalletService
             Details = new { Amount = dto.Amount, PaymentType = dto.PaymentType }
         });
 
+        // Stamped on this branch's own copy the moment the money actually moved, so that if
+        // Head Office later hands this member back down with an older figure - the sync had
+        // not caught up yet - this branch can tell its own number is the newer one and refuse
+        // to be overwritten by its own top-up arriving late.
+        var occurredAt = DateTimeOffset.UtcNow;
+        member.BalanceAsOf = occurredAt;
+        _unitOfWork.Repository<Member>().Update(member);
+
         // A wallet is shared across all four branches, so Head Office must learn about a
         // top-up quickly — it is the only place that can spot the same balance being spent
         // in two towns at once. Sent with the resulting balance, not just the delta, so a
@@ -194,7 +202,8 @@ public class WalletService : IWalletService
             totalCredit,
             paymentType = dto.PaymentType,
             gamingBalanceAfter = member.GamingBalance,
-            occurredAt = DateTimeOffset.UtcNow,
+            foodBalanceAfter = member.FoodBalance,
+            occurredAt,
         });
 
         await _unitOfWork.CommitTransactionAsync();
@@ -224,6 +233,8 @@ public class WalletService : IWalletService
             member.FoodBalance -= dto.Amount;
 
         var balanceAfter = isGaming ? member.GamingBalance : member.FoodBalance;
+        var occurredAt = DateTimeOffset.UtcNow;
+        member.BalanceAsOf = occurredAt;
 
         _unitOfWork.Repository<Member>().Update(member);
 
@@ -258,6 +269,26 @@ public class WalletService : IWalletService
             TargetType = "wallet",
             TargetId = member.Id,
             Details = new { Amount = dto.Amount, Reason = dto.Reason }
+        });
+
+        // The missing half of wallet sync. Top-ups reached Head Office; a member spending
+        // their wallet at the counter - the far more common case - never did, so Head
+        // Office's figure could only ever climb and never fall. Sending only top-ups upward
+        // is worse than sending nothing: it produces a confident, wrong, ever-inflating
+        // number rather than an honestly stale one.
+        await _outbox.RecordEventAsync(branchId, "Member", member.Id, "wallet.deducted", new
+        {
+            memberId = member.Id,
+            walletTransactionId = walletTx.Id,
+            operatorId,
+            shiftId,
+            targetWallet = dto.TargetWallet.ToString(),
+            amount = dto.Amount,
+            gamingBalanceAfter = member.GamingBalance,
+            foodBalanceAfter = member.FoodBalance,
+            billId = dto.BillId,
+            reason = dto.Reason,
+            occurredAt,
         });
 
         if (commit)

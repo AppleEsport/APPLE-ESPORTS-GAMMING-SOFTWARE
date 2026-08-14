@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using AppleEsportsErp.Application.DTOs.Sync;
+using AppleEsportsErp.Application.Interfaces;
 using AppleEsportsErp.Application.Services;
 using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
@@ -207,7 +208,146 @@ public class BranchHeartbeatService : BackgroundService
             return;
         }
 
-        await ApplyConfigFromReplyAsync(db, await response.Content.ReadAsStringAsync(ct), ct);
+        var body = await response.Content.ReadAsStringAsync(ct);
+        await ApplyConfigFromReplyAsync(db, body, ct);
+        await RunCommandsFromReplyAsync(scope.ServiceProvider, client, headOffice, body, ct);
+    }
+
+    /// <summary>
+    /// Carries out whatever Head Office has asked this branch to do, and reports back.
+    ///
+    /// This is the other missing direction, and it is deliberately narrow: a command is never
+    /// allowed to write a session, a PC, or any other fact directly. It calls the exact same
+    /// service method an operator's own click calls - ISessionService.StopSessionAsync - so a
+    /// remote stop is billed, logged and synced upward exactly like a local one. Head Office
+    /// asking and Head Office writing are not the same thing, and only the first is safe: the
+    /// second is what put an unbillable ₹60 session on ADJ-PC-01 in the first place.
+    /// </summary>
+    private async Task RunCommandsFromReplyAsync(
+        IServiceProvider scoped, HttpClient client, string headOffice, string body, CancellationToken ct)
+    {
+        List<BranchCommandDto>? commands;
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (!doc.RootElement.TryGetProperty("data", out var data)) return;
+            if (!data.TryGetProperty("commands", out var node) || node.ValueKind != JsonValueKind.Array) return;
+
+            commands = JsonSerializer.Deserialize<List<BranchCommandDto>>(node.GetRawText(),
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Could not read the instructions Head Office sent ({Reason}).",
+                ex.GetBaseException().Message);
+            return;
+        }
+
+        if (commands is null || commands.Count == 0) return;
+
+        foreach (var command in commands)
+        {
+            var (succeeded, message) = await RunOneCommandAsync(scoped, command, ct);
+
+            _logger.LogInformation("Command {Type} ({Id}) from Head Office: {Result} - {Message}",
+                command.CommandType, command.Id, succeeded ? "done" : "failed", message);
+
+            try
+            {
+                var result = new BranchCommandResultDto
+                {
+                    CommandId = command.Id,
+                    Succeeded = succeeded,
+                    Message = message,
+                };
+
+                await client.PostAsync(
+                    $"{headOffice}/api/branch-status/commands/result",
+                    new StringContent(JsonSerializer.Serialize(result), Encoding.UTF8, "application/json"),
+                    ct);
+            }
+            catch (Exception ex)
+            {
+                // The command still ran (or was refused) - only the confirmation was lost. Head
+                // Office will hand the same command back on the next beat, this branch will find
+                // the session already stopped, and will confirm it then. Nothing to do here but
+                // let that happen.
+                _logger.LogWarning("Ran command {Id} but could not confirm it to Head Office ({Reason}).",
+                    command.Id, ex.GetBaseException().Message);
+            }
+        }
+    }
+
+    /// <summary>
+    /// One command, dispatched to whatever actually knows how to do it.
+    ///
+    /// An unrecognised CommandType fails cleanly rather than throwing - a branch on an older
+    /// build meeting a command type invented after it shipped should say so plainly, not crash
+    /// the beat that everything else here depends on.
+    /// </summary>
+    private static async Task<(bool succeeded, string message)> RunOneCommandAsync(
+        IServiceProvider scoped, BranchCommandDto command, CancellationToken ct)
+    {
+        switch (command.CommandType)
+        {
+            case "stop_session":
+                return await RunStopSessionAsync(scoped, command.Payload, ct);
+
+            default:
+                return (false, $"This branch does not know the command '{command.CommandType}' yet.");
+        }
+    }
+
+    private static async Task<(bool, string)> RunStopSessionAsync(
+        IServiceProvider scoped, string payload, CancellationToken ct)
+    {
+        Guid sessionId;
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            sessionId = doc.RootElement.GetProperty("sessionId").GetGuid();
+        }
+        catch
+        {
+            return (false, "The stop command arrived without a readable session id.");
+        }
+
+        var db = scoped.GetRequiredService<AppDbContext>();
+        var session = await db.Sessions.AsNoTracking().FirstOrDefaultAsync(s => s.Id == sessionId, ct);
+
+        if (session is null)
+            return (false, "No such session exists at this branch.");
+
+        // Genuinely nothing left to do - not a failure. The operator may have stopped it
+        // themselves in the time the command took to arrive, and that is the correct outcome
+        // either way: the session is stopped, which is all Head Office actually asked for.
+        if (session.State != SessionState.Active)
+            return (true, $"Already {session.State.ToString().ToLowerInvariant()} - nothing to do.");
+
+        try
+        {
+            var sessionService = scoped.GetRequiredService<ISessionService>();
+
+            // deferPayment is NOT "skip billing for a remote stop" - it marks the bill paid on
+            // the spot and writes the balance off as a CustomerCredit, as if the customer had
+            // walked out owing money. A remote stop must never quietly forgive a debt nobody
+            // has actually decided to forgive. False is the same outcome an operator's own
+            // Stop button gives: if nothing is owed the PC frees immediately; if something is,
+            // it goes to Awaiting Billing exactly as if stopped at the counter, and whoever is
+            // standing there collects it normally.
+            //
+            // The operator who started the session is recorded as the one who stopped it,
+            // because they are the one whose shift and till this affects - the same as if they
+            // had pressed Stop themselves.
+            var result = await sessionService.StopSessionAsync(
+                session.BranchId, session.OperatorId, sessionId, deferPayment: false);
+
+            return (true, $"Stopped. {result.PackageName}, billed {result.DurationMinutes} min, Rs {result.ExpectedAmount}.");
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.GetBaseException().Message);
+        }
     }
 
     /// <summary>
@@ -240,7 +380,8 @@ public class BranchHeartbeatService : BackgroundService
             return;
         }
 
-        if (config is null || config.Operators.Count == 0) return;
+        if (config is null) return;
+        if (config.Operators.Count == 0 && config.MenuItems.Count == 0 && config.Members.Count == 0) return;
 
         var known = await db.Operators.ToDictionaryAsync(o => o.Id, ct);
         var changed = 0;
@@ -287,6 +428,9 @@ public class BranchHeartbeatService : BackgroundService
             }
         }
 
+        var menuChanged = await ApplyMenuItemsAsync(db, _branchId, config.MenuItems, ct);
+        var membersChanged = await ApplyMembersAsync(db, config.Members, ct);
+
         if (db.ChangeTracker.HasChanges())
         {
             await db.SaveChangesAsync(ct);
@@ -295,11 +439,136 @@ public class BranchHeartbeatService : BackgroundService
             // sending it. Worth a line in the log, because "the shop suddenly behaves
             // differently" should always have something to point at.
             _logger.LogInformation(
-                "Settings updated from Head Office: {Count} operator(s), {New} new. Version {Version}.",
-                config.Operators.Count, changed, config.Version);
+                "Settings updated from Head Office: {OpCount} operator(s), {OpNew} new; " +
+                "{MenuCount} menu item(s), {MenuNew} new; {MemberCount} member(s), {MemberNew} new. " +
+                "Version {Version}.",
+                config.Operators.Count, changed,
+                config.MenuItems.Count, menuChanged,
+                config.Members.Count, membersChanged,
+                config.Version);
         }
 
         _configVersion = config.Version;
+    }
+
+    /// <summary>
+    /// Makes this branch's menu match Head Office's catalog for it.
+    ///
+    /// This is the fix for a super admin adding a food item at Head Office and it never
+    /// appearing at the counter - the Menu Editor is branch-scoped storage, and an item added
+    /// "for Adajan" while working at Head Office was written into Head Office's own copy of
+    /// Adajan's table, which the physical Adajan counter - a completely separate database -
+    /// was never told about.
+    ///
+    /// Only catalog fields are touched: name, category, price, image, whether Head Office has
+    /// withdrawn it from sale. CurrentStock and SoldQty are never written here, for the same
+    /// reason a PC's busy/idle state is never written from config - they are this branch's own
+    /// trading state and change at the counter, not at Head Office. A shop that just sold its
+    /// last plate of fries must not have Head Office silently restock it on the next beat.
+    /// </summary>
+    private static async Task<int> ApplyMenuItemsAsync(
+        AppDbContext db, Guid branchId, List<BranchMenuItemConfigDto> incoming, CancellationToken ct)
+    {
+        if (incoming.Count == 0) return 0;
+
+        var known = await db.Set<InventoryItem>().ToDictionaryAsync(i => i.Id, ct);
+        var added = 0;
+
+        foreach (var item in incoming)
+        {
+            if (!known.TryGetValue(item.Id, out var row))
+            {
+                row = new InventoryItem
+                {
+                    Id = item.Id,
+                    BranchId = branchId,
+                    CreatedAt = DateTimeOffset.UtcNow,
+                };
+                db.Add(row);
+                added++;
+            }
+
+            row.ItemName = item.ItemName;
+            row.Category = item.Category;
+            row.Price = item.Price;
+            row.ImageUrl = item.ImageUrl;
+
+            // A branch marking something Out of Stock is its own call and stays exactly as it
+            // is; only Head Office's Disabled/not-Disabled decision moves this needle, and only
+            // when it actually says something - "disabled" pulls an item from sale everywhere,
+            // "not disabled" must not silently un-hide something the branch itself paused.
+            if (item.IsDisabled && row.Status != FoodAvailability.Disabled)
+                row.Status = FoodAvailability.Disabled;
+            else if (!item.IsDisabled && row.Status == FoodAvailability.Disabled)
+                row.Status = FoodAvailability.Available;
+
+            row.UpdatedAt = DateTimeOffset.UtcNow;
+        }
+
+        return added;
+    }
+
+    /// <summary>
+    /// Makes this branch recognise every member Head Office knows about, with the wallet
+    /// balance Head Office currently holds for them.
+    ///
+    /// This is what lets someone who joined at Adajan spend their wallet at Katargam: without
+    /// it, a branch that has never seen a member locally has no row for them at all. Balance is
+    /// only ever accepted from Head Office when it is not older than what this branch already
+    /// has - the same "newest wins" rule used for a PC's state, applied to money instead. A
+    /// branch that just took a top-up of its own must not have that top-up erased because Head
+    /// Office's reply, built moments earlier, has not caught up yet.
+    /// </summary>
+    private static async Task<int> ApplyMembersAsync(
+        AppDbContext db, List<BranchMemberConfigDto> incoming, CancellationToken ct)
+    {
+        if (incoming.Count == 0) return 0;
+
+        var known = await db.Members.ToDictionaryAsync(m => m.Id, ct);
+        var added = 0;
+
+        foreach (var item in incoming)
+        {
+            if (!known.TryGetValue(item.Id, out var member))
+            {
+                member = new Member
+                {
+                    Id = item.Id,
+                    GamingBalance = item.GamingBalance,
+                    FoodBalance = item.FoodBalance,
+                    BalanceAsOf = item.BalanceAsOf,
+                    Status = item.IsBlocked ? MemberStatus.Suspended : MemberStatus.Active,
+                    JoinDate = DateTimeOffset.UtcNow,
+                    CreatedAt = DateTimeOffset.UtcNow,
+                };
+                db.Members.Add(member);
+                added++;
+            }
+            else if (item.BalanceAsOf is { } incomingAsOf
+                     && (member.BalanceAsOf is not { } localAsOf || incomingAsOf > localAsOf))
+            {
+                member.GamingBalance = item.GamingBalance;
+                member.FoodBalance = item.FoodBalance;
+                member.BalanceAsOf = incomingAsOf;
+            }
+
+            member.FullName = item.FullName;
+            member.MemberNumber = item.MemberNumber;
+            member.MobileNumber = item.MobileNumber;
+            member.Email = item.Email;
+            member.Username = item.Username;
+            member.UpdatedAt = DateTimeOffset.UtcNow;
+
+            // Same rule as operators: only the barred decision comes down. There is no local
+            // "on shift" equivalent for a member to protect, but Active/Vip is still this
+            // branch's own read on a member's standing and is left alone either way.
+            if (item.IsBlocked && member.Status is not MemberStatus.Suspended)
+                member.Status = MemberStatus.Suspended;
+            else if (!item.IsBlocked && member.Status is MemberStatus.Suspended)
+                member.Status = MemberStatus.Active;
+        }
+
+        return added;
     }
 
     /// <summary>
