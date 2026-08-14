@@ -148,7 +148,76 @@ public class BranchHeartbeatController : ControllerBase
         // few hundred bytes.
         var config = await ConfigForBranchIfChangedAsync(dto.BranchId, dto.ConfigVersion, ct);
 
-        return Ok(ApiResponse<object>.Ok(new { received = true, at = now, config }));
+        // And anything Head Office has asked this branch to do since it last checked in -
+        // the other half. See BranchCommand for why this rides down as an instruction to
+        // carry out rather than a fact already written.
+        var commands = await PendingCommandsAsync(dto.BranchId, ct);
+
+        return Ok(ApiResponse<object>.Ok(new { received = true, at = now, config, commands }));
+    }
+
+    /// <summary>
+    /// Everything still owed to this branch, marked Sent so it is not handed out again on the
+    /// next beat before this one has even been tried.
+    ///
+    /// "Sent" is not "done". A branch that never confirms - crashed mid-command, or the reply
+    /// never arrived - simply has the command reappear, because the only thing marking a
+    /// command finished is the branch's own result coming back.
+    /// </summary>
+    private async Task<List<BranchCommandDto>> PendingCommandsAsync(Guid branchId, CancellationToken ct)
+    {
+        var pending = await _db.Set<BranchCommand>()
+            .Where(c => c.BranchId == branchId
+                && (c.Status == BranchCommandStatus.Pending || c.Status == BranchCommandStatus.Sent))
+            .OrderBy(c => c.CreatedAt)
+            .ToListAsync(ct);
+
+        if (pending.Count == 0) return new List<BranchCommandDto>();
+
+        var now = DateTimeOffset.UtcNow;
+        foreach (var c in pending.Where(c => c.Status == BranchCommandStatus.Pending))
+        {
+            c.Status = BranchCommandStatus.Sent;
+            c.SentAt = now;
+        }
+
+        await _db.SaveChangesAsync(ct);
+
+        return pending.Select(c => new BranchCommandDto
+        {
+            Id = c.Id,
+            CommandType = c.CommandType,
+            Payload = c.Payload,
+        }).ToList();
+    }
+
+    /// <summary>
+    /// Where the branch reports back what actually happened. The only place a command is ever
+    /// allowed to close - Head Office asked, it does not get to decide the answer.
+    ///
+    /// Anonymous like the rest of the branch-facing endpoints, and scoped by looking the
+    /// command up by both its id and its branch, so one shop can never close another's command.
+    /// </summary>
+    [HttpPost("commands/result")]
+    [AllowAnonymous]
+    public async Task<IActionResult> CommandResult([FromBody] BranchCommandResultDto dto, CancellationToken ct)
+    {
+        var command = await _db.Set<BranchCommand>().FirstOrDefaultAsync(c => c.Id == dto.CommandId, ct);
+        if (command is null)
+            return NotFound(ApiResponse<object>.Fail("Head Office has no such command.", "COMMAND_NOT_FOUND"));
+
+        // Already closed - a result arriving twice from the same beat retry, or a very late one
+        // for a command that has since timed out and been requeued under a fresh id.
+        if (command.Status is BranchCommandStatus.Succeeded or BranchCommandStatus.Failed)
+            return Ok(ApiResponse<object>.Ok(new { alreadyClosed = true }));
+
+        command.Status = dto.Succeeded ? BranchCommandStatus.Succeeded : BranchCommandStatus.Failed;
+        command.ResultMessage = dto.Message;
+        command.CompletedAt = DateTimeOffset.UtcNow;
+
+        await _db.SaveChangesAsync(ct);
+
+        return Ok(ApiResponse<object>.Ok(new { received = true }));
     }
 
     /// <summary>
@@ -180,7 +249,43 @@ public class BranchHeartbeatController : ControllerBase
             })
             .ToListAsync(ct);
 
-        var config = new BranchConfigDto { Operators = operators };
+        // Catalog fields only - CurrentStock and SoldQty are the branch's own trading state
+        // and never travel down, for the same reason a PC's busy/idle state does not.
+        var menuItems = await _db.Set<InventoryItem>().AsNoTracking()
+            .Where(i => i.BranchId == branchId)
+            .OrderBy(i => i.Id)
+            .Select(i => new BranchMenuItemConfigDto
+            {
+                Id = i.Id,
+                ItemName = i.ItemName,
+                Category = i.Category,
+                Price = i.Price,
+                ImageUrl = i.ImageUrl,
+                IsDisabled = i.Status == FoodAvailability.Disabled,
+            })
+            .ToListAsync(ct);
+
+        // Every member, not just this branch's own - a member joins at one shop and is meant
+        // to be able to spend their wallet at any of them, which only works if every branch
+        // knows who they are and what they currently hold.
+        var members = await _db.Members.AsNoTracking()
+            .OrderBy(m => m.Id)
+            .Select(m => new BranchMemberConfigDto
+            {
+                Id = m.Id,
+                FullName = m.FullName,
+                MemberNumber = m.MemberNumber,
+                MobileNumber = m.MobileNumber,
+                Email = m.Email,
+                Username = m.Username,
+                GamingBalance = m.GamingBalance,
+                FoodBalance = m.FoodBalance,
+                BalanceAsOf = m.BalanceAsOf,
+                IsBlocked = m.Status == MemberStatus.Suspended || m.Status == MemberStatus.Inactive,
+            })
+            .ToListAsync(ct);
+
+        var config = new BranchConfigDto { Operators = operators, MenuItems = menuItems, Members = members };
         config.Version = Fingerprint(config);
 
         return string.Equals(config.Version, branchHasVersion, StringComparison.Ordinal)
@@ -198,9 +303,18 @@ public class BranchHeartbeatController : ControllerBase
     /// </summary>
     private static string Fingerprint(BranchConfigDto config)
     {
-        var canonical = string.Join('\n', config.Operators.Select(o => string.Join('',
+        var operatorsPart = string.Join('\n', config.Operators.Select(o => string.Join('',
             o.Id, o.FullName, o.Username, o.Email, o.PasswordHash,
             o.MobileNumber, o.AccessPin, o.IsGlobalAdmin, o.DashboardPermissions, o.IsBlocked)));
+
+        var menuPart = string.Join('\n', config.MenuItems.Select(i => string.Join('',
+            i.Id, i.ItemName, i.Category, i.Price, i.ImageUrl, i.IsDisabled)));
+
+        var membersPart = string.Join('\n', config.Members.Select(m => string.Join('',
+            m.Id, m.FullName, m.MemberNumber, m.MobileNumber, m.Email, m.Username,
+            m.GamingBalance, m.FoodBalance, m.BalanceAsOf, m.IsBlocked)));
+
+        var canonical = string.Join("\n---\n", operatorsPart, menuPart, membersPart);
 
         return Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))[..16];

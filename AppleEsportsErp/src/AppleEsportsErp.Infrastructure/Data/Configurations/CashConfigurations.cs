@@ -171,3 +171,29 @@ public class BranchHeartbeatConfiguration : IEntityTypeConfiguration<BranchHeart
             .HasForeignKey(e => e.BranchId).OnDelete(DeleteBehavior.Cascade);
     }
 }
+
+/// <summary>
+/// Head Office's asks and the branch's answers - see the remarks on BranchCommand for why
+/// this exists rather than Head Office writing the branch's tables directly.
+/// </summary>
+public class BranchCommandConfiguration : IEntityTypeConfiguration<BranchCommand>
+{
+    public void Configure(EntityTypeBuilder<BranchCommand> builder)
+    {
+        builder.ToTable("branch_commands");
+        builder.HasKey(e => e.Id);
+
+        builder.Property(e => e.CommandType).HasMaxLength(40).IsRequired();
+        builder.Property(e => e.Payload).HasColumnType("jsonb");
+        builder.Property(e => e.Status).HasMaxLength(20)
+            .HasConversion(v => v.ToString().ToLowerInvariant(),
+                           v => Enum.Parse<BranchCommandStatus>(v, true));
+
+        // Both sides ask the same question constantly: what is still owed to this branch, and
+        // has this one particular thing already been answered. One index serves both.
+        builder.HasIndex(e => new { e.BranchId, e.Status }).HasDatabaseName("idx_branch_commands_branch_status");
+
+        builder.HasOne<Branch>().WithMany()
+            .HasForeignKey(e => e.BranchId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
