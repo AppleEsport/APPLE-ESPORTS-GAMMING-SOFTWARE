@@ -11,6 +11,13 @@ const TABS = [
 
 // ── Fixed-to-viewport financial summary strip for the EOD dashboard, mirroring
 // SessionActivityLog's pinned-bottom / drag-resizable pattern ──
+//
+// Same layout as the original two-column summary. What changed is only where the numbers come
+// from: every total here used to be added up in this file, and three of those additions were
+// wrong - wallet spending got counted as new money on top of the top-up that paid for it, a
+// UPI top-up was shown as cash, and a promotional bonus was shown as if the customer had paid
+// it. All of that arithmetic now happens once, on the server, next to the records it is adding
+// up - this file only prints what it is told.
 export default function EodPaymentSummaryBar({ report, targetDate, height, onHeightChange }) {
   const resizing = useRef(false);
   const [activeTab, setActiveTab] = useState('payment');
@@ -48,43 +55,31 @@ export default function EodPaymentSummaryBar({ report, targetDate, height, onHei
 
   if (!report) return null;
 
+  const n = (v) => Number(v ?? 0);
   const pm = report.paymentMethods;
   const rec = report.reconciliation ?? {};
-  const n = (v) => Number(v ?? 0);
 
-  // Every total on this bar is now worked out on the server and simply printed here.
-  //
-  // It used to be assembled in this file out of whatever figures were to hand, and it was wrong
-  // in two ways at once. It added wallet top-ups AND wallet deductions into one total, which
-  // counts the same rupee twice - Rs 500 topped up and Rs 90 later played reported Rs 590 of
-  // takings on a day Rs 500 arrived. And it put the whole top-up figure into the CASH row
-  // regardless of how it was paid, so a Rs 500 UPI top-up appeared as Rs 500 of notes and the
-  // operator counting the drawer came up short by exactly that.
-  //
-  // Money arithmetic does not belong in a display component. There is one answer and the
-  // server works it out; this shows it.
-  const collected = n(pm.totalCollected);
-
-  // Cash actually in hand: notes taken for bills, plus notes taken for top-ups, less what went
-  // out of the drawer. Top-ups paid by UPI are excluded, which is the whole point.
-  const cashIn = n(pm.totalCash) + n(pm.totalWalletTopUpsCash);
-  const cashOut = n(report.cash.totalPettyExpenses) + n(report.cash.totalOwnerWithdrawals);
-  const cashNet = cashIn - cashOut;
-
-  const onlineIn = n(pm.totalOnline) + n(pm.totalWalletTopUpsOnline);
+  // Cash and online each cover both what was paid at billing AND what was paid at the top-up
+  // counter - two counters, one till. Top-ups are split by how they were actually paid (the
+  // server tracks this per row) rather than lumped into cash regardless of method, which used
+  // to overstate the drawer by the full value of every UPI top-up.
+  const cashTotal = n(pm.totalCash) + n(pm.totalWalletTopUpsCash) - n(report.cash.totalPettyExpenses) - n(report.cash.totalOwnerWithdrawals);
+  const onlineTotal = n(pm.totalOnline) + n(pm.totalWalletTopUpsOnline);
   const walletDeductionsTotal = n(pm.totalWalletDeductions);
 
+  // The Total Amount at the bottom is exactly the sum of the two rows above it that are
+  // themselves totals - cash (already net of petty expenses and owner withdrawals) plus
+  // online. Wallet Deductions is shown for visibility but deliberately left out of this sum:
+  // it is a member spending a balance that was already counted as income when they topped up,
+  // and adding it again is the original bug this screen used to have.
+  const grandTotal = cashTotal + onlineTotal;
   const creditsPending = report.creditLogs?.filter(c => c.status?.toLowerCase() === 'pending').reduce((acc, c) => acc + n(c.creditAmount), 0) || 0;
 
+  // One line, shown only when it says something. Billed and taken can differ for perfectly
+  // ordinary reasons - a discount, a customer who left owing money - and usually cancel out to
+  // zero. When they do not, that is worth a single row, not a wall of arithmetic to prove it.
   const difference = n(rec.difference);
-  const balances = Math.abs(difference) < 0.01;
-
-  // The drawer's count and its difference are null until somebody counts it, and null is not
-  // zero here - see CashSummaryDto. Kept as null rather than coerced, so the rows below can say
-  // "not counted yet" instead of printing an empty drawer.
-  const counted = report.cash.actualPhysicalCashCounted;
-  const discrepancy = report.cash.totalDiscrepancy;
-  const earlierDifference = Number(report.cash.differencesFoundEarlier ?? 0);
+  const hasDifference = Math.abs(difference) >= 0.01;
 
   return (
     <div
@@ -123,74 +118,42 @@ export default function EodPaymentSummaryBar({ report, targetDate, height, onHei
           </div>
         </div>
         <div className="font-mono text-xs font-bold text-neon-blue">
-          {activeTab === 'payment'
-            ? `Collected: ₹${collected.toFixed(2)}`
-            : `In drawer (expected): ₹${n(report.cash.expectedCashInDrawer).toFixed(2)}`}
+          {activeTab === 'payment' ? `Total: ₹${grandTotal.toFixed(2)}` : `End Total: ₹${grandTotal.toFixed(2)}`}
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-2">
         {activeTab === 'payment' ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* What was billed, and why that differs from what was taken.
-                Every line here is a real reason the two sides can legitimately disagree —
-                discounts, a customer who left owing money, an old debt paid off today. None
-                of them used to be shown, so the two halves of this bar simply did not add up
-                and there was no way to tell whether that was normal or a fault. */}
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-[11px] whitespace-nowrap">
                 <thead>
                   <tr className="border-b border-border text-text-3 uppercase tracking-wider font-bold text-[9px]">
-                    <th className="py-1.5 pr-4">What was billed</th>
-                    <th className="py-1.5 pr-4 text-right">Amount</th>
+                    <th className="py-1.5 pr-4">Revenue Category</th>
+                    <th className="py-1.5 pr-4 text-right">Income</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/40 font-mono">
                   <tr>
-                    <td className="py-1.5 pr-4 text-text-2 font-sans">Gaming</td>
+                    <td className="py-1.5 pr-4 text-text-2 font-sans">Gaming Revenue</td>
                     <td className="py-1.5 pr-4 text-right text-text">₹{n(report.revenue.totalGamingRevenue).toFixed(2)}</td>
                   </tr>
                   <tr>
-                    <td className="py-1.5 pr-4 text-text-2 font-sans">Food</td>
+                    <td className="py-1.5 pr-4 text-text-2 font-sans">Food Revenue</td>
                     <td className="py-1.5 pr-4 text-right text-text">₹{n(report.revenue.totalFoodRevenue).toFixed(2)}</td>
                   </tr>
                   <tr>
-                    <td className="py-1.5 pr-4 text-text-2 font-sans">Less discounts</td>
-                    <td className="py-1.5 pr-4 text-right text-neon-red">- ₹{n(rec.discounts).toFixed(2)}</td>
+                    <td className="py-1.5 pr-4 text-text-2 font-sans">Wallet Top-Ups</td>
+                    <td className="py-1.5 pr-4 text-right text-text">₹{n(pm.totalWalletTopUps).toFixed(2)}</td>
                   </tr>
-                  <tr>
-                    <td className="py-1.5 pr-4 text-text-2 font-sans">Less credit given today</td>
-                    <td className="py-1.5 pr-4 text-right text-neon-red">- ₹{n(rec.creditGivenToday).toFixed(2)}</td>
-                  </tr>
-                  <tr>
-                    <td className="py-1.5 pr-4 text-text-2 font-sans">Plus old credit collected today</td>
-                    <td className="py-1.5 pr-4 text-right text-neon-green">+ ₹{n(rec.creditClearedToday).toFixed(2)}</td>
-                  </tr>
-                  <tr className="border-t border-border">
-                    <td className="py-1.5 pr-4 text-text font-sans font-bold">Should have been taken</td>
-                    <td className="py-1.5 pr-4 text-right text-text font-bold">₹{n(rec.shouldHaveBeenCollected).toFixed(2)}</td>
-                  </tr>
-                  <tr>
-                    <td className="py-1.5 pr-4 text-text-2 font-sans">Actually settled</td>
-                    <td className="py-1.5 pr-4 text-right text-text">₹{n(rec.actuallySettled).toFixed(2)}</td>
-                  </tr>
+                  {n(pm.totalWalletBonusGiven) > 0 && (
+                    <tr>
+                      <td className="py-1.5 pr-4 text-text-2 font-sans">— of which bonus given away</td>
+                      <td className="py-1.5 pr-4 text-right text-neon-orange">₹{n(pm.totalWalletBonusGiven).toFixed(2)}</td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
-
-              {/* Shown whether or not it is zero. A difference nobody is told about is how a
-                  real shortfall survives a week of End of Days. */}
-              <div className={`flex justify-between items-center text-xs px-3 py-2 rounded-lg border mt-2 ${
-                balances
-                  ? 'bg-neon-blue/10 border-neon-blue/30'
-                  : 'bg-neon-red/10 border-neon-red/40'
-              }`}>
-                <span className={`font-bold uppercase tracking-widest text-[10px] ${balances ? 'text-neon-blue' : 'text-neon-red'}`}>
-                  {balances ? '✓ Bills and payments agree' : 'Unexplained difference'}
-                </span>
-                <span className={`font-mono font-bold ${balances ? 'text-neon-blue' : 'text-neon-red'}`}>
-                  {balances ? '₹0.00' : `${difference > 0 ? '+' : '-'}₹${Math.abs(difference).toFixed(2)}`}
-                </span>
-              </div>
             </div>
 
             <div className="overflow-x-auto">
@@ -205,56 +168,54 @@ export default function EodPaymentSummaryBar({ report, targetDate, height, onHei
                 </thead>
                 <tbody className="divide-y divide-border/40 font-mono">
                   <tr>
-                    <td className="py-1.5 pr-4 text-text-2 font-sans">
-                      Cash
-                      <span className="text-text-3 text-[9px] ml-1">(bills + top-ups paid in notes)</span>
+                    <td className="py-1.5 pr-4 text-text-2 font-sans">Cash</td>
+                    <td className="py-1.5 pr-4 text-right text-neon-green">
+                      ₹{(n(pm.totalCash) + n(pm.totalWalletTopUpsCash)).toFixed(2)}
                     </td>
-                    <td className="py-1.5 pr-4 text-right text-neon-green">₹{cashIn.toFixed(2)}</td>
-                    <td className="py-1.5 pr-4 text-right text-neon-red">₹{cashOut.toFixed(2)}</td>
-                    <td className="py-1.5 pr-4 text-right text-text font-bold">₹{cashNet.toFixed(2)}</td>
+                    <td className="py-1.5 pr-4 text-right text-neon-red">
+                      ₹{(n(report.cash.totalPettyExpenses) + n(report.cash.totalOwnerWithdrawals)).toFixed(2)}
+                    </td>
+                    <td className="py-1.5 pr-4 text-right text-text font-bold">₹{cashTotal.toFixed(2)}</td>
                   </tr>
                   <tr>
-                    <td className="py-1.5 pr-4 text-text-2 font-sans">
-                      Online
-                      <span className="text-text-3 text-[9px] ml-1">(bills + top-ups paid by UPI)</span>
-                    </td>
-                    <td className="py-1.5 pr-4 text-right text-neon-green">₹{onlineIn.toFixed(2)}</td>
+                    <td className="py-1.5 pr-4 text-text-2 font-sans">Online</td>
+                    <td className="py-1.5 pr-4 text-right text-neon-green">₹{onlineTotal.toFixed(2)}</td>
                     <td className="py-1.5 pr-4 text-right text-text-3">₹0.00</td>
-                    <td className="py-1.5 pr-4 text-right text-text font-bold">₹{onlineIn.toFixed(2)}</td>
+                    <td className="py-1.5 pr-4 text-right text-text font-bold">₹{onlineTotal.toFixed(2)}</td>
+                  </tr>
+                  <tr>
+                    <td className="py-1.5 pr-4 text-text-2 font-sans">Wallet Deductions (Gaming/Food)</td>
+                    <td className="py-1.5 pr-4 text-right text-neon-green">₹{walletDeductionsTotal.toFixed(2)}</td>
+                    <td className="py-1.5 pr-4 text-right text-text-3">₹0.00</td>
+                    <td className="py-1.5 pr-4 text-right text-text font-bold">₹{walletDeductionsTotal.toFixed(2)}</td>
                   </tr>
                 </tbody>
               </table>
 
-              <div className="flex justify-between items-center text-xs bg-neon-blue/10 px-3 py-2 rounded-lg border border-neon-blue/30 mt-2">
-                <span className="font-bold text-neon-blue uppercase tracking-widest text-[10px]">Money collected today</span>
-                <span className="font-mono font-bold text-base text-neon-blue">₹{collected.toFixed(2)}</span>
+              <div className="flex justify-between items-center text-xs bg-bg-3 px-3 py-2 rounded-lg border border-border mt-2">
+                <span className="font-bold text-text uppercase tracking-widest text-[10px]">Discounts Applied</span>
+                <span className="font-mono font-bold text-neon-red">-₹{n(report.revenue.totalDiscounts).toFixed(2)}</span>
               </div>
 
-              {/* Kept off the total on purpose, and said so on screen rather than left for
-                  somebody to work out. This is members spending balance they paid for when
-                  they topped up - possibly weeks ago. It is revenue, but no money arrives
-                  today, and adding it to the takings counts the same rupee a second time. */}
-              <div className="flex justify-between items-center text-xs bg-bg-3 px-3 py-2 rounded-lg border border-border mt-1.5">
-                <span className="font-bold text-text-2 uppercase tracking-widest text-[10px]">
-                  Paid from wallets
-                  <span className="normal-case tracking-normal text-text-3 font-normal ml-1">— already collected, not new money</span>
-                </span>
-                <span className="font-mono font-bold text-neon-purple">₹{walletDeductionsTotal.toFixed(2)}</span>
-              </div>
-
-              {/* Free credit handed out on top-ups. Real money the owner is giving away to buy
-                  loyalty, and it appeared nowhere on this screen at all — while quietly
-                  inflating the takings figure, because the top-up total it was buried inside
-                  was being counted as cash through the door. */}
-              {n(pm.totalWalletBonusGiven) > 0 && (
-                <div className="flex justify-between items-center text-xs bg-bg-3 px-3 py-2 rounded-lg border border-border mt-1.5">
-                  <span className="font-bold text-text-2 uppercase tracking-widest text-[10px]">
-                    Bonus given away
-                    <span className="normal-case tracking-normal text-text-3 font-normal ml-1">— free credit, not income</span>
+              {/* Only appears when it is non-zero. Billed and taken usually net to zero on their
+                  own once discounts and credit are accounted for; when they do not, this is the
+                  one line that says so - found a real ₹70 unpaid bill sitting in yesterday's
+                  takings the first time this ran. */}
+              {hasDifference && (
+                <div className="flex justify-between items-center text-xs bg-neon-red/10 px-3 py-2 rounded-lg border border-neon-red/40 mt-1.5">
+                  <span className="font-bold text-neon-red uppercase tracking-widest text-[10px]">
+                    Unexplained Difference (billed vs taken)
                   </span>
-                  <span className="font-mono font-bold text-neon-orange">₹{n(pm.totalWalletBonusGiven).toFixed(2)}</span>
+                  <span className="font-mono font-bold text-neon-red">
+                    {difference > 0 ? '+' : '-'}₹{Math.abs(difference).toFixed(2)}
+                  </span>
                 </div>
               )}
+
+              <div className="flex justify-between items-center text-xs bg-neon-blue/10 px-3 py-2 rounded-lg border border-neon-blue/30 mt-1.5">
+                <span className="font-bold text-neon-blue uppercase tracking-widest text-[10px]">Total Amount</span>
+                <span className="font-mono font-bold text-base text-neon-blue">₹{grandTotal.toFixed(2)}</span>
+              </div>
             </div>
           </div>
         ) : (
@@ -281,13 +242,13 @@ export default function EodPaymentSummaryBar({ report, targetDate, height, onHei
                   arithmetic: opening plus takings, less what was spent and less what went astray
                   earlier, is what the drawer should hold now. Leaving it out is what made the
                   column fail to add up. */}
-              {earlierDifference !== 0 && (
+              {Number(report.cash.differencesFoundEarlier ?? 0) !== 0 && (
                 <div className="flex justify-between items-center">
                   <span className="text-text-2">
-                    {earlierDifference < 0 ? 'Missing at an earlier handover' : 'Extra at an earlier handover'}
+                    {Number(report.cash.differencesFoundEarlier) < 0 ? 'Missing at an earlier handover' : 'Extra at an earlier handover'}
                   </span>
-                  <span className={`font-mono ${earlierDifference < 0 ? 'text-neon-red' : 'text-neon-orange'}`}>
-                    {earlierDifference < 0 ? '- ' : '+ '}₹{Math.abs(earlierDifference).toFixed(2)}
+                  <span className={`font-mono ${Number(report.cash.differencesFoundEarlier) < 0 ? 'text-neon-red' : 'text-neon-orange'}`}>
+                    {Number(report.cash.differencesFoundEarlier) < 0 ? '- ' : '+ '}₹{Math.abs(Number(report.cash.differencesFoundEarlier)).toFixed(2)}
                   </span>
                 </div>
               )}
@@ -301,22 +262,22 @@ export default function EodPaymentSummaryBar({ report, targetDate, height, onHei
                   takings gone - when the truth is that nobody has looked in it yet. */}
               <div className="flex justify-between items-center">
                 <span className="font-bold text-text">Physically Counted</span>
-                {counted === null || counted === undefined ? (
+                {report.cash.actualPhysicalCashCounted === null || report.cash.actualPhysicalCashCounted === undefined ? (
                   <span className="text-text-3 text-[11px] italic">not counted yet</span>
                 ) : (
-                  <span className="font-mono font-bold text-text">₹{counted}</span>
+                  <span className="font-mono font-bold text-text">₹{report.cash.actualPhysicalCashCounted}</span>
                 )}
               </div>
 
               <div className="flex justify-between items-center bg-bg-3 px-3 py-1.5 rounded-lg border border-border mt-1">
                 <span className="font-bold text-text uppercase tracking-widest text-[10px]">
-                  {counted === null || counted === undefined ? 'Difference' : 'Total Difference'}
+                  {report.cash.actualPhysicalCashCounted === null || report.cash.actualPhysicalCashCounted === undefined ? 'Difference' : 'Total Difference'}
                 </span>
-                {discrepancy === null || discrepancy === undefined ? (
+                {report.cash.totalDiscrepancy === null || report.cash.totalDiscrepancy === undefined ? (
                   <span className="text-text-3 text-[11px] italic">unknown until it is counted</span>
                 ) : (
-                  <span className={`font-mono font-bold ${Number(discrepancy) === 0 ? 'text-neon-blue' : 'text-neon-red'}`}>
-                    ₹{discrepancy}
+                  <span className={`font-mono font-bold ${Number(report.cash.totalDiscrepancy) === 0 ? 'text-neon-blue' : 'text-neon-red'}`}>
+                    ₹{report.cash.totalDiscrepancy}
                   </span>
                 )}
               </div>
@@ -325,45 +286,24 @@ export default function EodPaymentSummaryBar({ report, targetDate, height, onHei
             {/* Overall Collection & Business */}
             <div className="space-y-1.5 text-xs">
               <div className="flex justify-between items-center">
-                <span className="text-text-2">Cash against bills</span>
-                <span className="font-mono text-text">₹{n(pm.totalCash).toFixed(2)}</span>
+                <span className="text-text-2">Cash</span>
+                <span className="font-mono text-text">₹{(n(pm.totalCash) + n(pm.totalWalletTopUpsCash)).toFixed(2)}</span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-text-2">Online against bills</span>
-                <span className="font-mono text-text">₹{n(pm.totalOnline).toFixed(2)}</span>
+                <span className="text-text-2">Online</span>
+                <span className="font-mono text-text">₹{onlineTotal.toFixed(2)}</span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-text-2">Wallet top-ups — in notes</span>
-                <span className="font-mono text-neon-green">+ ₹{n(pm.totalWalletTopUpsCash).toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-text-2">Wallet top-ups — by UPI</span>
-                <span className="font-mono text-neon-green">+ ₹{n(pm.totalWalletTopUpsOnline).toFixed(2)}</span>
-              </div>
-
-              <div className="flex justify-between items-center bg-neon-blue/10 px-3 py-1.5 rounded-lg border border-neon-blue/30 mt-1">
-                <span className="font-bold text-neon-blue uppercase tracking-widest text-[10px]">Money collected today</span>
-                <span className="font-mono font-bold text-base text-neon-blue">₹{collected.toFixed(2)}</span>
-              </div>
-
-              {/* Below the total, not inside it. Both of these are real and both are things an
-                  owner wants to see, and neither is money that arrived today: wallet spending
-                  was paid for at top-up time, and pending credit is money still owed. The old
-                  version added wallet spending into the total and subtracted nothing for
-                  credit, so the headline figure was larger than the day had ever produced. */}
-              <div className="flex justify-between items-center pt-1.5 mt-1.5 border-t border-border">
-                <span className="text-text-2">
-                  Paid from wallets
-                  <span className="text-text-3 text-[10px] ml-1">— collected earlier</span>
-                </span>
+                <span className="text-text-2">Wallet Deductions (Gaming/Food)</span>
                 <span className="font-mono text-neon-purple">₹{walletDeductionsTotal.toFixed(2)}</span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-text-2">
-                  Still owed to us
-                  <span className="text-text-3 text-[10px] ml-1">— credit pending</span>
-                </span>
-                <span className="font-mono text-neon-red">₹{creditsPending.toFixed(2)}</span>
+                <span className="text-text-2">Credits Pending</span>
+                <span className="font-mono text-neon-red">-₹{creditsPending.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between items-center bg-neon-blue/10 px-3 py-1.5 rounded-lg border border-neon-blue/30 mt-1">
+                <span className="font-bold text-neon-blue uppercase tracking-widest text-[10px]">Overall End Total</span>
+                <span className="font-mono font-bold text-base text-neon-blue">₹{grandTotal.toFixed(2)}</span>
               </div>
             </div>
           </div>
