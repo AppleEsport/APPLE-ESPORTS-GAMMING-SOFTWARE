@@ -20,6 +20,9 @@ public class AuditEntry
     public string Action { get; set; } = null!;
     public string? TargetType { get; set; }
     public Guid? TargetId { get; set; }
+
+    /// <summary>Defaults to true. Set explicitly to false when logging an attempt that failed.</summary>
+    public bool Success { get; set; } = true;
     public Guid? BranchId { get; set; }
     public string? BranchName { get; set; }
     public object? Details { get; set; }

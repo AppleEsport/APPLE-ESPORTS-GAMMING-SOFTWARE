@@ -529,6 +529,7 @@ public class MemberService : IMemberService
                         UserRole = "Member",
                         UserName = candidate.FullName,
                         Action = AuditActions.AccountLocked,
+                        Success = false,
                         TargetType = "member",
                         TargetId = candidate.Id,
                         Details = new { reason = "5 failed password attempts", lockedUntil = candidate.LockedUntil },
@@ -542,6 +543,7 @@ public class MemberService : IMemberService
                 UserRole = "Member",
                 UserName = identifier,
                 Action = AuditActions.FailedLogin,
+                Success = false,
                 Details = new { reason = "Invalid username or password" },
             });
 

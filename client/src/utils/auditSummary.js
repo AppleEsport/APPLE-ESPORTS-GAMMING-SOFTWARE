@@ -74,9 +74,41 @@ const SUMMARIES = {
 
   remote_command_issued: (d) => {
     const label = REMOTE_COMMAND_LABELS[d?.commandType] ?? d?.commandType ?? 'do something';
+
+    // Two different rows share this one action code, and they read differently on purpose:
+    // the row written the moment a super admin presses the button ("asked a branch to..."),
+    // and the row written later when the branch's own answer comes back ("succeeded" /
+    // "failed" — closed by BranchHeartbeatController.LogCommandOutcomeAsync, not by whoever
+    // asked). `outcome` is only present on the second kind.
+    if (d?.outcome) {
+      const verb = d.outcome === 'succeeded' ? 'went through' : 'failed';
+      const reason = d?.message ? ` — ${d.message}` : '';
+      return `asked a branch, from Head Office, to ${label}, which ${verb}${reason}`;
+    }
+
     const status = d?.branchReporting === false ? ' (branch was offline at the time)' : '';
     return `asked a branch, from Head Office, to ${label}${status}`;
   },
+};
+
+// A failure row carries a completely different Details shape than a success row for the same
+// action - LogSessionFailureAsync writes only `{ error }`, where a successful session_start
+// writes PcNumber/DurationMinutes/ExpectedAmount. Running a failure through SUMMARIES.session_start
+// would read the wrong fields and print "started a session on a PC for undefined min", so
+// failures get their own map instead of trying to reuse the success one.
+const SESSION_FAILURE_LABELS = {
+  session_start: 'start a session',
+  session_stop: 'stop a session',
+  session_resume: 'resume a session',
+  session_extend: 'extend a session',
+  session_transfer: 'move a session to another PC',
+};
+
+const FAILURE_SUMMARIES = {
+  ...Object.fromEntries(Object.entries(SESSION_FAILURE_LABELS).map(([action, label]) => [
+    action,
+    (d) => `tried to ${label} and it failed${d?.error ? ` — ${d.error}` : ''}`,
+  ])),
 };
 
 const titleCase = (action) =>
@@ -92,9 +124,14 @@ export function parseDetails(rawDetails) {
   }
 }
 
-/** One plain-English sentence body ("started a session on...") for a row. Never throws. */
-export function summarize(action, details) {
-  const fn = SUMMARIES[action];
+/**
+ * One plain-English sentence body ("started a session on...") for a row. Never throws.
+ * `success` picks which map of sentences to read from - see FAILURE_SUMMARIES above for why
+ * a failed attempt cannot just reuse the successful one's wording.
+ */
+export function summarize(action, details, success = true) {
+  const table = success === false && FAILURE_SUMMARIES[action] ? FAILURE_SUMMARIES : SUMMARIES;
+  const fn = table[action];
   if (fn) {
     try {
       return fn(details ?? {});

@@ -47,6 +47,37 @@ public class SessionService : ISessionService
     /// The message names the queue, because anybody who hits this is one call away from the
     /// thing they actually wanted.
     /// </summary>
+    /// <summary>
+    /// Records that an attempt to touch a session did not work, before the exception is
+    /// rethrown to whoever is actually waiting on it.
+    ///
+    /// Every one of these five methods already tells the person at the counter why it failed -
+    /// a toast, a red banner, gone the moment they click past it. None of that was ever kept.
+    /// "PC not idle", "insufficient wallet balance", a session somebody tried to start twice -
+    /// all of it happened, all of it mattered to somebody at the time, and none of it could be
+    /// looked back on the next morning. This is the same audit trail every successful session
+    /// action already writes to; a failure was simply the one outcome it never recorded.
+    ///
+    /// Never allowed to throw itself - AuditService.LogAsync already swallows its own failures,
+    /// and a session that failed to start must not fail a second time, differently, because the
+    /// note-taking about the first failure went wrong.
+    /// </summary>
+    private async Task LogSessionFailureAsync(
+        Guid branchId, Guid operatorId, string action, Guid? targetId, Exception ex)
+    {
+        await _audit.LogAsync(new AuditEntry
+        {
+            OperatorId = operatorId,
+            UserRole = Roles.Operator,
+            Action = action,
+            TargetType = "session",
+            TargetId = targetId,
+            Success = false,
+            BranchId = branchId,
+            Details = new { error = ex.GetBaseException().Message },
+        });
+    }
+
     private void RefuseIfHeadOffice(string what)
     {
         if (!_configuration.IsHeadOffice()) return;
@@ -356,9 +387,10 @@ public class SessionService : ISessionService
                 BillId = bill.Id
             };
         }
-        catch
+        catch (Exception ex)
         {
             await _uow.RollbackTransactionAsync();
+            await LogSessionFailureAsync(branchId, operatorId, AuditActions.SessionStart, dto.PcId, ex);
             throw;
         }
     }
@@ -648,9 +680,10 @@ public class SessionService : ISessionService
                 WalletShortfallAmount = walletShortfall > 0 ? walletShortfall : (decimal?)null
             };
         }
-        catch
+        catch (Exception ex)
         {
             await _uow.RollbackTransactionAsync();
+            await LogSessionFailureAsync(branchId, operatorId, AuditActions.SessionStop, sessionId, ex);
             throw;
         }
     }
@@ -746,9 +779,10 @@ public class SessionService : ISessionService
                 BillId = session.Bills.FirstOrDefault()?.Id ?? Guid.Empty
             };
         }
-        catch
+        catch (Exception ex)
         {
             await _uow.RollbackTransactionAsync();
+            await LogSessionFailureAsync(branchId, operatorId, AuditActions.SessionResume, sessionId, ex);
             throw;
         }
     }
@@ -860,9 +894,10 @@ public class SessionService : ISessionService
                 BillId = bill?.Id ?? Guid.Empty
             };
         }
-        catch
+        catch (Exception ex)
         {
             await _uow.RollbackTransactionAsync();
+            await LogSessionFailureAsync(branchId, operatorId, AuditActions.SessionExtend, sessionId, ex);
             throw;
         }
     }
@@ -973,9 +1008,10 @@ public class SessionService : ISessionService
                 BillId = bill?.Id ?? Guid.Empty
             };
         }
-        catch
+        catch (Exception ex)
         {
             await _uow.RollbackTransactionAsync();
+            await LogSessionFailureAsync(branchId, operatorId, AuditActions.SessionTransfer, sessionId, ex);
             throw;
         }
     }

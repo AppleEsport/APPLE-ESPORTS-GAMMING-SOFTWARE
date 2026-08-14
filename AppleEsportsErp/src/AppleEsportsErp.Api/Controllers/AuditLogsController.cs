@@ -52,6 +52,7 @@ public class AuditLogsController : ControllerBase
         [FromQuery] Guid? branchId = null,
         [FromQuery] string? userName = null,
         [FromQuery] string? action = null,
+        [FromQuery] bool? failedOnly = null,
         [FromQuery] DateTimeOffset? from = null,
         [FromQuery] DateTimeOffset? to = null,
         [FromQuery] int page = 1,
@@ -64,6 +65,9 @@ public class AuditLogsController : ControllerBase
 
         if (branchId.HasValue)
             query = query.Where(a => a.BranchId == branchId.Value);
+
+        if (failedOnly == true)
+            query = query.Where(a => !a.Success);
 
         // A contains match on the name someone typed, not an exact one - "priya" should find
         // "Priya Patel" without the caller needing to know how the name is capitalised or
@@ -95,6 +99,7 @@ public class AuditLogsController : ControllerBase
                 Action = a.Action,
                 TargetType = a.TargetType,
                 TargetId = a.TargetId,
+                Success = a.Success,
                 Details = a.Details,
                 IpAddress = a.IpAddress,
                 CreatedAt = a.CreatedAt,

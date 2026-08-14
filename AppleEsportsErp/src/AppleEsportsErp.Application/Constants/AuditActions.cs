@@ -18,6 +18,7 @@ public static class AuditActions
     public const string SessionStop = "session_stop";
     public const string SessionExtend = "session_extend";
     public const string SessionTransfer = "session_transfer";
+    public const string SessionResume = "session_resume";
 
     // Reservations
     public const string ReservationCreate = "reservation_create";

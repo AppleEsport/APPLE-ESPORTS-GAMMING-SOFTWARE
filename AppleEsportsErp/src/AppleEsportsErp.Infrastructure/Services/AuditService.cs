@@ -77,6 +77,7 @@ public class AuditService : IAuditService
                 Action = entry.Action,
                 TargetType = entry.TargetType,
                 TargetId = entry.TargetId,
+                Success = entry.Success,
                 BranchId = entry.BranchId,
                 BranchName = branchName,
                 Details = entry.Details != null ? JsonSerializer.Serialize(entry.Details) : null,

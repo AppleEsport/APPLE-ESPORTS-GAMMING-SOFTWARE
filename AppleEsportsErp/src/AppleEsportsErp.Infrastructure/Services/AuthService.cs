@@ -94,6 +94,7 @@ public class AuthService : IAuthService
                         UserRole = Roles.SuperAdmin,
                         UserName = user.FullName,
                         Action = AuditActions.AccountLocked,
+                        Success = false,
                         TargetType = "user",
                         TargetId = user.Id,
                         Details = new { reason = "5 failed password attempts", lockedUntil = user.LockedUntil },
@@ -111,6 +112,7 @@ public class AuthService : IAuthService
                     UserRole = Roles.SuperAdmin,
                     UserName = user.FullName,
                     Action = AuditActions.FailedLogin,
+                    Success = false,
                     Details = new { reason = "Invalid password", deviceInfo = dto.DeviceInfo },
                 });
                 throw new AuthenticationException("Invalid email/username or password", "INVALID_CREDENTIALS");
@@ -200,6 +202,7 @@ public class AuthService : IAuthService
                         UserRole = Roles.Admin,
                         UserName = op.FullName,
                         Action = AuditActions.AccountLocked,
+                        Success = false,
                         TargetType = "operator",
                         TargetId = op.Id,
                         Details = new { reason = "5 failed password attempts", lockedUntil = op.LockedUntil },
@@ -216,6 +219,7 @@ public class AuthService : IAuthService
                     UserRole = Roles.Admin,
                     UserName = op.FullName,
                     Action = AuditActions.FailedLogin,
+                    Success = false,
                     Details = new { reason = "Invalid password", deviceInfo = dto.DeviceInfo },
                 });
                 throw new AuthenticationException("Invalid email/username or password", "INVALID_CREDENTIALS");
@@ -325,6 +329,7 @@ public class AuthService : IAuthService
                     UserRole = Roles.Operator,
                     UserName = op.FullName,
                     Action = AuditActions.AccountLocked,
+                    Success = false,
                     BranchId = dto.BranchId,
                     BranchName = branch.Name,
                     TargetType = "operator",
@@ -343,6 +348,7 @@ public class AuthService : IAuthService
                 UserRole = Roles.Operator,
                 UserName = op.FullName,
                 Action = AuditActions.FailedLogin,
+                Success = false,
                 BranchId = dto.BranchId,
                 BranchName = branch.Name,
                 Details = new { reason = "Invalid password/PIN", deviceInfo = dto.DeviceInfo },
@@ -551,6 +557,7 @@ public class AuthService : IAuthService
                     UserRole = "Member",
                     UserName = member.FullName,
                     Action = AuditActions.AccountLocked,
+                    Success = false,
                     TargetType = "member",
                     TargetId = member.Id,
                     Details = new { reason = "5 failed password attempts", lockedUntil = member.LockedUntil },
@@ -566,6 +573,7 @@ public class AuthService : IAuthService
                 UserRole = "Member",
                 UserName = member.FullName,
                 Action = AuditActions.FailedLogin,
+                Success = false,
                 Details = new { reason = "Invalid password", deviceInfo = dto.DeviceInfo },
             });
             throw new AuthenticationException("Invalid credentials", "INVALID_CREDENTIALS");

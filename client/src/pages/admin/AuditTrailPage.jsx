@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
-import { History, Search, ChevronLeft, ChevronRight, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react';
+import { History, Search, ChevronLeft, ChevronRight, RefreshCw, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react';
 import { useBranch } from '../../contexts/BranchContext';
 import { getAuditLog } from '../../api/audit.api';
 import { summarize, parseDetails, KNOWN_ACTIONS } from '../../utils/auditSummary';
@@ -39,6 +39,7 @@ export default function AuditTrailPage() {
   const [branchId, setBranchId] = useState('');
   const [userName, setUserName] = useState('');
   const [action, setAction] = useState('');
+  const [failedOnly, setFailedOnly] = useState(false);
   const [rangeDays, setRangeDays] = useState(0);
   const [page, setPage] = useState(1);
 
@@ -58,6 +59,7 @@ export default function AuditTrailPage() {
         branchId: branchId || undefined,
         userName: userName || undefined,
         action: action || undefined,
+        failedOnly: failedOnly || undefined,
         from: startOfRange(rangeDays),
         page,
         pageSize: PAGE_SIZE,
@@ -70,13 +72,13 @@ export default function AuditTrailPage() {
     } finally {
       if (!quiet) setIsLoading(false);
     }
-  }, [branchId, userName, action, rangeDays, page]);
+  }, [branchId, userName, action, failedOnly, rangeDays, page]);
 
   useEffect(() => { fetchLogs(); }, [fetchLogs]);
 
   // Reset to page 1 whenever a filter actually changes, so a narrower search never lands you
   // on an empty "page 4 of 1" from the previous, wider one.
-  useEffect(() => { setPage(1); }, [branchId, userName, action, rangeDays]);
+  useEffect(() => { setPage(1); }, [branchId, userName, action, failedOnly, rangeDays]);
 
   // Near-live, same pattern as the Members screen: keeps going regardless of the live
   // connection, pauses only when the tab is hidden.
@@ -171,6 +173,21 @@ export default function AuditTrailPage() {
           </div>
         </div>
 
+        <div className="flex flex-col gap-1">
+          <label className="text-[9px] font-bold uppercase tracking-widest text-text-3">&nbsp;</label>
+          <button
+            onClick={() => setFailedOnly((v) => !v)}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded text-[11px] font-bold uppercase tracking-widest transition-colors ${
+              failedOnly
+                ? 'bg-neon-red text-white'
+                : 'bg-bg-3 text-text-2 hover:text-text border border-border'
+            }`}
+          >
+            <AlertTriangle className="w-3.5 h-3.5" />
+            Failures only
+          </button>
+        </div>
+
         <button
           onClick={() => fetchLogs()}
           className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-bg-3 border border-border text-text-2 hover:text-text transition-colors"
@@ -204,11 +221,19 @@ export default function AuditTrailPage() {
               {rows.map((row) => {
                 const details = parseDetails(row.details);
                 const isOpen = expandedId === row.id;
+                // Success defaults true for rows written before this column existed - see the
+                // migration's own note on why that default, not false, is the honest one for
+                // history.
+                const failed = row.success === false;
                 return (
                   <Fragment key={row.id}>
                     <tr
                       onClick={() => setExpandedId(isOpen ? null : row.id)}
-                      className="hover:bg-bg-3/60 cursor-pointer transition-colors"
+                      className={`cursor-pointer transition-colors border-l-2 ${
+                        failed
+                          ? 'bg-neon-red/10 hover:bg-neon-red/15 border-l-neon-red'
+                          : 'hover:bg-bg-3/60 border-l-transparent'
+                      }`}
                     >
                       <td className="py-2 px-3 text-text-3 font-mono text-[11px] whitespace-nowrap">
                         {new Date(row.createdAt).toLocaleString('en-IN', {
@@ -220,18 +245,23 @@ export default function AuditTrailPage() {
                         {row.userName}
                         <span className="text-text-3 text-[10px] ml-1">{row.userRole}</span>
                       </td>
-                      <td className="py-2 px-3 text-text-2 first-letter:uppercase">
-                        {summarize(row.action, details)}
+                      <td className={`py-2 px-3 first-letter:uppercase ${failed ? 'text-neon-red' : 'text-text-2'}`}>
+                        {failed && (
+                          <span className="inline-block text-[9px] font-bold uppercase tracking-widest bg-neon-red/20 text-neon-red rounded px-1.5 py-0.5 mr-1.5 align-middle">
+                            Failed
+                          </span>
+                        )}
+                        {summarize(row.action, details, row.success)}
                       </td>
                       <td className="py-2 px-3 text-text-3">
                         {isOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                       </td>
                     </tr>
                     {isOpen && (
-                      <tr className="bg-bg-3/40">
+                      <tr className={failed ? 'bg-neon-red/5' : 'bg-bg-3/40'}>
                         <td colSpan={5} className="py-2 px-3">
                           <pre className="text-[10px] text-text-3 font-mono whitespace-pre-wrap break-all">
-                            {JSON.stringify({ action: row.action, targetType: row.targetType, targetId: row.targetId, ip: row.ipAddress, ...details }, null, 2)}
+                            {JSON.stringify({ action: row.action, success: row.success, targetType: row.targetType, targetId: row.targetId, ip: row.ipAddress, ...details }, null, 2)}
                           </pre>
                         </td>
                       </tr>
