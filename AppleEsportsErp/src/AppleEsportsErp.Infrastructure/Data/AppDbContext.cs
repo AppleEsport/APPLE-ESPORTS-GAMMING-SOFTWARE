@@ -92,8 +92,55 @@ public class AppDbContext : DbContext
 
     private void CaptureForSync()
     {
+        AssignMissingIds();
+
         var entries = SyncCapture.Collect(ChangeTracker);
         if (entries.Count > 0) SyncOutboxEntries.AddRange(entries);
+    }
+
+    /// <summary>
+    /// Gives every new row its id here, rather than letting PostgreSQL invent one on insert.
+    ///
+    /// Almost every table in this schema declares its key as uuid_generate_v4(), so a newly
+    /// added entity carries an all-zero id right up until the insert comes back. Anything that
+    /// reads that id before the save therefore reads nothing - and a distributed system reads
+    /// it constantly, because the id is how the two sides agree they are talking about the
+    /// same thing.
+    ///
+    /// This was not theoretical. A member created at Citylight was reported to Head Office as
+    /// "00000000-0000-0000-0000-000000000000", created in the year 0001. Head Office refused
+    /// it, and then refused all four of that member's wallet top-ups in turn - "Head Office has
+    /// no member ed63a9f5..." - so Rs 2,200 of real top-ups sat at the branch belonging to
+    /// nobody. It looked exactly like one PC being treated differently from another; it was
+    /// simply whoever happened to create a new member.
+    ///
+    /// It would also have quietly crippled SyncCapture, which cannot record a row whose id is
+    /// still empty and would have skipped every insert while faithfully syncing updates - the
+    /// worst kind of half-working, because most of a day's shifts and tills would have arrived
+    /// and nobody could have said which were missing.
+    ///
+    /// The database defaults stay exactly as they are. They remain the right answer for
+    /// anything inserted outside EF; setting a value here simply means the default is never
+    /// reached.
+    /// </summary>
+    private void AssignMissingIds()
+    {
+        foreach (var entry in ChangeTracker.Entries())
+        {
+            if (entry.State != EntityState.Added) continue;
+
+            var key = entry.Metadata.FindPrimaryKey();
+            if (key is null) continue;
+
+            foreach (var property in key.Properties)
+            {
+                if (property.ClrType != typeof(Guid)) continue;
+
+                var tracked = entry.Property(property.Name);
+                if (tracked.CurrentValue is Guid g && g == Guid.Empty)
+                    tracked.CurrentValue = Guid.NewGuid();
+            }
+        }
     }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
