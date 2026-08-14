@@ -360,9 +360,6 @@ public class BranchHeartbeatService : BackgroundService
             case BranchCommands.AdjustStock:
                 return await RunAdjustStockAsync(scoped, command.Payload, ct);
 
-            case BranchCommands.ProcessPayment:
-                return await RunProcessPaymentAsync(scoped, command.Payload, ct);
-
             default:
                 return (false, $"This branch does not know the command '{command.CommandType}' yet.");
         }
@@ -657,61 +654,6 @@ public class BranchHeartbeatService : BackgroundService
                 session.BranchId, session.OperatorId, sessionId, deferPayment: false);
 
             return (true, $"Stopped. {result.PackageName}, billed {result.DurationMinutes} min, Rs {result.ExpectedAmount}.");
-        }
-        catch (Exception ex)
-        {
-            return (false, ex.GetBaseException().Message);
-        }
-    }
-
-    /// <summary>
-    /// Collects a payment because Head Office asked for it on the customer's behalf.
-    ///
-    /// The branch, not Head Office, owns the till and the register this money actually lands
-    /// in - a payment marked "paid" only in Head Office's synced copy leaves the counter still
-    /// showing the bill open and the PC still locked on Billing, because nothing here actually
-    /// changed. Amounts and payment type travel in the command exactly as the person at Head
-    /// Office entered them; the branch, operator and shift the money is credited to are read
-    /// off the bill's own row, never trusted from the payload, so this can only ever pay the
-    /// bill it names and nothing else.
-    /// </summary>
-    private static async Task<(bool, string)> RunProcessPaymentAsync(
-        IServiceProvider scoped, string payload, CancellationToken ct)
-    {
-        Guid billId;
-        Application.DTOs.Billing.ProcessPaymentDto dto;
-        try
-        {
-            using var doc = JsonDocument.Parse(payload);
-            billId = doc.RootElement.GetProperty("billId").GetGuid();
-            dto = JsonSerializer.Deserialize<Application.DTOs.Billing.ProcessPaymentDto>(
-                payload, new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
-                ?? throw new InvalidOperationException("Empty payment payload.");
-        }
-        catch
-        {
-            return (false, "The payment command arrived without a readable bill id or amounts.");
-        }
-
-        var db = scoped.GetRequiredService<AppDbContext>();
-        var bill = await db.Bills.AsNoTracking().FirstOrDefaultAsync(b => b.Id == billId, ct);
-
-        if (bill is null)
-            return (false, "No such bill exists at this branch.");
-
-        // Genuinely nothing left to do - the operator at the counter may well have collected
-        // this payment themselves in the time the command took to arrive, and that is the
-        // correct outcome either way: the bill is paid, which is all Head Office actually asked.
-        if (bill.Status == BillStatus.Completed)
-            return (true, "Already paid - nothing to do.");
-
-        try
-        {
-            var billingService = scoped.GetRequiredService<IBillingService>();
-            var result = await billingService.ProcessPaymentAsync(
-                bill.BranchId, bill.OperatorId, bill.ShiftId ?? Guid.Empty, billId, dto);
-
-            return (true, $"Paid. {dto.PaymentType}, Rs {result.TotalAmount}.");
         }
         catch (Exception ex)
         {
