@@ -44,6 +44,9 @@ const SUMMARIES = {
   payment_process: (d) => `took a payment — ${d?.PaymentType ?? 'payment'}, ${money(d?.Total)}`,
   discount_apply: (d) => `applied a ${d?.DiscountType === 'Percentage' ? `${d?.Value}%` : money(d?.Value)} discount${d?.Reason ? ` (${d.Reason})` : ''}`,
 
+  food_order_place: (d) => `placed food order ${d?.OrderNumber ?? ''} — ${d?.ItemCount ?? '?'} item(s), ${money(d?.Total)}`.trim(),
+  food_order_status_change: (d) => `marked a food order ${(d?.Status ?? 'updated').toLowerCase()}${d?.Reason ? ` (${d.Reason})` : ''}`,
+
   cash_opening: () => 'opened the cash drawer',
   cash_verification: () => 'counted the cash drawer',
   cash_mismatch: (d) => `found the drawer ${d?.difference ? `off by ${money(Math.abs(d.difference))}` : 'did not match'}`,
@@ -96,16 +99,18 @@ const SUMMARIES = {
 // writes PcNumber/DurationMinutes/ExpectedAmount. Running a failure through SUMMARIES.session_start
 // would read the wrong fields and print "started a session on a PC for undefined min", so
 // failures get their own map instead of trying to reuse the success one.
-const SESSION_FAILURE_LABELS = {
+const FAILURE_LABELS = {
   session_start: 'start a session',
   session_stop: 'stop a session',
   session_resume: 'resume a session',
   session_extend: 'extend a session',
   session_transfer: 'move a session to another PC',
+  food_order_place: 'place a food order',
+  food_order_status_change: 'update a food order',
 };
 
 const FAILURE_SUMMARIES = {
-  ...Object.fromEntries(Object.entries(SESSION_FAILURE_LABELS).map(([action, label]) => [
+  ...Object.fromEntries(Object.entries(FAILURE_LABELS).map(([action, label]) => [
     action,
     (d) => `tried to ${label} and it failed${d?.error ? ` — ${d.error}` : ''}`,
   ])),

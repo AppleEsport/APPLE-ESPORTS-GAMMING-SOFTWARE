@@ -32,6 +32,11 @@ public static class AuditActions
     public const string PaymentProcess = "payment_process";
     public const string DiscountApply = "discount_apply";
 
+    // Food orders - previously two raw strings ("food_order_create", "food_order_update") that
+    // did not live here and were not recognised by anything reading the trail.
+    public const string FoodOrderPlace = "food_order_place";
+    public const string FoodOrderStatusChange = "food_order_status_change";
+
     // Cash
     public const string CashOpening = "cash_opening";
     public const string CashVerification = "cash_verification";
