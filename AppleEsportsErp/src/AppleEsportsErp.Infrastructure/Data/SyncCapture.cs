@@ -60,6 +60,20 @@ public static class SyncCapture
         [typeof(CashRegister)] = "cash_register",
         [typeof(CashTransaction)] = "cash_transaction",
         [typeof(CustomerCredit)] = "customer_credit",
+
+        // Bills, because a bill only reached Head Office when somebody paid it.
+        //
+        // The bill.paid event creates the bill as a side effect of recording a payment, which
+        // covers every bill that was settled and none of the ones that were not. But a customer
+        // credit is raised precisely when a bill is NOT paid - the customer left owing money -
+        // and it holds a required reference to that bill. So the one case that creates a credit
+        // is the same case that guarantees its bill never arrives, and the credit could never
+        // be filed: "insert or update on CustomerCredits violates foreign key
+        // FK_CustomerCredits_bills_BillId", found by testing this before shipping it.
+        //
+        // Unpaid money is the half of the ledger an owner most needs to see, and it was the
+        // half that structurally could not arrive.
+        [typeof(Bill)] = "bill",
     };
 
     /// <summary>

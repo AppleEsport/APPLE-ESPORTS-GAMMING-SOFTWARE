@@ -227,6 +227,12 @@ public class SyncInboxController : ControllerBase
                 await UpsertRowAsync<CustomerCredit>(held, root);
                 break;
 
+            // Every bill, not just the settled ones. bill.paid still carries the payment
+            // itself; this carries the bill's existence, which unpaid bills never had.
+            case "bill.changed":
+                await UpsertRowAsync<Bill>(held, root);
+                break;
+
             case "email.send_requested":
                 await SendQueuedEmailAsync(held, root);
                 break;
