@@ -1,12 +1,11 @@
-import { useState, useEffect, useCallback } from 'react';
-import {
-  Plus,
-  Edit,
-  Trash2,
-  ClipboardCheck,
+import { useState, useEffect } from 'react';
+import { 
+  Plus, 
+  Edit, 
+  Trash2, 
+  ClipboardCheck, 
   AlertTriangle,
   Package,
-  PackagePlus,
   TrendingUp,
   Image,
   RefreshCw,
@@ -14,19 +13,16 @@ import {
   DollarSign
 } from 'lucide-react';
 import PageHeader from '../../components/layout/PageHeader';
-import {
-  getInventory,
-  createInventoryItem,
-  updateInventoryItem,
-  deleteInventoryItem,
-  reconcileStock,
-  addStock,
+import { 
+  getInventory, 
+  createInventoryItem, 
+  updateInventoryItem, 
+  deleteInventoryItem, 
+  reconcileStock 
 } from '../../api/food.api';
 import { useBranch } from '../../contexts/BranchContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../components/ui/Toast';
-
-const REFRESH_EVERY_MS = 15000;
 
 export default function MenuEditorPage() {
   const { activeBranch, branches } = useBranch();
@@ -44,15 +40,15 @@ export default function MenuEditorPage() {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [isReconcileOpen, setIsReconcileOpen] = useState(false);
-  const [isAddStockOpen, setIsAddStockOpen] = useState(false);
 
-  // Current Active Item for Edit/Reconcile/Add Stock
+  // Current Active Item for Edit/Reconcile
   const [activeItem, setActiveItem] = useState(null);
 
   // Form Fields
   const [itemName, setItemName] = useState('');
   const [category, setCategory] = useState('Snacks');
   const [price, setPrice] = useState(0);
+  const [currentStock, setCurrentStock] = useState(0);
   const [minStockLimit, setMinStockLimit] = useState(5);
   const [status, setStatus] = useState('Available'); // Available, OutOfStock, Disabled
   const [imageUrl, setImageUrl] = useState('');
@@ -61,53 +57,29 @@ export default function MenuEditorPage() {
   const [physicalCount, setPhysicalCount] = useState(0);
   const [reconcileReason, setReconcileReason] = useState('');
 
-  // Add Stock (delivery) fields - a real branch applies this immediately; from Head Office
-  // it is queued for that branch to carry out. Never a blind overwrite - see food.api.js.
-  const [addStockQuantity, setAddStockQuantity] = useState('');
-  const [addStockReason, setAddStockReason] = useState('');
-
   const [submitting, setSubmitting] = useState(false);
 
-  // Fetch inventory when targetBranchId changes. `quiet` skips the loading spinner for the
-  // background poll below, so a stock delivery from another admin just appears in the table
-  // instead of flashing the whole screen every 15 seconds.
-  const fetchMenu = useCallback(async (quiet = false) => {
+  // Fetch inventory when targetBranchId changes
+  const fetchMenu = async () => {
     if (!targetBranchId) return;
 
-    if (!quiet) setLoading(true);
+    setLoading(true);
     setError(null);
     try {
       const res = await getInventory({ branchId: targetBranchId, includeAll: true });
       setItems(res?.data || []);
     } catch (err) {
-      if (!quiet) setError('Could not load inventory menu items.');
+      setError('Could not load inventory menu items.');
     } finally {
-      if (!quiet) setLoading(false);
+      setLoading(false);
     }
-  }, [targetBranchId]);
+  };
 
   useEffect(() => {
     if (targetBranchId) {
       fetchMenu();
     }
-  }, [targetBranchId, fetchMenu]);
-
-  // Stock now only ever changes through Add Stock or Reconcile, both of which can be done by
-  // another admin on another screen - or, from Head Office, land here once the branch actually
-  // carries the command out and syncs back up. Polling is what makes that show up without a
-  // manual refresh, for operators and admins alike.
-  useEffect(() => {
-    const tick = () => {
-      if (document.visibilityState !== 'visible') return;
-      fetchMenu(true);
-    };
-    const timer = setInterval(tick, REFRESH_EVERY_MS);
-    document.addEventListener('visibilitychange', tick);
-    return () => {
-      clearInterval(timer);
-      document.removeEventListener('visibilitychange', tick);
-    };
-  }, [fetchMenu]);
+  }, [targetBranchId]);
 
   // Open modals helper
   const openEdit = (item) => {
@@ -115,6 +87,7 @@ export default function MenuEditorPage() {
     setItemName(item.itemName);
     setCategory(item.category || 'Snacks');
     setPrice(item.price);
+    setCurrentStock(item.currentStock);
     setMinStockLimit(item.minStockLimit);
     setStatus(item.status);
     setImageUrl(item.imageUrl || '');
@@ -128,17 +101,11 @@ export default function MenuEditorPage() {
     setIsReconcileOpen(true);
   };
 
-  const openAddStock = (item) => {
-    setActiveItem(item);
-    setAddStockQuantity('');
-    setAddStockReason('');
-    setIsAddStockOpen(true);
-  };
-
   const resetForm = () => {
     setItemName('');
     setCategory('Snacks');
     setPrice(0);
+    setCurrentStock(0);
     setMinStockLimit(5);
     setStatus('Available');
     setImageUrl('');
@@ -157,6 +124,7 @@ export default function MenuEditorPage() {
         itemName,
         category,
         price: Number(price),
+        currentStock: Number(currentStock),
         minStockLimit: Number(minStockLimit),
         status,
         imageUrl: imageUrl || null
@@ -164,7 +132,7 @@ export default function MenuEditorPage() {
       setIsCreateOpen(false);
       resetForm();
       fetchMenu();
-      toast.success(`Menu item "${itemName}" created. Use Add Stock to record its first delivery.`);
+      toast.success(`Menu item "${itemName}" created successfully with initial stock of ${currentStock}.`);
     } catch (err) {
       const errMsg = err.response?.data?.message || 'Failed to create item';
       setError(errMsg);
@@ -184,49 +152,22 @@ export default function MenuEditorPage() {
         itemName,
         category,
         price: Number(price),
+        currentStock: Number(currentStock),
         minStockLimit: Number(minStockLimit),
         status,
         imageUrl: imageUrl || null
       });
       setIsEditOpen(false);
-      toast.success(`Menu item "${itemName}" updated successfully.`);
+      const stockChanged = Number(currentStock) !== activeItem.currentStock;
+      if (stockChanged) {
+        toast.success(`Stock for "${itemName}" updated from ${activeItem.currentStock} to ${currentStock}.`);
+      } else {
+        toast.success(`Menu item "${itemName}" updated successfully.`);
+      }
       resetForm();
       fetchMenu();
     } catch (err) {
       const errMsg = err.response?.data?.message || 'Failed to update item';
-      setError(errMsg);
-      toast.error(errMsg);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleAddStock = async (e) => {
-    e.preventDefault();
-    if (!activeItem) return;
-    const quantity = Number(addStockQuantity);
-    if (!quantity || quantity <= 0) {
-      toast.error('Enter how many units arrived.');
-      return;
-    }
-
-    setSubmitting(true);
-    try {
-      const res = await addStock(activeItem.id, {
-        quantity,
-        reason: addStockReason || 'Stock delivery'
-      });
-      setIsAddStockOpen(false);
-      if (res?.data?.queued) {
-        toast.success(res.data.message || `Sent to the branch: +${quantity} units of "${activeItem.itemName}".`);
-      } else {
-        toast.success(`Added ${quantity} units to "${activeItem.itemName}".`);
-      }
-      setAddStockQuantity('');
-      setAddStockReason('');
-      fetchMenu();
-    } catch (err) {
-      const errMsg = err.response?.data?.message || 'Failed to add stock';
       setError(errMsg);
       toast.error(errMsg);
     } finally {
@@ -412,13 +353,6 @@ export default function MenuEditorPage() {
                         <td className="py-3 px-4 text-right">
                           <div className="flex justify-end gap-1.5">
                             <button
-                              onClick={() => openAddStock(item)}
-                              title="Add Stock (Delivery)"
-                              className="p-1.5 rounded-lg border border-border hover:border-neon-green hover:text-neon-green transition-colors text-text-3"
-                            >
-                              <PackagePlus className="w-4 h-4" />
-                            </button>
-                            <button
                               onClick={() => openReconcile(item)}
                               title="Reconcile Count"
                               className="p-1.5 rounded-lg border border-border hover:border-neon-orange hover:text-neon-orange transition-colors text-text-3"
@@ -493,9 +427,15 @@ export default function MenuEditorPage() {
                   {branches.find(b => b.id === targetBranchId)?.name || 'Active Branch'}
                 </div>
               </div>
-              <div className="space-y-1">
-                <label className="font-bold text-text-3">Min Low-Stock Warning</label>
-                <input required type="number" min="0" value={minStockLimit} onChange={e => setMinStockLimit(e.target.value)} className="w-full bg-bg-3 border border-border p-2.5 rounded-lg text-text focus:border-accent outline-none font-mono" />
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="font-bold text-text-3">Initial Stock</label>
+                  <input required type="number" min="0" value={currentStock} onChange={e => setCurrentStock(e.target.value)} className="w-full bg-bg-3 border border-border p-2.5 rounded-lg text-text focus:border-accent outline-none font-mono" />
+                </div>
+                <div className="space-y-1">
+                  <label className="font-bold text-text-3">Min Low-Stock Warning</label>
+                  <input required type="number" min="0" value={minStockLimit} onChange={e => setMinStockLimit(e.target.value)} className="w-full bg-bg-3 border border-border p-2.5 rounded-lg text-text focus:border-accent outline-none font-mono" />
+                </div>
               </div>
               <div className="space-y-1">
                 <label className="font-bold text-text-3">Status Toggle</label>
@@ -509,7 +449,6 @@ export default function MenuEditorPage() {
                 <label className="font-bold text-text-3">Image URL (Optional)</label>
                 <input type="text" value={imageUrl} onChange={e => setImageUrl(e.target.value)} className="w-full bg-bg-3 border border-border p-2.5 rounded-lg text-text focus:border-accent outline-none" />
               </div>
-              <p className="text-text-3 text-[11px] -mt-1">New items start at 0 stock. Use Add Stock afterwards to record its first delivery.</p>
               <div className="flex justify-end gap-3 pt-4 border-t border-border">
                 <button type="button" onClick={() => setIsCreateOpen(false)} className="btn-secondary py-2 px-4">Cancel</button>
                 <button type="submit" disabled={submitting} className="btn-primary py-2 px-6">
@@ -563,9 +502,15 @@ export default function MenuEditorPage() {
                   {branches.find(b => b.id === activeItem?.branchId)?.name || 'Local Branch'}
                 </div>
               </div>
-              <div className="space-y-1">
-                <label className="font-bold text-text-3">Min Low-Stock Warning</label>
-                <input required type="number" min="0" value={minStockLimit} onChange={e => setMinStockLimit(e.target.value)} className="w-full bg-bg-3 border border-border p-2.5 rounded-lg text-text focus:border-accent outline-none font-mono" />
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="font-bold text-text-3">Current Stock</label>
+                  <input required type="number" min="0" value={currentStock} onChange={e => setCurrentStock(e.target.value)} className="w-full bg-bg-3 border border-border p-2.5 rounded-lg text-text focus:border-accent outline-none font-mono" />
+                </div>
+                <div className="space-y-1">
+                  <label className="font-bold text-text-3">Min Low-Stock Warning</label>
+                  <input required type="number" min="0" value={minStockLimit} onChange={e => setMinStockLimit(e.target.value)} className="w-full bg-bg-3 border border-border p-2.5 rounded-lg text-text focus:border-accent outline-none font-mono" />
+                </div>
               </div>
               <div className="space-y-1">
                 <label className="font-bold text-text-3">Status Toggle</label>
@@ -579,7 +524,6 @@ export default function MenuEditorPage() {
                 <label className="font-bold text-text-3">Image URL (Optional)</label>
                 <input type="text" value={imageUrl} onChange={e => setImageUrl(e.target.value)} className="w-full bg-bg-3 border border-border p-2.5 rounded-lg text-text focus:border-accent outline-none" />
               </div>
-              <p className="text-text-3 text-[11px] -mt-1">Stock is not edited here. Use Add Stock to record a delivery, or Reconcile to correct a physical count.</p>
               <div className="flex justify-end gap-3 pt-4 border-t border-border">
                 <button type="button" onClick={() => setIsEditOpen(false)} className="btn-secondary py-2 px-4">Cancel</button>
                 <button type="submit" disabled={submitting} className="btn-primary py-2 px-6">
@@ -627,49 +571,6 @@ export default function MenuEditorPage() {
                 <button type="button" onClick={() => setIsReconcileOpen(false)} className="btn-secondary py-2 px-4">Cancel</button>
                 <button type="submit" disabled={submitting} className="btn-primary py-2 px-6">
                   {submitting ? 'Submitting...' : 'Reconcile Count'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ADD STOCK MODAL */}
-      {isAddStockOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
-          <div className="w-full max-w-md bg-bg-2 border border-border rounded-xl shadow-2xl p-6">
-            <h2 className="font-heading font-extrabold text-lg uppercase text-text mb-4 flex items-center gap-1.5">
-              <PackagePlus className="w-5 h-5 text-neon-green" />
-              Add Stock (Delivery)
-            </h2>
-            <p className="text-text-3 text-xs mb-4">
-              Records units that just arrived for <strong>{activeItem?.itemName}</strong>. This adds to whatever
-              is currently on the shelf - it does not replace the count.
-            </p>
-            <form onSubmit={handleAddStock} className="space-y-4 text-xs">
-              <div className="space-y-1">
-                <label className="font-bold text-text-3">Current Stock</label>
-                <div className="bg-bg-3 border border-border p-3 rounded-lg text-text font-mono font-bold text-sm">
-                  {activeItem?.currentStock} units
-                </div>
-              </div>
-              <div className="space-y-1">
-                <label className="font-bold text-text-3">Units Delivered</label>
-                <input required type="number" min="1" value={addStockQuantity} onChange={e => setAddStockQuantity(e.target.value)} className="w-full bg-bg-3 border border-border p-3 rounded-lg text-text focus:border-accent outline-none font-mono text-sm font-bold text-accent" />
-              </div>
-              <div className="space-y-1">
-                <label className="font-bold text-text-3">Reason / Reference (Optional)</label>
-                <textarea
-                  placeholder="e.g. Supplier invoice #1234..."
-                  value={addStockReason}
-                  onChange={e => setAddStockReason(e.target.value)}
-                  className="w-full bg-bg-3 border border-border p-2.5 rounded-lg text-text focus:border-accent outline-none h-20"
-                />
-              </div>
-              <div className="flex justify-end gap-3 pt-4 border-t border-border">
-                <button type="button" onClick={() => setIsAddStockOpen(false)} className="btn-secondary py-2 px-4">Cancel</button>
-                <button type="submit" disabled={submitting} className="btn-primary py-2 px-6">
-                  {submitting ? 'Adding...' : 'Add Stock'}
                 </button>
               </div>
             </form>

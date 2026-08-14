@@ -238,16 +238,12 @@ public class SyncInboxController : ControllerBase
             // price changed at the counter never showed up here and every sales report was
             // priced against a menu that branch had abandoned.
             // CurrentStock and SoldQty excluded on purpose - see UpsertRowAsync's own comment
-            // CurrentStock and SoldQty travel normally again as of the Admin-only Add Stock
-            // flow. The earlier exclusion here was a symptom-level patch for a problem now
-            // closed at its actual source: Head Office no longer independently invents a stock
-            // figure anywhere (Create always starts at zero, Update never touches stock,
-            // Reconcile is branch-only) - see InventoryController. With nothing at Head Office
-            // left to protect from being overwritten, blocking this sync would only have
-            // stopped the one thing an admin adding stock from Head Office actually needs:
-            // Head Office's own screen reflecting the branch's real count once it lands.
+            // on excludeFields. Confirmed on the live server: without this, a menu item
+            // created at Head Office had its stock overwritten to zero within seconds by the
+            // branch's own echo of the catalogue entry Head Office had just sent it.
             case "inventory_item.changed":
-                await UpsertRowAsync<InventoryItem>(held, root);
+                await UpsertRowAsync<InventoryItem>(held, root,
+                    excludeFields: new HashSet<string> { "CurrentStock", "SoldQty" });
                 break;
 
             // Food orders never travelled up at all before this. A walk-in order's money

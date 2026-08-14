@@ -62,9 +62,6 @@ public static class AuditActions
     public const string ItemDisable = "item_disable";
     public const string WastageLog = "wastage_log";
 
-    /// <summary>A stock delivery recorded through InventoryController.AddStock. Admin/Super Admin only.</summary>
-    public const string StockAdd = "stock_add";
-
     // System
     public const string ShiftStart = "shift_start";
     public const string ShiftEnd = "shift_end";
