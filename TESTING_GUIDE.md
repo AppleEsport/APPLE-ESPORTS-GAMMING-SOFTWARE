@@ -1,6 +1,6 @@
 # Apple Esports ERP — what is fixed, what is not, and how to test it
 
-**Version this describes:** 2.3.0
+**Version this describes:** 2.4.0
 **Last updated:** 14 August 2026
 
 This is written for whoever is testing the system, not for a developer. It says what
@@ -131,25 +131,42 @@ side by side under real trading yet.
 
 ---
 
-## 5. Starting a session from the server is now refused
+## 5. Head Office can now stop or start a session at any branch — 2.4.0
 
-**What was wrong:** a session started at Head Office was created **only** at Head Office.
-The counter showed the PC as free — so it could not be stopped and **could not be billed**.
-Real money, uncollectable. On the test system this produced a ₹60 session that existed
-nowhere the shop could see.
+**This replaces the old behaviour.** Until 2.3.1 the server *refused* to start or stop a
+session, and that refusal was correct at the time but not what anybody wanted.
 
-It also explains the "Stop button does not work" report: start on one screen, stop on the
-other, and there is nothing on that side to stop.
+**What was wrong originally:** a session started at Head Office was created **only** at
+Head Office. The counter showed the PC as free — so it could not be stopped and **could
+not be billed**. Real money, uncollectable. On the test system this produced a ₹60 session
+that existed nowhere the shop could see. It also explains the "Stop button does not work"
+report: start on one screen, stop on the other, and there is nothing on that side to stop.
 
-**Status: PROVEN.** Three such phantom sessions were found and removed.
+**What 2.4.0 does instead:** the server *asks the shop*. Press Stop at Head Office and an
+instruction travels down to that branch, the branch stops the session through exactly the
+same code an operator's own click uses, it is billed into the correct shift and till, and
+the branch reports back. Both screens agree afterwards because only the shop ever acted.
+
+**Status: BUILT.** The Head Office half is deployed and proven not to break the heartbeat.
+The branch half needs both PCs on 2.4.0 before it can be tested end to end.
 
 **How to test**
-- On the server, try to start a session. It must refuse, and explain that sessions belong
-  at the counter.
-- Start one at the counter instead. It must appear on the server.
+- Start a session at the counter.
+- On the server, press Stop on that session. The message should say it has been sent to
+  the branch, not that it is already done.
+- Within about 5 seconds the counter must show the session stopped and the bill raised.
+- The server must then show the same thing, **and it must stay stopped.** Watch it for
+  30 seconds. If it flips back to running, that is the bug below and it is worth reporting.
 
-> **Sessions are started and stopped at the counter. Always.** That is where the customer
-> is, where the cash is, and the only machine that keeps working when the internet drops.
+> **The few seconds are deliberate and honest.** The old version updated the server screen
+> instantly and changed nothing at the shop. Instant and wrong is worse than five seconds
+> and real.
+
+**Also new: taking a PC out of service from Head Office.** Same mechanism. It used to
+appear to work and then silently undo itself within three seconds, because the branch
+reports every PC's state twenty times a minute and Head Office believed it over its own
+instruction. Head Office now stops overwriting a PC while it is still waiting for the
+branch's answer about it.
 
 ---
 
@@ -270,6 +287,112 @@ Two bugs were caught during that test and fixed before shipping:
 
 ---
 
+## 12. Four background jobs were running against the wrong shop — 2.4.0
+
+**This is the most serious thing found in this round, and nobody had reported it**, because
+it produced wrong numbers rather than an error message.
+
+Head Office holds a synced copy of every branch's sessions, shifts and tills. To the
+software those copies are indistinguishable from its own. Four jobs that are supposed to
+watch live trading were therefore, at Head Office, pointed at four other people's shops:
+
+- The **fixed-duration monitor** stops any session whose paid time has run out. At Head
+  Office that meant every branch's sessions — stopped and billed a second time, in a
+  database no operator can see and no customer is standing in.
+- The **trading day closer** closes shifts and cash registers and emails the owner about
+  any difference. At Head Office it would close its own copies of all four branches' tills
+  and email about a shortfall that never happened.
+- The **wallet monitor** deducts a member's balance as they play. At Head Office it would
+  debit the same member a second time for the same hour.
+- **Downtime recovery** credits back time lost to a power cut. Head Office restarting is
+  not the branches' power cut, so it would hand time back to customers at four shops who
+  had played through it perfectly happily.
+
+They were only failing loudly instead of succeeding wrongly because the server refused to
+stop a session at all — the exact refusal that item 5 lifts. Fixing item 5 without this
+would have turned a noisy failure into a silent, expensive success.
+
+**Status: PROVEN.** All four confirmed standing down on the live Head Office server
+immediately after deploy.
+
+**How to test:** nothing to do at a branch. On the server log you should see three lines
+saying each service "does not run at Head Office". If End of Day figures have been drifting
+without explanation, this was a likely cause.
+
+---
+
+## 13. "Rate limit exceeded" while simply starting a session — 2.4.0
+
+**What was wrong:** the limit is per IP address, which is right, and it was being given the
+wrong address. Head Office sits behind a front-end server, so every request appeared to
+arrive from that one machine. Four branches, every dashboard, every PC agent and 80
+heartbeats a minute all shared **one single allowance**. Whoever happened to press a button
+when the shared allowance ran dry got the error — which is exactly why it looked random and
+why it landed on ordinary work like starting a session.
+
+**Status: BUILT.** Each signed-in account now has its own allowance, the real caller address
+is used, and branch-to-Head-Office reporting is not counted against anybody.
+
+**How to test:** work normally and quickly at the counter for a few minutes — start, stop,
+bill, repeat. The error must not appear. If it does, note the exact action and the time.
+
+---
+
+## 14. Payments accepted negative amounts — 2.4.0
+
+**What was wrong:** the only check was that the parts of a payment add up to the bill total.
+₹500 cash and **minus** ₹400 online adds up to ₹100 and settled a ₹100 bill perfectly
+happily. The drawer then expected ₹500 that was never taken, so End of Day over-counted by
+₹400, and the session reported a **negative total** in the reports.
+
+There is no validation on payments anywhere in the system — only login and sessions have
+any — so the check now lives in the billing service itself, where every route to taking
+money has to pass through it.
+
+**Status: BUILT.** Needs one deliberate attempt to confirm it is refused.
+
+**How to test:** take a normal split payment (part cash, part online). It must work exactly
+as before. Negative amounts are not reachable from the screens, so this is mainly a guard
+against a future screen or a bad request — but if any payment is ever refused with "cannot
+contain a negative amount", that is this working.
+
+---
+
+## 15. Password reset and welcome emails linked to nothing — 2.4.0
+
+**What was wrong:** every link pointed at `http://localhost:5173`. On the server that is a
+valid address; in somebody's inbox it means "this computer", so it opened nothing on the
+phone or laptop that received it. The mail sent, the log looked clean, and the recipient
+simply could not use it.
+
+**Status: BUILT.** Links are now built from the address the person actually reached the
+server on, and the localhost default that ships in the config file is no longer treated as
+a real answer.
+
+**How to test:** trigger a password reset for an address you can read. Open the link **on a
+phone**, not on the server. It must load the reset page.
+
+---
+
+## 16. Smaller things — 2.4.0
+
+- **The food menu only travelled downward.** An item added or repriced at a counter never
+  reached Head Office, so every sales report was priced against a menu that branch had
+  stopped using. Now travels both ways. **BUILT** — add an item at the counter, it should
+  appear on the server within a few seconds.
+- **Any operator could delete a member.** That takes a wallet balance, a credit history and
+  a share of every End of Day that member appears in with it — and there was no branch check
+  either, so one shop could remove another shop's member. **Super Admin only now.**
+  Suspending is still available to operators and is reversible.
+- **The member list never refreshed.** Loaded once and then never again, so a member
+  registered at another branch was simply absent until somebody pressed F5 — which reads
+  exactly like sync being broken, when the data had arrived perfectly well. Now refreshes
+  itself every 15 seconds while the tab is open.
+- **Every member edit printed the member's name and login details into the branch log** in
+  plain text, from a leftover debug line. Removed.
+
+---
+
 # PART 2 — What is still broken or missing
 
 Please do not report these; they are known. Report anything **not** on this list.
@@ -279,26 +402,29 @@ Please do not report these; they are known. Report anything **not** on this list
 | What | Consequence |
 |---|---|
 | **Food orders** | Food sold at a branch does not appear in server reports. |
-| **Inventory / stock levels** | The server cannot see what a shop has run out of. |
 | **Reservations** | Bookings made at a branch are invisible to the server. |
 | **Loyalty points** | Points earned at a branch do not reach the server. |
 | **Pricing profiles (downward)** | Changing a price on the server does **not** reach the shop. Prices must still be set at each branch. |
 | **PC list (downward)** | Adding or renaming a PC on the server does not reach the shop. |
 
+> **Inventory now syncs upward** as of 2.4.0 — see item 16. Stock levels still never travel
+> *down*, deliberately: the shop owns its own stock.
+
 ## Known behaviour that looks like a bug but is not
 
 - **Stock levels do not come down from the server.** Deliberate — the shop owns its stock.
 - **A pay-as-you-go session shows ∞ on the server.** Correct — it has no fixed end time.
-- **The server refuses to start or stop sessions.** Deliberate, see item 5.
+- **Stopping a session from the server takes a few seconds.** Correct as of 2.4.0 — see
+  item 5. The instruction has to reach the shop, and the shop is what actually stops it.
 - **"0 of 16 gaming PCs up to date"** on the Updates page. The gaming-PC part is not built
   yet (that is Phase 3). It is not a fault.
 - **The sidebar says "v2.0"** regardless of the real version. Cosmetic, not yet fixed.
 
 ## Not yet built
 
-- **Remote control beyond stopping a session.** Head Office can ask a branch to stop a
-  session (BUILT, untested). Anything else — putting a PC into maintenance, forcing a
-  logout — is not built yet, though the mechanism is designed to carry it.
+- **Remote control beyond stop / start / PC maintenance.** Those three are BUILT in 2.4.0.
+  Anything else — forcing an operator logout, closing a shift remotely — is not built yet,
+  though the mechanism is designed to carry it.
 - **Truly instant sync.** Currently the shop and server check in every 3 seconds. A
   permanently open connection (instant) is designed but not built.
 - **Phase 3 — the gaming PCs themselves.** Screen locking, per-PC sessions on the customer
