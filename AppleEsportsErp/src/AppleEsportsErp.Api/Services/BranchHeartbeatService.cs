@@ -210,8 +210,44 @@ public class BranchHeartbeatService : BackgroundService
         }
 
         var body = await response.Content.ReadAsStringAsync(ct);
-        await ApplyConfigFromReplyAsync(db, body, ct);
-        await RunCommandsFromReplyAsync(scope.ServiceProvider, client, headOffice, body, ct);
+
+        // Each independent of the other, and this is the fix for a real failure: applying
+        // config and running commands used to be two plain calls in a row inside this method,
+        // with only the OUTER catch in ExecuteAsync able to see either one throw - and that
+        // catch logs "Cannot reach Head Office", which is wrong and actively misleading when
+        // the branch is talking to Head Office perfectly well and something else broke.
+        //
+        // On a real branch this meant every start_session and stop_session command sent to it
+        // sat unconfirmed for the full five-minute give-up window, over and over, with the
+        // branch's own log insisting the connection was down the entire time. Whatever the
+        // true cause was is still unknown, because the exception that would have named it was
+        // never seen - it was swallowed four call-frames up and replaced with a guess.
+        //
+        // Isolating the two means a config apply that fails no longer prevents a command from
+        // being tried, and a command that throws now reports back a real reason instead of
+        // going quiet - so the next time this happens, the result message says what broke.
+        try
+        {
+            await ApplyConfigFromReplyAsync(db, body, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Applying Head Office's settings failed. Nothing else this beat is affected by " +
+                "this alone, but the branch keeps whatever settings it already had.");
+        }
+
+        try
+        {
+            await RunCommandsFromReplyAsync(scope.ServiceProvider, client, headOffice, body, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Something threw while carrying out Head Office's instructions, outside the " +
+                "per-command handling that would normally have caught it and reported back why. " +
+                "Whatever commands were pending this beat received no answer and will be retried.");
+        }
     }
 
     /// <summary>
@@ -248,7 +284,24 @@ public class BranchHeartbeatService : BackgroundService
 
         foreach (var command in commands)
         {
-            var (succeeded, message) = await RunOneCommandAsync(scoped, command, ct);
+            bool succeeded;
+            string message;
+            try
+            {
+                (succeeded, message) = await RunOneCommandAsync(scoped, command, ct);
+            }
+            catch (Exception ex)
+            {
+                // The one change that matters most here: this used to be uncaught, which meant
+                // an exception here killed the confirmation POST below AND every command still
+                // left in this batch, and surfaced nowhere except a generic "cannot reach Head
+                // Office" four frames away. Now it becomes an ordinary failure result like any
+                // other - reported back honestly, and the next command in the batch still runs.
+                succeeded = false;
+                message = $"Unexpected error: {ex.GetBaseException().Message}";
+                _logger.LogError(ex, "Command {Type} ({Id}) threw outside its own error handling.",
+                    command.CommandType, command.Id);
+            }
 
             _logger.LogInformation("Command {Type} ({Id}) from Head Office: {Result} - {Message}",
                 command.CommandType, command.Id, succeeded ? "done" : "failed", message);
