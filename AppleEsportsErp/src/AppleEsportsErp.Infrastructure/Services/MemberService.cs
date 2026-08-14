@@ -133,9 +133,27 @@ public class MemberService : IMemberService
                 throw new AppException($"Username '{dto.Username}' is already taken.");
         }
 
-        // Generate member number: MEM-YYMM-XXXX
+        // Member number: MEM-YYMM-<branch>-XXXX
+        //
+        // The count is of THIS branch's own members, because a branch cannot ask the others
+        // how many they have - it has to keep working with the internet unplugged. So every
+        // branch counts from one, and without the branch tag Adajan's second member and
+        // Citylight's second member are both "MEM-2608-0002".
+        //
+        // Head Office requires that number to be unique across the whole chain, so the second
+        // one to arrive was rejected outright: "duplicate key value violates unique constraint
+        // IX_members_MemberNumber". Every wallet top-up for that person was then refused in
+        // turn, because as far as Head Office was concerned they had never been created. It
+        // looked exactly like one shop's PC being broken; it was simply the second shop to
+        // register its Nth member, and it would have happened to any branch on any machine.
+        //
+        // The tag comes from the branch's own id rather than its name. Two branches can easily
+        // be named similarly enough to collide on their first few letters - "Adajan" and
+        // "Adajan 2" - and that would quietly bring this whole failure back with no way to
+        // notice until money went missing again.
         var count = await _unitOfWork.Repository<Member>().Query().CountAsync() + 1;
-        var memberNum = $"MEM-{DateTime.UtcNow:yyMM}-{count:D4}";
+        var branchTag = branchId.ToString("N")[..4].ToUpperInvariant();
+        var memberNum = $"MEM-{DateTime.UtcNow:yyMM}-{branchTag}-{count:D4}";
 
         var member = new Member
         {
