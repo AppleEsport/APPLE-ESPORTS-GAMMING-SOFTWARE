@@ -218,8 +218,12 @@ export default function BillDetailsPanel({ bill, onBillUpdate, onPaymentSuccess,
         };
       }
 
-      await processPayment(bill.id, payload);
-      toast.success('Transaction saved — PC released!');
+      const result = await processPayment(bill.id, payload);
+      if (result?.queued) {
+        toast.success(result.message || 'Sent to the branch. It collects this payment within a few seconds.');
+      } else {
+        toast.success('Transaction saved — PC released!');
+      }
       onPaymentSuccess?.();
     } catch (err) {
       // Backend sends { error: "..." } — NOT { message: "..." }
