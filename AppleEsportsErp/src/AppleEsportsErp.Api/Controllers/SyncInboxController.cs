@@ -283,12 +283,15 @@ public class SyncInboxController : ControllerBase
         {
             var name = property.Metadata.Name;
 
-            // Never write a row version or anything the database generates for itself. xmin
-            // in particular is PostgreSQL's own bookkeeping about a row in THIS database;
-            // taking a branch's copy of it and writing it here would be meaningless at best.
+            // Never write a row version. xmin is PostgreSQL's own bookkeeping about a row in
+            // THIS database; taking a branch's copy of it and writing it here is meaningless.
             if (property.Metadata.IsConcurrencyToken) continue;
-            if (property.Metadata.ValueGenerated != Microsoft.EntityFrameworkCore.Metadata.ValueGenerated.Never
-                && !property.Metadata.IsPrimaryKey()) continue;
+
+            // Only truly computed columns are refused. A column merely having a default -
+            // which is most of the money on a cash register - must still accept the branch's
+            // value, or the till arrives reading zero.
+            if (property.Metadata.ValueGenerated == Microsoft.EntityFrameworkCore.Metadata.ValueGenerated.OnAddOrUpdate)
+                continue;
 
             if (!root.TryGetProperty(name, out var value)) continue;
 

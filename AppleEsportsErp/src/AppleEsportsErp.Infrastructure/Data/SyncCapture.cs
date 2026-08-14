@@ -144,8 +144,17 @@ public static class SyncCapture
             // row happens to live in - it means nothing at the other end and cannot be written
             // there. Sending it would only invite the receiver to try.
             if (property.Metadata.IsConcurrencyToken) continue;
-            if (property.Metadata.ValueGenerated != Microsoft.EntityFrameworkCore.Metadata.ValueGenerated.Never
-                && !property.Metadata.IsPrimaryKey()) continue;
+
+            // Only genuinely computed columns are skipped - ones the database recalculates on
+            // every write, which the sender has no authority over.
+            //
+            // Emphatically NOT "anything with a default". OpeningBalance, TotalCashSales and
+            // ExpectedDrawerCash are all declared HasDefaultValue(0m), which marks them
+            // ValueGenerated.OnAdd - and an earlier version of this skipped them on that basis,
+            // so a till holding Rs 3,450 was faithfully reported as holding nothing. A default
+            // says what to use when no value is given; it never means the value cannot be sent.
+            if (property.Metadata.ValueGenerated == Microsoft.EntityFrameworkCore.Metadata.ValueGenerated.OnAddOrUpdate)
+                continue;
 
             var value = property.CurrentValue;
 
