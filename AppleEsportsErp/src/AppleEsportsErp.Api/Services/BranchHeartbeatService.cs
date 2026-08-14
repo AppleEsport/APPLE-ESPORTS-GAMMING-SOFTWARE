@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Sessions;
 using AppleEsportsErp.Application.DTOs.Sync;
 using AppleEsportsErp.Application.Interfaces;
@@ -356,6 +357,9 @@ public class BranchHeartbeatService : BackgroundService
             case BranchCommands.TransferSession:
                 return await RunTransferSessionAsync(scoped, command.Payload, ct);
 
+            case BranchCommands.AdjustStock:
+                return await RunAdjustStockAsync(scoped, command.Payload, ct);
+
             default:
                 return (false, $"This branch does not know the command '{command.CommandType}' yet.");
         }
@@ -485,6 +489,78 @@ public class BranchHeartbeatService : BackgroundService
         {
             return (false, ex.GetBaseException().Message);
         }
+    }
+
+    /// <summary>
+    /// Applies a stock delivery an Admin or Super Admin recorded from Head Office, exactly as
+    /// if it had been entered here at the counter - see InventoryController.AddStock for why
+    /// this only ever adds to what the branch already has, never sets an absolute number.
+    /// </summary>
+    private static async Task<(bool, string)> RunAdjustStockAsync(
+        IServiceProvider scoped, string payload, CancellationToken ct)
+    {
+        Guid inventoryId;
+        int quantity;
+        string? reason;
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            var root = doc.RootElement;
+            inventoryId = root.GetProperty("inventoryId").GetGuid();
+            quantity = root.GetProperty("quantity").GetInt32();
+            reason = root.TryGetProperty("reason", out var r) && r.ValueKind == JsonValueKind.String
+                ? r.GetString() : null;
+        }
+        catch
+        {
+            return (false, "The stock delivery arrived without a readable item and quantity.");
+        }
+
+        if (quantity <= 0)
+            return (false, "A stock delivery must add at least one unit.");
+
+        var db = scoped.GetRequiredService<AppDbContext>();
+        var item = await db.Set<InventoryItem>().FirstOrDefaultAsync(i => i.Id == inventoryId, ct);
+
+        if (item is null)
+            return (false, "No such menu item exists at this branch.");
+
+        var oldStock = item.CurrentStock;
+        var now = DateTimeOffset.UtcNow;
+
+        item.CurrentStock += quantity;
+        item.UpdatedAt = now;
+
+        if (item.Status == FoodAvailability.OutOfStock && item.CurrentStock > 0)
+            item.Status = FoodAvailability.Available;
+
+        db.Add(new InventoryLog
+        {
+            Id = Guid.NewGuid(),
+            InventoryId = item.Id,
+            BranchId = item.BranchId,
+            Action = "refill",
+            Quantity = quantity,
+            OldValue = oldStock.ToString(),
+            NewValue = item.CurrentStock.ToString(),
+            Reason = reason ?? "Stock delivery (from Head Office)",
+            CreatedAt = now,
+        });
+
+        var audit = scoped.GetRequiredService<IAuditService>();
+        await audit.LogAsync(new AuditEntry
+        {
+            Action = AuditActions.StockAdd,
+            UserRole = Roles.Admin,
+            TargetType = "inventory_item",
+            TargetId = item.Id,
+            BranchId = item.BranchId,
+            Details = new { itemName = item.ItemName, quantity, oldStock, newStock = item.CurrentStock, reason, viaRemoteCommand = true },
+        });
+
+        await db.SaveChangesAsync(ct);
+
+        return (true, $"{item.ItemName}: {oldStock} + {quantity} = {item.CurrentStock}.");
     }
 
     /// <summary>
