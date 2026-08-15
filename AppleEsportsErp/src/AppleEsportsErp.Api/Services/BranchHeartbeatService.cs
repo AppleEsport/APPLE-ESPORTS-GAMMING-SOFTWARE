@@ -681,6 +681,15 @@ public class BranchHeartbeatService : BackgroundService
         }
         catch (Exception)
         {
+            // The failed Remove above left this entity tracked as Deleted - the same trap
+            // that broke RunAdjustStockAsync once already (2.4.11's UserName 23502). Setting
+            // Status on an entity still marked Deleted does not turn it into an Update: EF
+            // still tries to DELETE it, hits the identical foreign key violation a second
+            // time, and this catch has nothing to catch that second failure - it was
+            // reaching the caller as a raw, unhandled "Unexpected error: 23503...", not the
+            // graceful "deactivated instead" this branch was written to give. Confirmed live
+            // on Lays at Citylight. Unchanged undoes the pending delete before the update.
+            db.Entry(item).State = EntityState.Unchanged;
             item.Status = FoodAvailability.Disabled;
             item.UpdatedAt = DateTimeOffset.UtcNow;
             await db.SaveChangesAsync(ct);
