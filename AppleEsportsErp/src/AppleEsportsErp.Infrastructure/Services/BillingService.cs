@@ -229,7 +229,20 @@ public class BillingService : IBillingService
         bill.DiscountType = dto.DiscountType;
         bill.DiscountValue = dto.DiscountValue;
         bill.DiscountAmount = discountAmount;
-        bill.DiscountBy = actorId;
+
+        // DiscountBy is a foreign key into THIS branch's own local Users table - and only
+        // Users, never Operators (FK_bills_users_DiscountBy). A discount applied locally by a
+        // genuine branch Admin/Super Admin satisfies that fine. One routed down from Head
+        // Office never can: Users accounts are Head Office's own and are never synced to a
+        // branch (BranchConfigDto pushes Operators, MenuItems and Members - not Users), so
+        // actorId is an id this branch's database has literally never seen. Every single
+        // Head-Office-issued discount was failing outright on this line with a 23503 foreign
+        // key violation - confirmed live in the Audit Trail, not a guess. Left null when the
+        // actor cannot be resolved locally; the audit entry below still records who it was via
+        // AuditService's own lenient (non-FK) lookup across both tables.
+        bill.DiscountBy = await _unitOfWork.Repository<User>().Query().AnyAsync(u => u.Id == actorId)
+            ? actorId
+            : (Guid?)null;
         bill.DiscountReason = dto.Reason;
 
         // Gaming and Food now hold the STICKER price, not a discount-adjusted one. The
