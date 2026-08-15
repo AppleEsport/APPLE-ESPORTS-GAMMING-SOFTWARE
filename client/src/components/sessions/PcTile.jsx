@@ -70,7 +70,15 @@ const PcTile = memo(({ pc, walkinReq, isSelected, onSelect, onQuickStart, onRefr
   const style = walkinReq ? PENDING_STYLE : (hasReservation ? STATUS_STYLES.Reserved : (STATUS_STYLES[pc.state] || DEFAULT_STYLE));
   const isIdle = pc.state === 'Idle' && !walkinReq && !hasReservation;
   const isActive = pc.state === 'Active';
-  const isPayAsYouGo = isActive && !pc.sessionEndTime;
+  // activeSessionId is only ever set when the session that lives behind it was actually
+  // found - which fails silently at Head Office, where a branch's active sessions are never
+  // synced (only their bills, once paid). Without this check, "no end time" was read as "this
+  // is a genuine open-ended Pay-As-You-Go session" everywhere, including the one place that
+  // was really saying "I don't have this session's details at all" - so Head Office showed the
+  // infinity glyph on every active PC belonging to every branch, PAYG or not. A PC just
+  // transferred between machines hits this hardest: Head Office's own state is briefly (or, for
+  // a stuck heartbeat, not-so-briefly) missing the session row entirely.
+  const isPayAsYouGo = isActive && !!pc.activeSessionId && !pc.sessionEndTime;
   const hasPlanTime = isActive && !!pc.sessionEndTime;
 
   useEffect(() => {
