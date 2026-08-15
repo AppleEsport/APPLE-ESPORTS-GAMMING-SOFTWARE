@@ -181,4 +181,13 @@ public static class BranchCommands
     /// of cutting off the very channel that carries it, if it goes wrong.
     /// </summary>
     public const string InstallVersion = "install_version";
+
+    /// <summary>
+    /// A stock delivery, told to the branch rather than typed into a number that would only
+    /// ever be overwritten. See InventoryController.AddStock for why this exists at all: Head
+    /// Office cannot know a shelf's real count, only the branch standing in front of it can -
+    /// so this carries how many units arrived, not what the total should now read, and the
+    /// branch adds that to whatever it already honestly has.
+    /// </summary>
+    public const string AdjustStock = "adjust_stock";
 }
