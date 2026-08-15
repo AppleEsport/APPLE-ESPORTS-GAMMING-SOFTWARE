@@ -1,17 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Plus,
-  Edit,
-  Trash2,
   ClipboardCheck,
   AlertTriangle,
   Package,
   PackagePlus,
   TrendingUp,
-  Image,
-  RefreshCw,
-  Sliders,
-  DollarSign
 } from 'lucide-react';
 import PageHeader from '../../components/layout/PageHeader';
 import {
@@ -43,10 +37,9 @@ export default function MenuEditorPage() {
   // Forms Modals State
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isEditOpen, setIsEditOpen] = useState(false);
-  const [isReconcileOpen, setIsReconcileOpen] = useState(false);
-  const [isAddStockOpen, setIsAddStockOpen] = useState(false);
 
-  // Current Active Item for Edit/Reconcile/Add Stock
+  // The item the Edit modal is open for - its details, delivery and count-correction
+  // sections all act on this same item.
   const [activeItem, setActiveItem] = useState(null);
 
   // Form Fields
@@ -109,7 +102,18 @@ export default function MenuEditorPage() {
     };
   }, [fetchMenu]);
 
-  // Open modals helper
+  // Keeps the Edit modal's "Current Stock" figure live after a delivery or a count
+  // correction, without closing the modal - both actions stay on the same item.
+  useEffect(() => {
+    if (!activeItem) return;
+    const fresh = items.find(i => i.id === activeItem.id);
+    if (fresh && fresh.currentStock !== activeItem.currentStock) {
+      setActiveItem(fresh);
+    }
+  }, [items, activeItem]);
+
+  // Opens the one Edit modal, priming both the item-details fields and the two stock
+  // sections (delivery, count-correction) together.
   const openEdit = (item) => {
     setActiveItem(item);
     setItemName(item.itemName);
@@ -118,21 +122,11 @@ export default function MenuEditorPage() {
     setMinStockLimit(item.minStockLimit);
     setStatus(item.status);
     setImageUrl(item.imageUrl || '');
-    setIsEditOpen(true);
-  };
-
-  const openReconcile = (item) => {
-    setActiveItem(item);
-    setPhysicalCount(item.currentStock);
-    setReconcileReason('');
-    setIsReconcileOpen(true);
-  };
-
-  const openAddStock = (item) => {
-    setActiveItem(item);
     setAddStockQuantity('');
     setAddStockReason('');
-    setIsAddStockOpen(true);
+    setPhysicalCount(item.currentStock);
+    setReconcileReason('');
+    setIsEditOpen(true);
   };
 
   const resetForm = () => {
@@ -216,7 +210,6 @@ export default function MenuEditorPage() {
         quantity,
         reason: addStockReason || 'Stock delivery'
       });
-      setIsAddStockOpen(false);
       if (res?.data?.queued) {
         toast.success(res.data.message || `Sent to the branch: +${quantity} units of "${activeItem.itemName}".`);
       } else {
@@ -255,7 +248,6 @@ export default function MenuEditorPage() {
         physicalCount: Number(physicalCount),
         reason: reconcileReason || 'Super Admin Physical Count Reconciliation'
       });
-      setIsReconcileOpen(false);
       fetchMenu();
       toast.success(`Reconciled stock for "${activeItem.itemName}" to ${physicalCount}.`);
     } catch (err) {
@@ -410,34 +402,18 @@ export default function MenuEditorPage() {
                       </td>
                       {isSuperAdmin && (
                         <td className="py-3 px-4 text-right">
-                          <div className="flex justify-end gap-1.5">
-                            <button
-                              onClick={() => openAddStock(item)}
-                              title="Add Stock (Delivery)"
-                              className="p-1.5 rounded-lg border border-border hover:border-neon-green hover:text-neon-green transition-colors text-text-3"
-                            >
-                              <PackagePlus className="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={() => openReconcile(item)}
-                              title="Reconcile Count"
-                              className="p-1.5 rounded-lg border border-border hover:border-neon-orange hover:text-neon-orange transition-colors text-text-3"
-                            >
-                              <ClipboardCheck className="w-4 h-4" />
-                            </button>
+                          <div className="flex justify-end gap-2">
                             <button
                               onClick={() => openEdit(item)}
-                              title="Edit Item"
-                              className="p-1.5 rounded-lg border border-border hover:border-neon-blue hover:text-neon-blue transition-colors text-text-3"
+                              className="px-3 py-1.5 rounded-lg border border-border hover:border-neon-blue hover:text-neon-blue transition-colors text-text-3 text-[10px] font-bold uppercase tracking-wider"
                             >
-                              <Edit className="w-4 h-4" />
+                              Edit
                             </button>
                             <button
                               onClick={() => handleDelete(item.id)}
-                              title="Delete Item"
-                              className="p-1.5 rounded-lg border border-border hover:border-neon-red hover:text-neon-red transition-colors text-text-3"
+                              className="px-3 py-1.5 rounded-lg border border-border hover:border-neon-red hover:text-neon-red transition-colors text-text-3 text-[10px] font-bold uppercase tracking-wider"
                             >
-                              <Trash2 className="w-4 h-4" />
+                              Delete
                             </button>
                           </div>
                         </td>
@@ -521,11 +497,18 @@ export default function MenuEditorPage() {
         </div>
       )}
 
-      {/* EDIT MODAL */}
+      {/* EDIT MODAL - everything about one item in one place, in plain language, rather than
+          spread across four separate icon buttons whose purpose had to be guessed from a
+          tooltip. Item details, a delivery, and a physical-count correction are three
+          genuinely different actions underneath (different audit trail, different math), so
+          they stay as three clearly-labelled sections rather than being merged into one
+          confusing "stock" number - but they now live in one modal instead of three. */}
       {isEditOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
-          <div className="w-full max-w-md bg-bg-2 border border-border rounded-xl shadow-2xl p-6">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm overflow-y-auto">
+          <div className="w-full max-w-md bg-bg-2 border border-border rounded-xl shadow-2xl p-6 my-8">
             <h2 className="font-heading font-extrabold text-lg uppercase text-text mb-4">Edit Menu Item</h2>
+
+            {/* -- Item details -- */}
             <form onSubmit={handleUpdate} className="space-y-4 text-xs">
               <div className="space-y-1">
                 <label className="font-bold text-text-3">Item Name</label>
@@ -579,100 +562,52 @@ export default function MenuEditorPage() {
                 <label className="font-bold text-text-3">Image URL (Optional)</label>
                 <input type="text" value={imageUrl} onChange={e => setImageUrl(e.target.value)} className="w-full bg-bg-3 border border-border p-2.5 rounded-lg text-text focus:border-accent outline-none" />
               </div>
-              <p className="text-text-3 text-[11px] -mt-1">Stock is not edited here. Use Add Stock to record a delivery, or Reconcile to correct a physical count.</p>
-              <div className="flex justify-end gap-3 pt-4 border-t border-border">
-                <button type="button" onClick={() => setIsEditOpen(false)} className="btn-secondary py-2 px-4">Cancel</button>
+              <div className="flex justify-end pt-2">
                 <button type="submit" disabled={submitting} className="btn-primary py-2 px-6">
-                  {submitting ? 'Saving...' : 'Save Changes'}
+                  {submitting ? 'Saving...' : 'Save Item Details'}
                 </button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
 
-      {/* RECONCILE MODAL */}
-      {isReconcileOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
-          <div className="w-full max-w-md bg-bg-2 border border-border rounded-xl shadow-2xl p-6">
-            <h2 className="font-heading font-extrabold text-lg uppercase text-text mb-4 flex items-center gap-1.5">
-              <ClipboardCheck className="w-5 h-5 text-neon-orange" />
-              Reconcile Inventory Stock
-            </h2>
-            <p className="text-text-3 text-xs mb-4">
-              Enter physical count verified at Cafe. If it differs from expected <strong>({activeItem?.currentStock})</strong>, it will record a discrepancy audit log entry.
-            </p>
-            <form onSubmit={handleReconcile} className="space-y-4 text-xs">
-              <div className="space-y-1">
-                <label className="font-bold text-text-3">Expected Stock Count</label>
-                <div className="bg-bg-3 border border-border p-3 rounded-lg text-text font-mono font-bold text-sm">
-                  {activeItem?.currentStock} units
+            {/* -- Stock -- */}
+            <div className="mt-6 pt-5 border-t border-border space-y-5">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-text-3 uppercase text-[10px] tracking-wider">Current Stock</span>
+                <span className="font-mono font-bold text-text text-sm">{activeItem?.currentStock} units</span>
+              </div>
+
+              {/* A delivery just arrived - adds to the shelf, never replaces the count. */}
+              <div className="space-y-2 bg-bg-3/40 border border-border rounded-lg p-3">
+                <div className="flex items-center gap-1.5 font-bold text-text text-xs">
+                  <PackagePlus className="w-3.5 h-3.5 text-neon-green" /> New Delivery Arrived
+                </div>
+                <p className="text-text-3 text-[11px]">How many units just came in. This is added to the shelf, not a replacement.</p>
+                <div className="flex gap-2">
+                  <input type="number" min="1" placeholder="Units delivered" value={addStockQuantity} onChange={e => setAddStockQuantity(e.target.value)} className="flex-1 bg-bg-3 border border-border p-2 rounded-lg text-text focus:border-accent outline-none font-mono text-sm" />
+                  <button type="button" disabled={submitting} onClick={handleAddStock} className="btn-primary py-2 px-4 text-[11px] shrink-0">
+                    {submitting ? '...' : 'Add Delivery'}
+                  </button>
                 </div>
               </div>
-              <div className="space-y-1">
-                <label className="font-bold text-text-3">Verified Physical Count</label>
-                <input required type="number" min="0" value={physicalCount} onChange={e => setPhysicalCount(e.target.value)} className="w-full bg-bg-3 border border-border p-3 rounded-lg text-text focus:border-accent outline-none font-mono text-sm font-bold text-accent" />
-              </div>
-              <div className="space-y-1">
-                <label className="font-bold text-text-3">Reconciliation Comment / Reason</label>
-                <textarea 
-                  required
-                  placeholder="e.g. Broken packaging or physical count mismatch..."
-                  value={reconcileReason} 
-                  onChange={e => setReconcileReason(e.target.value)} 
-                  className="w-full bg-bg-3 border border-border p-2.5 rounded-lg text-text focus:border-accent outline-none h-20"
-                />
-              </div>
-              <div className="flex justify-end gap-3 pt-4 border-t border-border">
-                <button type="button" onClick={() => setIsReconcileOpen(false)} className="btn-secondary py-2 px-4">Cancel</button>
-                <button type="submit" disabled={submitting} className="btn-primary py-2 px-6">
-                  {submitting ? 'Submitting...' : 'Reconcile Count'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
-      {/* ADD STOCK MODAL */}
-      {isAddStockOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
-          <div className="w-full max-w-md bg-bg-2 border border-border rounded-xl shadow-2xl p-6">
-            <h2 className="font-heading font-extrabold text-lg uppercase text-text mb-4 flex items-center gap-1.5">
-              <PackagePlus className="w-5 h-5 text-neon-green" />
-              Add Stock (Delivery)
-            </h2>
-            <p className="text-text-3 text-xs mb-4">
-              Records units that just arrived for <strong>{activeItem?.itemName}</strong>. This adds to whatever
-              is currently on the shelf - it does not replace the count.
-            </p>
-            <form onSubmit={handleAddStock} className="space-y-4 text-xs">
-              <div className="space-y-1">
-                <label className="font-bold text-text-3">Current Stock</label>
-                <div className="bg-bg-3 border border-border p-3 rounded-lg text-text font-mono font-bold text-sm">
-                  {activeItem?.currentStock} units
+              {/* A physical count came out different - corrects to the real number, and logs
+                  the discrepancy rather than silently overwriting it. */}
+              <div className="space-y-2 bg-bg-3/40 border border-border rounded-lg p-3">
+                <div className="flex items-center gap-1.5 font-bold text-text text-xs">
+                  <ClipboardCheck className="w-3.5 h-3.5 text-neon-orange" /> Correct the Count
                 </div>
-              </div>
-              <div className="space-y-1">
-                <label className="font-bold text-text-3">Units Delivered</label>
-                <input required type="number" min="1" value={addStockQuantity} onChange={e => setAddStockQuantity(e.target.value)} className="w-full bg-bg-3 border border-border p-3 rounded-lg text-text focus:border-accent outline-none font-mono text-sm font-bold text-accent" />
-              </div>
-              <div className="space-y-1">
-                <label className="font-bold text-text-3">Reason / Reference (Optional)</label>
-                <textarea
-                  placeholder="e.g. Supplier invoice #1234..."
-                  value={addStockReason}
-                  onChange={e => setAddStockReason(e.target.value)}
-                  className="w-full bg-bg-3 border border-border p-2.5 rounded-lg text-text focus:border-accent outline-none h-20"
-                />
-              </div>
-              <div className="flex justify-end gap-3 pt-4 border-t border-border">
-                <button type="button" onClick={() => setIsAddStockOpen(false)} className="btn-secondary py-2 px-4">Cancel</button>
-                <button type="submit" disabled={submitting} className="btn-primary py-2 px-6">
-                  {submitting ? 'Adding...' : 'Add Stock'}
+                <p className="text-text-3 text-[11px]">Use this only if you physically counted the shelf and it does not match the number above.</p>
+                <input type="number" min="0" placeholder="Actual count on the shelf" value={physicalCount} onChange={e => setPhysicalCount(e.target.value)} className="w-full bg-bg-3 border border-border p-2 rounded-lg text-text focus:border-accent outline-none font-mono text-sm" />
+                <input type="text" placeholder="Why does it not match? (required)" value={reconcileReason} onChange={e => setReconcileReason(e.target.value)} className="w-full bg-bg-3 border border-border p-2 rounded-lg text-text focus:border-accent outline-none text-[11px]" />
+                <button type="button" disabled={submitting} onClick={handleReconcile} className="btn-secondary py-2 px-4 text-[11px] w-full">
+                  {submitting ? '...' : 'Correct Count'}
                 </button>
               </div>
-            </form>
+            </div>
+
+            <div className="flex justify-end pt-4 mt-2 border-t border-border">
+              <button type="button" onClick={() => { setIsEditOpen(false); resetForm(); }} className="btn-secondary py-2 px-4">Close</button>
+            </div>
           </div>
         </div>
       )}
