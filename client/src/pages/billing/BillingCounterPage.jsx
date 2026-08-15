@@ -35,6 +35,7 @@ export default function BillingCounterPage() {
   const { state } = useLocation();
   const navigate = useNavigate();
   const autoSelectPcId = state?.autoSelectPcId;
+  const autoSelectBillId = state?.autoSelectBillId;
 
   const [bills, setBills] = useState([]);
   const [activeSessions, setActiveSessions] = useState([]);
@@ -46,6 +47,14 @@ export default function BillingCounterPage() {
   const toast = useToast();
 
   const [isLoading, setIsLoading] = useState(true);
+
+  // Arrives from marking a food order Delivered - the bill id is already known exactly,
+  // so this selects it directly rather than waiting to search for it inside the fetched
+  // list the way autoSelectPcId has to.
+  useEffect(() => {
+    if (autoSelectBillId) setSelectedItem({ type: 'bill', id: autoSelectBillId });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoSelectBillId]);
 
   const targetBranchId = isSuperAdmin ? activeBranch?.id : user?.branchId;
 

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Play, Check, Truck, X, Ban, Trash2, Clock } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import api from '../../config/api';
@@ -8,8 +9,10 @@ export default function FoodOrderQueue({ orders, onOrderUpdated }) {
   const [error, setError] = useState(null);
   const [cancelOrderId, setCancelOrderId] = useState(null);
   const [cancelReason, setCancelReason] = useState('');
+  const navigate = useNavigate();
 
-  const updateStatus = async (orderId, newStatus, payload = {}) => {
+  const updateStatus = async (order, newStatus, payload = {}) => {
+    const orderId = order.id;
     setLoadingOrderId(orderId);
     setError(null);
     try {
@@ -17,6 +20,12 @@ export default function FoodOrderQueue({ orders, onOrderUpdated }) {
       onOrderUpdated();
       setCancelOrderId(null);
       setCancelReason('');
+
+      // Delivered in hand, straight back to that customer's bill to collect payment -
+      // the whole point of leaving the kitchen queue for this order right now.
+      if (newStatus === 'Delivered' && order.billId) {
+        navigate('/app/billing', { state: { autoSelectBillId: order.billId } });
+      }
     } catch (err) {
       setError(err.response?.data?.error || err.response?.data?.message || 'Failed to update order status');
     } finally {
@@ -24,12 +33,12 @@ export default function FoodOrderQueue({ orders, onOrderUpdated }) {
     }
   };
 
-  const handleCancel = (orderId) => {
+  const handleCancel = (order) => {
     if (!cancelReason.trim()) {
       setError('Cancellation reason is required.');
       return;
     }
-    updateStatus(orderId, 'Cancelled', { reason: cancelReason });
+    updateStatus(order, 'Cancelled', { reason: cancelReason });
   };
 
   return (
@@ -126,7 +135,7 @@ export default function FoodOrderQueue({ orders, onOrderUpdated }) {
                             className="bg-bg-3 border border-neon-red/30 text-text text-[10px] rounded px-1.5 py-1 focus:border-neon-red focus:outline-none w-28"
                           />
                           <button
-                            onClick={() => handleCancel(order.id)}
+                            onClick={() => handleCancel(order)}
                             className="px-2 py-1 bg-neon-red/10 border border-neon-red/30 text-neon-red rounded text-[9px] font-bold uppercase hover:bg-neon-red/20 transition-colors"
                           >
                             OK
@@ -142,7 +151,7 @@ export default function FoodOrderQueue({ orders, onOrderUpdated }) {
                         <div className="flex justify-end gap-1.5">
                           {(isPending || isPreparing || isReady) && (
                             <button
-                              onClick={() => updateStatus(order.id, 'Delivered')}
+                              onClick={() => updateStatus(order, 'Delivered')}
                               className="px-2.5 py-1 bg-neon-green/10 border border-neon-green/30 text-neon-green rounded-md text-[10px] font-bold uppercase hover:bg-neon-green/20 transition-all flex items-center gap-1"
                             >
                               <Truck className="w-3 h-3" /> Mark as Delivered

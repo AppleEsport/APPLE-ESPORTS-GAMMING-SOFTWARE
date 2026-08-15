@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { ShoppingBasket, Plus, Minus } from 'lucide-react';
 import api from '../../config/api';
 import { useBranch } from '../../contexts/BranchContext';
@@ -7,6 +8,7 @@ import { useToast } from '../ui/Toast';
 export default function BillingAddItemsPanel({ bill, onOrderPlaced }) {
   const { activeBranch } = useBranch();
   const toast = useToast();
+  const navigate = useNavigate();
   
   const [inventory, setInventory] = useState([]);
   const [cart, setCart] = useState([]);
@@ -76,6 +78,11 @@ export default function BillingAddItemsPanel({ bill, onOrderPlaced }) {
       toast.success('Food order sent to kitchen successfully');
       setCart([]);
       onOrderPlaced?.(res.data?.data?.billId);
+
+      // Straight to the kitchen queue - this is exactly where the order needs marking
+      // Delivered once it is actually handed over, not left for someone to remember to
+      // go find later.
+      navigate('/app/food-orders');
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to add items to bill');
     } finally {
