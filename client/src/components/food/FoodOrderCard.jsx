@@ -1,4 +1,5 @@
 import { useState, memo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Play, Check, Truck, X, Ban, Trash2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import api from '../../config/api';
@@ -6,6 +7,7 @@ import { useAuth } from '../../contexts/AuthContext';
 
 const FoodOrderCard = memo(({ order, onOrderUpdated }) => {
   const { isSuperAdmin } = useAuth();
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [showCancelPrompt, setShowCancelPrompt] = useState(false);
@@ -27,6 +29,11 @@ const FoodOrderCard = memo(({ order, onOrderUpdated }) => {
       await api.put(`/food-orders/${order.id}/status`, { status: newStatus, ...payload });
       onOrderUpdated(); // Trigger kanban refresh
       setShowCancelPrompt(false);
+
+      // Delivered in hand, straight back to that customer's bill to collect payment.
+      if (newStatus === 'Delivered' && order.billId) {
+        navigate('/app/billing', { state: { autoSelectBillId: order.billId } });
+      }
     } catch (err) {
       setError(err.response?.data?.error || err.response?.data?.message || 'Failed to update order');
     } finally {
