@@ -1377,18 +1377,15 @@ public class AuthService : IAuthService
         UserStatus adminStatus;
 
         // The role this person actually holds, carried through to the token below.
-        //
-        // This used to be hardcoded to Roles.Admin for everybody who elevated, including a
-        // genuine Super Admin - so PIN-elevating at the counter silently demoted them. It is
-        // not a cosmetic claim: Super Admins carry no dashboardPermissions (they are not
-        // permission-gated, they are Super Admin), so arriving as "admin" with no permissions
-        // meant every endpoint that admits SuperAdmin-or-a-named-permission refused them.
-        // The discount button was the visible symptom - an empty 403, which the client renders
-        // as "Failed to apply discount" with no clue why.
         string adminRole;
 
-        // 1. Try to find an Admin or SuperAdmin in the Users table
-        var adminUser = await _db.Users.FirstOrDefaultAsync(u => u.Id == dto.AdminId && (u.Role == Roles.Admin || u.Role == Roles.SuperAdmin));
+        // 1. Try to find an Admin in the Users table.
+        //
+        // Super Admin is deliberately excluded - Super Admin is Head Office, never a branch
+        // counter, so there is no legitimate reason this operator-station elevation would ever
+        // need to reach one. Excluded here too, not just from the list this picks from, so a
+        // request built by hand with a Super Admin's id and PIN cannot reach it either.
+        var adminUser = await _db.Users.FirstOrDefaultAsync(u => u.Id == dto.AdminId && u.Role == Roles.Admin);
         if (adminUser != null)
         {
             if (adminUser.AccessPin != dto.AccessPin)
