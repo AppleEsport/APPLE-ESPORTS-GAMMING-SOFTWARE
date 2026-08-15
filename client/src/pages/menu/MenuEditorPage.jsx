@@ -429,8 +429,8 @@ export default function MenuEditorPage() {
 
       {/* CREATE MODAL */}
       {isCreateOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
-          <div className="w-full max-w-md bg-bg-2 border border-border rounded-xl shadow-2xl p-6">
+        <div className="fixed inset-0 z-[100] flex items-start justify-center p-4 bg-black/70 backdrop-blur-sm overflow-y-auto">
+          <div className="w-full max-w-md bg-bg-2 border border-border rounded-xl shadow-2xl p-6 my-8">
             <h2 className="font-heading font-extrabold text-lg uppercase text-text mb-4">Add Menu Item</h2>
             <form onSubmit={handleCreate} className="space-y-4 text-xs">
               <div className="space-y-1">
@@ -503,8 +503,14 @@ export default function MenuEditorPage() {
           genuinely different actions underneath (different audit trail, different math), so
           they stay as three clearly-labelled sections rather than being merged into one
           confusing "stock" number - but they now live in one modal instead of three. */}
+      {/* items-start, not items-center: this modal is taller than a lot of real browser
+          windows now that it holds three sections instead of one. Centering a taller-than-
+          viewport flex child clips it top and bottom with no way to scroll to the missing
+          part in some browsers - confirmed live, the bottom (Correct Count, Close) was
+          unreachable. Starting from the top and scrolling the backdrop itself keeps the
+          whole modal reachable regardless of window size. */}
       {isEditOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm overflow-y-auto">
+        <div className="fixed inset-0 z-[100] flex items-start justify-center p-4 bg-black/70 backdrop-blur-sm overflow-y-auto">
           <div className="w-full max-w-md bg-bg-2 border border-border rounded-xl shadow-2xl p-6 my-8">
             <h2 className="font-heading font-extrabold text-lg uppercase text-text mb-4">Edit Menu Item</h2>
 
