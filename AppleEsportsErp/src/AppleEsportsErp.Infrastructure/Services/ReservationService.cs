@@ -1,4 +1,5 @@
 ﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Common;
 using AppleEsportsErp.Application.DTOs.Reservations;
@@ -6,6 +7,7 @@ using AppleEsportsErp.Application.Exceptions;
 using AppleEsportsErp.Application.Interfaces;
 using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
+using AppleEsportsErp.Infrastructure.Configuration;
 
 namespace AppleEsportsErp.Infrastructure.Services;
 
@@ -14,15 +16,40 @@ public class ReservationService : IReservationService
     private readonly IUnitOfWork _unitOfWork;
     private readonly IAuditService _auditService;
     private readonly IHubNotificationService _hubNotification;
+    private readonly IConfiguration _configuration;
 
     public ReservationService(
         IUnitOfWork unitOfWork,
         IAuditService auditService,
-        IHubNotificationService hubNotification)
+        IHubNotificationService hubNotification,
+        IConfiguration configuration)
     {
         _unitOfWork = unitOfWork;
         _auditService = auditService;
         _hubNotification = hubNotification;
+        _configuration = configuration;
+    }
+
+    /// <summary>
+    /// A booking made here and nowhere else. Head Office holds a synced copy of every
+    /// branch's reservations, and writing one into that copy is easy and looks correct
+    /// immediately - the screen shows it booked - but the branch that actually has the PC
+    /// and the counter was never told. No machine is held, nothing appears on the operator's
+    /// own list, and a customer who was promised a booking finds nobody expecting them.
+    /// Same reason SessionService and BillingService refuse to write directly at Head
+    /// Office: see ReservationsController for the branch-command instruction sent instead.
+    /// </summary>
+    private void RefuseIfHeadOffice(string what)
+    {
+        if (!_configuration.IsHeadOffice()) return;
+
+        throw new AppException(
+            $"This reservation has to be {what} by the branch itself, not written here at Head " +
+            "Office - a reservation written here is invisible to the counter, so nobody there " +
+            "would know to expect the customer. Send it as an instruction instead and the " +
+            "branch will carry it out within a few seconds and report back.",
+            System.Net.HttpStatusCode.BadRequest,
+            "BRANCH_ONLY_OPERATION");
     }
 
     public async Task<PaginatedResult<ReservationDto>> GetActiveReservationsAsync(Guid branchId, int page = 1, int pageSize = 50)
@@ -53,6 +80,7 @@ public class ReservationService : IReservationService
 
     public async Task<ReservationDto> CreateReservationAsync(Guid branchId, Guid operatorId, CreateReservationDto dto)
     {
+        RefuseIfHeadOffice("booked");
         var pc = await _unitOfWork.Repository<Pc>().GetByIdAsync(dto.PcId)
             ?? throw new NotFoundException("PC not found.");
 
@@ -150,6 +178,7 @@ public class ReservationService : IReservationService
 
     public async Task<ReservationDto> CancelReservationAsync(Guid branchId, Guid operatorId, Guid id, CancelReservationDto dto)
     {
+        RefuseIfHeadOffice("cancelled");
         var reservation = await _unitOfWork.Repository<Reservation>().Query()
             .Include(r => r.Pc)
             .FirstOrDefaultAsync(r => r.Id == id)
@@ -204,6 +233,7 @@ public class ReservationService : IReservationService
 
     public async Task<ReservationDto> StartReservedSessionAsync(Guid branchId, Guid operatorId, Guid id)
     {
+        RefuseIfHeadOffice("started");
         await _unitOfWork.BeginTransactionAsync();
         try
         {
@@ -333,6 +363,7 @@ public class ReservationService : IReservationService
 
     public async Task<ReservationDto> OverrideReservationAsync(Guid branchId, Guid operatorId, Guid id, OverrideReservationDto dto)
     {
+        RefuseIfHeadOffice("overridden");
         var reservation = await _unitOfWork.Repository<Reservation>().Query()
             .Include(r => r.Pc)
             .FirstOrDefaultAsync(r => r.Id == id)

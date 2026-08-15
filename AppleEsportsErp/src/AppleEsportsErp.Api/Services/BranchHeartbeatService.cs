@@ -372,6 +372,18 @@ public class BranchHeartbeatService : BackgroundService
             case BranchCommands.AdjustStock:
                 return await RunAdjustStockAsync(scoped, command.Payload, ct);
 
+            case BranchCommands.CreateReservation:
+                return await RunCreateReservationAsync(scoped, command.Payload, ct);
+
+            case BranchCommands.CancelReservation:
+                return await RunCancelReservationAsync(scoped, command.Payload, ct);
+
+            case BranchCommands.StartReservation:
+                return await RunStartReservationAsync(scoped, command.Payload, ct);
+
+            case BranchCommands.OverrideReservation:
+                return await RunOverrideReservationAsync(scoped, command.Payload, ct);
+
             default:
                 return (false, $"This branch does not know the command '{command.CommandType}' yet.");
         }
@@ -603,6 +615,207 @@ public class BranchHeartbeatService : BackgroundService
         await db.SaveChangesAsync(ct);
 
         return (true, $"{item.ItemName}: {oldStock} + {quantity} = {item.CurrentStock}.");
+    }
+
+    /// <summary>
+    /// Whoever a remote-triggered reservation action should be attributed to: the person on
+    /// shift right now, since they are the one who will actually deal with the customer and
+    /// the PC this affects. If nobody is on shift - Head Office booking ahead for a branch
+    /// that is currently closed is an entirely ordinary case, not an error - falls back to any
+    /// operator this branch has, so the booking still has a real person behind it rather than
+    /// being refused over an attribution problem alone.
+    /// </summary>
+    private static async Task<Guid?> OnShiftOrAnyOperatorAsync(AppDbContext db, Guid branchId, CancellationToken ct)
+    {
+        var onShift = await db.Shifts.AsNoTracking()
+            .Where(s => s.BranchId == branchId && s.Status == ShiftStatus.Active)
+            .OrderByDescending(s => s.LoginTime)
+            .Select(s => (Guid?)s.OperatorId)
+            .FirstOrDefaultAsync(ct);
+
+        if (onShift is not null) return onShift;
+
+        return await db.Operators.AsNoTracking()
+            .Where(o => o.BranchId == branchId && o.Status == OperatorStatus.Active)
+            .OrderByDescending(o => o.LastLogin)
+            .Select(o => (Guid?)o.Id)
+            .FirstOrDefaultAsync(ct);
+    }
+
+    /// <summary>
+    /// Books a PC because Head Office asked for it on the customer's behalf.
+    ///
+    /// The PC, not a header, decides the branch - the same reasoning as every other
+    /// PC-addressed command here, and it matters more for a booking than most: a stale or
+    /// missing branch id here would hold the wrong shop's machine for a customer who is
+    /// standing in a different city.
+    /// </summary>
+    private static async Task<(bool, string)> RunCreateReservationAsync(
+        IServiceProvider scoped, string payload, CancellationToken ct)
+    {
+        Guid pcId;
+        Application.DTOs.Reservations.CreateReservationDto dto;
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            pcId = doc.RootElement.GetProperty("pcId").GetGuid();
+            dto = JsonSerializer.Deserialize<Application.DTOs.Reservations.CreateReservationDto>(
+                payload, new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                ?? throw new InvalidOperationException("Empty reservation payload.");
+            dto.PcId = pcId;
+        }
+        catch
+        {
+            return (false, "The reservation command arrived without a readable PC and time.");
+        }
+
+        var db = scoped.GetRequiredService<AppDbContext>();
+        var pc = await db.Pcs.AsNoTracking().FirstOrDefaultAsync(p => p.Id == pcId, ct);
+        if (pc is null) return (false, "No such PC exists at this branch.");
+
+        var actorId = await OnShiftOrAnyOperatorAsync(db, pc.BranchId, ct);
+        if (actorId is null)
+            return (false, "This branch has no operator at all to record the reservation against.");
+
+        try
+        {
+            var reservationService = scoped.GetRequiredService<IReservationService>();
+            var result = await reservationService.CreateReservationAsync(pc.BranchId, actorId.Value, dto);
+            return (true, $"Booked {result.CustomerName} on {result.PcName ?? pc.PcNumber} for {result.ReservationTime:g}.");
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.GetBaseException().Message);
+        }
+    }
+
+    private static async Task<(bool, string)> RunCancelReservationAsync(
+        IServiceProvider scoped, string payload, CancellationToken ct)
+    {
+        Guid reservationId;
+        string? reason;
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            var root = doc.RootElement;
+            reservationId = root.GetProperty("reservationId").GetGuid();
+            reason = root.TryGetProperty("reason", out var r) && r.ValueKind == JsonValueKind.String
+                ? r.GetString() : null;
+        }
+        catch
+        {
+            return (false, "The cancel command arrived without a readable reservation id.");
+        }
+
+        var db = scoped.GetRequiredService<AppDbContext>();
+        var reservation = await db.Set<Reservation>().AsNoTracking()
+            .FirstOrDefaultAsync(r => r.Id == reservationId, ct);
+        if (reservation is null) return (false, "No such reservation exists at this branch.");
+
+        // The operator may already have cancelled it themselves in the time this took to
+        // arrive - the correct outcome either way is that it is cancelled.
+        if (reservation.State != ReservationState.Pending)
+            return (true, $"Already {reservation.State.ToString().ToLowerInvariant()} - nothing to do.");
+
+        var actorId = await OnShiftOrAnyOperatorAsync(db, reservation.BranchId, ct);
+        if (actorId is null)
+            return (false, "This branch has no operator at all to record the cancellation against.");
+
+        try
+        {
+            var reservationService = scoped.GetRequiredService<IReservationService>();
+            await reservationService.CancelReservationAsync(
+                reservation.BranchId, actorId.Value, reservationId,
+                new Application.DTOs.Reservations.CancelReservationDto { Reason = reason });
+            return (true, $"Cancelled the booking for {reservation.CustomerName}.");
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.GetBaseException().Message);
+        }
+    }
+
+    private static async Task<(bool, string)> RunStartReservationAsync(
+        IServiceProvider scoped, string payload, CancellationToken ct)
+    {
+        Guid reservationId;
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            reservationId = doc.RootElement.GetProperty("reservationId").GetGuid();
+        }
+        catch
+        {
+            return (false, "The start command arrived without a readable reservation id.");
+        }
+
+        var db = scoped.GetRequiredService<AppDbContext>();
+        var reservation = await db.Set<Reservation>().AsNoTracking()
+            .FirstOrDefaultAsync(r => r.Id == reservationId, ct);
+        if (reservation is null) return (false, "No such reservation exists at this branch.");
+
+        if (reservation.State != ReservationState.Pending)
+            return (true, $"Already {reservation.State.ToString().ToLowerInvariant()} - nothing to do.");
+
+        var actorId = await OnShiftOrAnyOperatorAsync(db, reservation.BranchId, ct);
+        if (actorId is null)
+            return (false, "Nobody is on shift at this branch, so there is no till to bill this into.");
+
+        try
+        {
+            var reservationService = scoped.GetRequiredService<IReservationService>();
+            var result = await reservationService.StartReservedSessionAsync(
+                reservation.BranchId, actorId.Value, reservationId);
+            return (true, $"Started the session for {result.CustomerName}.");
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.GetBaseException().Message);
+        }
+    }
+
+    private static async Task<(bool, string)> RunOverrideReservationAsync(
+        IServiceProvider scoped, string payload, CancellationToken ct)
+    {
+        Guid reservationId;
+        string reason;
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            var root = doc.RootElement;
+            reservationId = root.GetProperty("reservationId").GetGuid();
+            reason = root.TryGetProperty("reason", out var r) && r.ValueKind == JsonValueKind.String
+                ? r.GetString() ?? "Overridden from Head Office" : "Overridden from Head Office";
+        }
+        catch
+        {
+            return (false, "The override command arrived without a readable reservation id.");
+        }
+
+        var db = scoped.GetRequiredService<AppDbContext>();
+        var reservation = await db.Set<Reservation>().AsNoTracking()
+            .FirstOrDefaultAsync(r => r.Id == reservationId, ct);
+        if (reservation is null) return (false, "No such reservation exists at this branch.");
+
+        if (reservation.State != ReservationState.Pending)
+            return (true, $"Already {reservation.State.ToString().ToLowerInvariant()} - nothing to do.");
+
+        var actorId = await OnShiftOrAnyOperatorAsync(db, reservation.BranchId, ct);
+        if (actorId is null)
+            return (false, "This branch has no operator at all to record the override against.");
+
+        try
+        {
+            var reservationService = scoped.GetRequiredService<IReservationService>();
+            await reservationService.OverrideReservationAsync(
+                reservation.BranchId, actorId.Value, reservationId,
+                new Application.DTOs.Reservations.OverrideReservationDto { Reason = reason });
+            return (true, $"Overrode the booking for {reservation.CustomerName}.");
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.GetBaseException().Message);
+        }
     }
 
     /// <summary>
