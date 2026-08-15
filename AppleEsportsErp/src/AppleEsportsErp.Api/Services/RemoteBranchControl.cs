@@ -212,4 +212,15 @@ public static class BranchCommands
     /// call about who is standing at the counter right now, which only the branch can make.
     /// </summary>
     public const string OverrideReservation = "override_reservation";
+
+    /// <summary>
+    /// A discount decided at Head Office, applied to the branch's own copy of the bill - the
+    /// one its counter reads and its register reconciles against. Unlike the other commands
+    /// here, the actor is carried explicitly in the payload rather than resolved from whoever
+    /// is on shift: a discount is a specific person's accountable decision (Super Admin, or an
+    /// Admin with the discount permission), not a routine counter action, and the audit trail
+    /// needs to say who actually authorised it, not whoever happened to be on duty when the
+    /// command arrived.
+    /// </summary>
+    public const string ApplyDiscount = "apply_discount";
 }
