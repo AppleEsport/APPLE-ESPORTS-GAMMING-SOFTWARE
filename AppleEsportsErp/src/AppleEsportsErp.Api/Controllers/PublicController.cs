@@ -31,10 +31,12 @@ public class PublicController : ControllerBase
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, DateTimeOffset> LowBalanceAlertsSent = new();
 
     private readonly AppDbContext _db;
+    private readonly AppleEsportsErp.Api.Services.IRemoteBranchControl _remote;
 
-    public PublicController(AppDbContext db)
+    public PublicController(AppDbContext db, AppleEsportsErp.Api.Services.IRemoteBranchControl remote)
     {
         _db = db;
+        _remote = remote;
     }
 
     /// <summary>List all active branches — shown in walk-in & member branch selection screens.</summary>
@@ -382,6 +384,54 @@ public class PublicController : ControllerBase
                      && r.ReservationTime.AddMinutes(r.GracePeriodMin) >= now)
             .OrderBy(r => Math.Abs((r.ReservationTime - now).TotalMinutes))
             .FirstOrDefaultAsync();
+
+        // A member's phone reaches Head Office's public address wherever they are sitting, not
+        // the branch's own local server - so hit unconditionally, this whole endpoint used to
+        // write a session, a bill and a PC's state straight into whichever database physically
+        // received the request. At Head Office that is Head Office's own copy: the branch this
+        // member is actually sitting in front of never learns the session exists, cannot bill
+        // it, and cannot stop it - "No such session exists at this branch" is not a bug in the
+        // stop path, it is this endpoint telling the truth about what it never told the branch.
+        // Routed the same way an operator's own start already is (SessionsController.StartSession).
+        if (_remote.MustTravel)
+        {
+            if (pendingReservation != null)
+            {
+                var reservationReceipt = await _remote.SendAsync(
+                    branchId, Services.BranchCommands.StartReservation,
+                    new { reservationId = pendingReservation.Id }, memberId, HttpContext.RequestAborted);
+
+                return Ok(ApiResponse<object>.Ok(new
+                {
+                    queued = true,
+                    commandId = reservationReceipt.CommandId,
+                    branchIsReporting = reservationReceipt.BranchIsReporting,
+                    message = reservationReceipt.Message,
+                    fromReservation = true,
+                }));
+            }
+
+            var startReceipt = await _remote.SendAsync(
+                branchId, Services.BranchCommands.StartSession,
+                new
+                {
+                    pcId = dto.PcId,
+                    memberId = dto.MemberId,
+                    customerName = dto.CustomerName,
+                    durationMinutes = dto.DurationMinutes,
+                    packageName = dto.PackageName,
+                    expectedAmount = dto.ExpectedAmount,
+                    notes = dto.Notes,
+                }, memberId, HttpContext.RequestAborted);
+
+            return Ok(ApiResponse<object>.Ok(new
+            {
+                queued = true,
+                commandId = startReceipt.CommandId,
+                branchIsReporting = startReceipt.BranchIsReporting,
+                message = startReceipt.Message,
+            }));
+        }
 
         if (pendingReservation != null)
         {
