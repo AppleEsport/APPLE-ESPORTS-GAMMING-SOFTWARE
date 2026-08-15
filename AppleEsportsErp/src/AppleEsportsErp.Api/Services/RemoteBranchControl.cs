@@ -190,4 +190,26 @@ public static class BranchCommands
     /// branch adds that to whatever it already honestly has.
     /// </summary>
     public const string AdjustStock = "adjust_stock";
+
+    /// <summary>
+    /// A booking, told to the branch instead of written into Head Office's own copy of it.
+    /// Reservation was never even synced upward until now (see SyncCapture.Watched), so a
+    /// booking made at Head Office had nothing at the branch backing it - no PC held, nothing
+    /// on the counter's own list, nobody expecting the customer when they walked in.
+    /// </summary>
+    public const string CreateReservation = "create_reservation";
+
+    /// <summary>Cancels a booking - see CreateReservation for why this has to travel too.</summary>
+    public const string CancelReservation = "cancel_reservation";
+
+    /// <summary>
+    /// Converts a booking into a running session, at the counter that actually has the PC.
+    /// </summary>
+    public const string StartReservation = "start_reservation";
+
+    /// <summary>
+    /// Seats a walk-in on a machine somebody else booked, overriding the hold - a judgement
+    /// call about who is standing at the counter right now, which only the branch can make.
+    /// </summary>
+    public const string OverrideReservation = "override_reservation";
 }
