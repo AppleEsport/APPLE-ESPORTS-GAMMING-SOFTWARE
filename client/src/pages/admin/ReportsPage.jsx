@@ -578,6 +578,13 @@ export default function ReportsPage() {
                             </>
                           )}
                         </div>
+                      ) : bill.paymentType?.toUpperCase() === 'CREDIT SETTLED' ? (
+                        // The synthetic "a credit was cleared" row EodController adds for this
+                        // date range - same green the CREDIT branch above uses for "Cleared",
+                        // so a settled credit reads the same way whichever row it shows up on.
+                        <span className="text-neon-green text-[9px] bg-neon-green/10 px-1.5 py-0.5 rounded border border-neon-green/20 uppercase tracking-wider font-bold">
+                          {bill.paymentType}
+                        </span>
                       ) : (
                         <span className="text-text-3 uppercase">{bill.paymentType}</span>
                       )}
