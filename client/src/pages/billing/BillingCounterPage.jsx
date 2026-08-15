@@ -108,10 +108,20 @@ export default function BillingCounterPage() {
   // Safety net: real-time hub events normally keep this list fresh, but if one is ever
   // missed (dropped connection, etc.) this guarantees the Active Sessions list self-heals
   // within 15s instead of showing stale elapsed times indefinitely.
+  //
+  // Also refreshes whichever bill is currently open. A Head-Office-routed action (discount,
+  // payment) reports back on the branch's own timing, not a fixed few seconds - the earlier
+  // one-shot polls after a discount gave up after 9s and left the screen showing the
+  // pre-discount total forever if the branch took any longer than that. This keeps checking
+  // for as long as a bill stays open, the same way the operator's own screen is never stale
+  // because it reads the real thing directly.
   useEffect(() => {
-    const interval = setInterval(fetchDashboardData, 10000);
+    const interval = setInterval(() => {
+      fetchDashboardData();
+      if (selectedItem?.id) fetchBillDetails(selectedItem.id);
+    }, 10000);
     return () => clearInterval(interval);
-  }, [fetchDashboardData]);
+  }, [fetchDashboardData, selectedItem]);
 
   // ── 2. Real-Time Hubs ──
   useEffect(() => {
