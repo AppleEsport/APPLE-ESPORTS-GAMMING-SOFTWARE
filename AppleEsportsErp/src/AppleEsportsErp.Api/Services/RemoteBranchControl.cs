@@ -162,6 +162,17 @@ public static class BranchCommands
     public const string ProcessPayment = "process_payment";
 
     /// <summary>
+    /// A PC taken out of service, or put back, WITH the reason and resolution notes that make
+    /// the maintenance log worth reading.
+    ///
+    /// Distinct from <see cref="SetPcState"/> on purpose. That one carries a bare state and
+    /// refuses outright while a PC is Active or AwaitingBilling; this one is what the
+    /// maintenance screens actually use, and it has to carry who said what and why, because a
+    /// MaintenanceLog row without a reason is no better than the flag itself.
+    /// </summary>
+    public const string SetMaintenance = "set_maintenance";
+
+    /// <summary>
     /// Installs the exact version named, older or newer than what is currently running - a
     /// person at Head Office has already decided, so this bypasses the branch's own "only
     /// ever go forward" rule (desktop-client's UpdateService.CheckAsync), which exists for the

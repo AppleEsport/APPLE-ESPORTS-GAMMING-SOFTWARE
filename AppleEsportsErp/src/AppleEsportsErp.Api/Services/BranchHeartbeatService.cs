@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Sessions;
 using AppleEsportsErp.Application.DTOs.Sync;
 using AppleEsportsErp.Application.Interfaces;
@@ -12,6 +13,7 @@ using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
 using AppleEsportsErp.Infrastructure.Configuration;
 using AppleEsportsErp.Infrastructure.Data;
+using AppleEsportsErp.Infrastructure.Services;
 
 namespace AppleEsportsErp.Api.Services;
 
@@ -364,6 +366,9 @@ public class BranchHeartbeatService : BackgroundService
             case BranchCommands.ProcessPayment:
                 return await RunProcessPaymentAsync(scoped, command.Payload, ct);
 
+            case BranchCommands.SetMaintenance:
+                return await RunSetMaintenanceAsync(scoped, command.Payload, ct);
+
             default:
                 return (false, $"This branch does not know the command '{command.CommandType}' yet.");
         }
@@ -715,6 +720,103 @@ public class BranchHeartbeatService : BackgroundService
     private static void TryDeleteInstaller(string path)
     {
         try { if (File.Exists(path)) File.Delete(path); } catch { /* best effort */ }
+    }
+
+    /// <summary>
+    /// Takes a PC out of service, or puts it back, because Head Office asked - carrying the
+    /// reason with it, so the branch's maintenance log reads the same as if the operator had
+    /// typed it at the counter.
+    ///
+    /// Unlike RunSetPcStateAsync this does not refuse while the PC is busy. Head Office marking
+    /// a machine faulty is a statement about the hardware, not about the booking, and a PC that
+    /// has just started smoking should not stay bookable until someone remembers to stop the
+    /// session first. The session is left alone deliberately: it is real, it is running, and the
+    /// customer still owes for the minutes they played. Stopping it is a separate command Head
+    /// Office can also send.
+    ///
+    /// The actor recorded is whoever is on shift here, because they are the person who will be
+    /// asked about it. If nobody is on shift - a PC flagged overnight - it falls back to the
+    /// operator who last used the machine, and only refuses when there is nobody at all to name.
+    /// </summary>
+    private static async Task<(bool, string)> RunSetMaintenanceAsync(
+        IServiceProvider scoped, string payload, CancellationToken ct)
+    {
+        Guid pcId;
+        bool enable;
+        string? reason;
+        string? notes;
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            var root = doc.RootElement;
+            pcId = root.GetProperty("pcId").GetGuid();
+            enable = root.GetProperty("enable").GetBoolean();
+            reason = root.TryGetProperty("reason", out var r) && r.ValueKind == JsonValueKind.String
+                ? r.GetString() : null;
+            notes = root.TryGetProperty("notes", out var n) && n.ValueKind == JsonValueKind.String
+                ? n.GetString() : null;
+        }
+        catch
+        {
+            return (false, "The maintenance command arrived without a readable PC and setting.");
+        }
+
+        var db = scoped.GetRequiredService<AppDbContext>();
+        var pc = await db.Pcs.AsNoTracking().FirstOrDefaultAsync(p => p.Id == pcId, ct);
+        if (pc is null) return (false, "No such PC exists at this branch.");
+
+        var alreadyThere = enable
+            ? pc.State == PcState.UnderMaintenance
+            : pc.State != PcState.UnderMaintenance;
+
+        if (alreadyThere)
+            return (true, enable
+                ? $"{pc.PcNumber} is already under maintenance - nothing to do."
+                : $"{pc.PcNumber} is not under maintenance - nothing to do.");
+
+        var actorId = await db.Shifts.AsNoTracking()
+            .Where(s => s.BranchId == pc.BranchId && s.Status == ShiftStatus.Active)
+            .OrderByDescending(s => s.LoginTime)
+            .Select(s => (Guid?)s.OperatorId)
+            .FirstOrDefaultAsync(ct)
+            ?? pc.LastOperatorId;
+
+        if (actorId is null)
+            return (false,
+                "Nobody is on shift and this PC has no last operator, so there is nobody at " +
+                "this branch to record the maintenance against.");
+
+        try
+        {
+            var pcManagement = scoped.GetRequiredService<IPcManagementService>();
+            var maintenanceLogs = scoped.GetRequiredService<IMaintenanceLogService>();
+
+            if (enable)
+            {
+                await maintenanceLogs.LogMaintenanceAsync(
+                    pcId, pc.BranchId, actorId.Value, Roles.Operator,
+                    string.IsNullOrWhiteSpace(reason) ? "Marked from Head Office" : reason);
+            }
+            else
+            {
+                var active = await maintenanceLogs.GetActiveMaintenanceAsync(pcId);
+                if (active is not null)
+                {
+                    await maintenanceLogs.ResolveMaintenanceAsync(
+                        active.Id, actorId.Value, Roles.Operator, notes);
+                }
+            }
+
+            await pcManagement.MarkMaintenanceAsync(pcId, actorId.Value, Roles.Operator, enable);
+
+            return (true, enable
+                ? $"{pc.PcNumber} is now under maintenance."
+                : $"{pc.PcNumber} is back in service.");
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.GetBaseException().Message);
+        }
     }
 
     /// <summary>
