@@ -131,18 +131,25 @@ public class BillingService : IBillingService
             decimal elapsedMinutes = (decimal)(DateTimeOffset.UtcNow - bill.Session.StartTime).TotalMinutes;
             decimal liveGamingAmount = Application.Services.SessionPricingCalculator.CalculateGamingAmount(ratePerHour, bufferMinutes, elapsedMinutes);
 
-            var (displayGaming, displayFood, roundedTotal) = Application.Services.SessionPricingCalculator.ComputeRoundedBreakdown(
-                liveGamingAmount, dto.FoodAmount, dto.DiscountAmount);
+            // The sticker price first — what the customer sees with no discount — THEN the
+            // discount comes off that. See ApplyDiscountAsync for why: rounding the raw
+            // elapsed-time figure and the discount together in one step is what let a real
+            // discount vanish back into the nearest ₹10.
+            var (stickerGaming, stickerFood, preDiscountTotal) = Application.Services.SessionPricingCalculator.ComputeRoundedBreakdown(
+                liveGamingAmount, dto.FoodAmount, 0m);
 
-            dto.GamingAmount = displayGaming;
-            dto.Subtotal = displayGaming + displayFood;
-            dto.TotalAmount = roundedTotal;
+            decimal discount = Math.Min(dto.DiscountAmount, preDiscountTotal);
+            decimal total = Math.Max(0m, Math.Round(preDiscountTotal - discount, 2));
+
+            dto.GamingAmount = stickerGaming;
+            dto.Subtotal = stickerGaming + stickerFood;
+            dto.TotalAmount = total;
 
             var gamingItem = dto.Items.FirstOrDefault(i => i.ItemType == "gaming");
             if (gamingItem != null)
             {
-                gamingItem.UnitPrice = displayGaming;
-                gamingItem.TotalPrice = displayGaming;
+                gamingItem.UnitPrice = stickerGaming;
+                gamingItem.TotalPrice = stickerGaming;
             }
         }
 
@@ -164,24 +171,29 @@ public class BillingService : IBillingService
         if (bill.Status == BillStatus.Completed)
             throw new AppException("Cannot apply discount to a completed bill.");
 
-        // What the gaming line is worth RIGHT NOW, before any discount.
+        // The sticker price — what the customer would pay with NO discount — rounded to the
+        // nearest ₹10 first, on its own, before the discount ever enters the arithmetic.
         //
-        // Two bugs lived in reading bill.GamingAmount/bill.Subtotal directly here.
+        // This used to compute the discount off the raw, un-rounded elapsed-time figure and
+        // let the rounding and the discount happen in the same step. For an 11-minute session
+        // at ₹60/hr that raw figure is ₹11, which itself rounds down to the ₹10 everyone
+        // already sees on screen — so a 10% discount, ~₹1, was being taken off ₹11 (giving
+        // ₹9.90), and THEN the final total was rounded to the nearest ₹10 again — and ₹9.90
+        // rounds straight back UP to ₹10. The discount was computed correctly and then
+        // erased by the very next line. Any discount smaller than about ₹5 on a small bill
+        // disappeared completely; the customer could watch a 10% discount change nothing.
         //
-        // The stored figure is written once at session start as ExpectedAmount, which for an
-        // open/PAYG session is 0 - so a percentage discount computed 0% of 0, saved happily,
-        // and returned 200 OK having done nothing. That is the "button applies no value at
-        // all" report. Every screen meanwhile shows the live figure via
-        // MapToDtoWithLiveAmount, so the number the admin was discounting was never the
-        // number they could see.
+        // Rounding the sticker FIRST fixes both halves at once: the discount is now taken off
+        // the ₹10 a customer can actually see and be shown reduced, and the result is never
+        // rounded to the nearest ₹10 a second time — only to the nearest paisa, because a
+        // deliberate discount is a precise figure an admin chose, not a cash-drawer
+        // convenience to be smoothed away.
         //
-        // And because the block below writes the rounding-adjusted gaming back onto the bill,
-        // a second press discounted an already-discounted base and folded another rounding
-        // delta in. Pressing 10% twice did not mean 10%.
-        //
-        // Recomputing from elapsed time each call fixes both: the base is always the true
-        // pre-discount charge, so the discount is never compounded and never applied to zero.
-        decimal baseGaming = bill.GamingAmount;
+        // Recomputed from elapsed time on every call rather than trusted from storage, so a
+        // second press is never discounting an already-discounted number — see the note on
+        // GamingAmount below for why storage is safe to read once a discount also stops
+        // hiding inside it.
+        decimal rawGaming = bill.GamingAmount;
         if (bill.Session != null && bill.Session.State == Domain.Enums.SessionState.Active)
         {
             decimal ratePerHour = bill.Pc?.PricingProfile?.BaseHourlyRate
@@ -189,46 +201,48 @@ public class BillingService : IBillingService
             int bufferMinutes = bill.Pc?.PricingProfile?.BufferMinutes
                 ?? Application.Services.SessionPricingCalculator.DefaultBufferMinutes;
             decimal elapsedMinutes = (decimal)(DateTimeOffset.UtcNow - bill.Session.StartTime).TotalMinutes;
-            baseGaming = Application.Services.SessionPricingCalculator.CalculateGamingAmount(
+            rawGaming = Application.Services.SessionPricingCalculator.CalculateGamingAmount(
                 ratePerHour, bufferMinutes, elapsedMinutes);
         }
 
-        decimal baseSubtotal = baseGaming + bill.FoodAmount;
+        var (stickerGaming, stickerFood, preDiscountTotal) = Application.Services.SessionPricingCalculator.ComputeRoundedBreakdown(
+            rawGaming, bill.FoodAmount, 0m);
 
-        decimal discountAmount = 0;
-        if (dto.DiscountType == DiscountType.Percentage)
-        {
-            discountAmount = baseSubtotal * (dto.DiscountValue / 100);
-        }
-        else if (dto.DiscountType == DiscountType.Flat)
-        {
-            discountAmount = dto.DiscountValue;
-        }
+        decimal discountAmount = dto.DiscountType == DiscountType.Percentage
+            ? preDiscountTotal * (dto.DiscountValue / 100m)
+            : dto.DiscountValue;
 
-        if (discountAmount > baseSubtotal)
-            throw new AppException("Discount amount cannot exceed bill subtotal.");
+        if (discountAmount > preDiscountTotal)
+            throw new AppException("Discount amount cannot exceed the bill's total.");
 
-        // Discount is an explicit, deliberate figure the admin chose — keep it exact.
-        // The Gaming line (derived, not a fixed price) absorbs any rounding instead.
-        var (displayGaming, displayFood, roundedTotal) = Application.Services.SessionPricingCalculator.ComputeRoundedBreakdown(
-            baseGaming, bill.FoodAmount, discountAmount);
+        decimal roundedTotal = Math.Max(0m, Math.Round(preDiscountTotal - discountAmount, 2));
 
         bill.DiscountType = dto.DiscountType;
         bill.DiscountValue = dto.DiscountValue;
         bill.DiscountAmount = discountAmount;
         bill.DiscountBy = actorId;
         bill.DiscountReason = dto.Reason;
-        bill.GamingAmount = displayGaming;
-        bill.FoodAmount = displayFood;
-        bill.Subtotal = displayGaming + displayFood;
+
+        // Gaming and Food now hold the STICKER price, not a discount-adjusted one. The
+        // discount is its own line (DiscountAmount) rather than something folded invisibly
+        // into Gaming, which is what ProcessPaymentAsync already assumed everywhere it reads
+        // this bill: wallet deductions and GamingPortion/FoodPortion on the Payment row both
+        // prorate DiscountAmount across (GamingAmount / Subtotal) themselves. With the old
+        // fold-it-into-Gaming behaviour, a discounted bill paid by wallet had the discount
+        // subtracted TWICE - once here, once again at payment. It also means GamingAmount is
+        // always safe to read back on a second discount press: it never carries a previous
+        // discount to compound.
+        bill.GamingAmount = stickerGaming;
+        bill.FoodAmount = stickerFood;
+        bill.Subtotal = stickerGaming + stickerFood;
         bill.TotalAmount = roundedTotal;
         bill.UpdatedAt = DateTimeOffset.UtcNow;
 
         var discountGamingItem = bill.Items.FirstOrDefault(i => i.ItemType == "gaming");
         if (discountGamingItem != null)
         {
-            discountGamingItem.TotalPrice = displayGaming;
-            discountGamingItem.UnitPrice = displayGaming;
+            discountGamingItem.TotalPrice = stickerGaming;
+            discountGamingItem.UnitPrice = stickerGaming;
         }
 
         _unitOfWork.Repository<Bill>().Update(bill);
@@ -257,7 +271,7 @@ public class BillingService : IBillingService
                 Reason = dto.Reason,
                 // The figures it was actually computed against, so the amount can be checked
                 // afterwards rather than taken on trust.
-                BaseSubtotal = baseSubtotal,
+                StickerPrice = preDiscountTotal,
                 DiscountAmount = discountAmount,
                 NewTotal = roundedTotal,
             }
