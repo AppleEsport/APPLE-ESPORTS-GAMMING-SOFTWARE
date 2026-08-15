@@ -395,6 +395,9 @@ public class BranchHeartbeatService : BackgroundService
             case BranchCommands.ApplyDiscount:
                 return await RunApplyDiscountAsync(scoped, command.Payload, ct);
 
+            case BranchCommands.DeleteInventoryItem:
+                return await RunDeleteInventoryItemAsync(scoped, command.Payload, ct);
+
             default:
                 return (false, $"This branch does not know the command '{command.CommandType}' yet.");
         }
@@ -626,6 +629,75 @@ public class BranchHeartbeatService : BackgroundService
         await db.SaveChangesAsync(ct);
 
         return (true, $"{item.ItemName}: {oldStock} + {quantity} = {item.CurrentStock}.");
+    }
+
+    /// <summary>
+    /// Removes a menu item at the branch that actually holds it - see
+    /// BranchCommands.DeleteInventoryItem for why a Head Office delete has to travel here to
+    /// mean anything. Same hard-delete-or-deactivate fallback InventoryController.Delete uses
+    /// locally, so a branch cannot end up more or less deletable than Head Office is.
+    /// </summary>
+    private static async Task<(bool, string)> RunDeleteInventoryItemAsync(
+        IServiceProvider scoped, string payload, CancellationToken ct)
+    {
+        Guid inventoryItemId;
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            inventoryItemId = doc.RootElement.GetProperty("inventoryItemId").GetGuid();
+        }
+        catch
+        {
+            return (false, "The delete command arrived without a readable item id.");
+        }
+
+        var db = scoped.GetRequiredService<AppDbContext>();
+        var item = await db.Set<InventoryItem>().FirstOrDefaultAsync(i => i.Id == inventoryItemId, ct);
+
+        // Already gone at this branch - not a failure. Head Office may be closing out a
+        // command against a row the branch removed some other way in the meantime.
+        if (item is null) return (true, "This item no longer exists at this branch.");
+
+        var itemName = item.ItemName;
+        var audit = scoped.GetRequiredService<IAuditService>();
+
+        try
+        {
+            db.Remove(item);
+            await db.SaveChangesAsync(ct);
+
+            await audit.LogAsync(new AuditEntry
+            {
+                Action = AuditActions.ItemDelete,
+                UserRole = Roles.Admin,
+                UserName = "Head Office",
+                TargetType = "inventory_item",
+                TargetId = inventoryItemId,
+                BranchId = item.BranchId,
+                Details = new { itemName, permanent = true, viaRemoteCommand = true },
+            });
+
+            return (true, $"{itemName} permanently deleted.");
+        }
+        catch (Exception)
+        {
+            item.Status = FoodAvailability.Disabled;
+            item.UpdatedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync(ct);
+
+            await audit.LogAsync(new AuditEntry
+            {
+                Action = AuditActions.ItemDelete,
+                UserRole = Roles.Admin,
+                UserName = "Head Office",
+                TargetType = "inventory_item",
+                TargetId = inventoryItemId,
+                BranchId = item.BranchId,
+                Details = new { itemName, permanent = false, reason = "existing orders reference it", viaRemoteCommand = true },
+            });
+
+            return (true, $"{itemName} cannot be permanently deleted here (existing orders reference it) - deactivated instead.");
+        }
     }
 
     /// <summary>

@@ -129,6 +129,21 @@ public class InventoryController : ControllerBase
         var targetBranchId = dto.BranchId ?? Guid.Parse(HttpContext.Items["BranchId"]!.ToString()!);
         var requestedStock = 0;
 
+        // Same item, typed twice under a different case, is how this branch ended up with
+        // "Red bull" and "redbull" as two unrelated rows with two unrelated stock counts -
+        // neither aware the other existed. Checked case-insensitively, per branch, so a
+        // genuinely different branch can still stock an item under the same name.
+        var duplicate = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.InventoryItem>()
+            .Query()
+            .FirstOrDefaultAsync(i => i.BranchId == targetBranchId
+                && i.ItemName.ToLower() == dto.ItemName.Trim().ToLower());
+        if (duplicate is not null)
+        {
+            return BadRequest(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Fail(
+                $"\"{duplicate.ItemName}\" already exists on this branch's menu. Edit that item instead of adding another.",
+                "DUPLICATE_ITEM_NAME"));
+        }
+
         await _unitOfWork.BeginTransactionAsync();
         try
         {
@@ -175,6 +190,17 @@ public class InventoryController : ControllerBase
                     dto.ItemName, item.Id, requestedStock, persisted.CurrentStock,
                     targetBranchId, User.FindFirstValue(ClaimTypes.NameIdentifier));
             }
+
+            await _audit.LogAsync(new AppleEsportsErp.Application.Interfaces.AuditEntry
+            {
+                OperatorId = CurrentUserId(),
+                UserRole = User.FindFirstValue(ClaimTypes.Role) ?? Roles.Admin,
+                Action = AuditActions.ItemCreate,
+                TargetType = "inventory_item",
+                TargetId = item.Id,
+                BranchId = targetBranchId,
+                Details = new { itemName = item.ItemName, item.Category, item.Price },
+            });
 
             return Ok(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Ok(new {
                 item.Id,
@@ -297,9 +323,19 @@ public class InventoryController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Removes a menu item - permanently if nothing references it, deactivated otherwise.
+    ///
+    /// Previously deleted only Head Office's own copy. The branch's row was never told, so it
+    /// sat there untouched - and the next time anything about it changed at the counter (a
+    /// price edit, a delivery, even just its own next stock reconciliation), that untouched row
+    /// synced straight back up and un-deleted it here. "Permanently deleted" was never true for
+    /// anything requested from Head Office; this is that fix, on the same MustTravel pattern as
+    /// every other write that only the branch can actually make stick.
+    /// </summary>
     [HttpDelete("{id}")]
     [Authorize(Policy = "Dashboard:menu_editor")]
-    public async Task<IActionResult> Delete(Guid id)
+    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
         var item = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.InventoryItem>()
             .Query()
@@ -308,10 +344,49 @@ public class InventoryController : ControllerBase
         if (item == null)
             return NotFound(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Fail("Inventory item not found"));
 
+        if (_remote.MustTravel)
+        {
+            var receipt = await _remote.SendAsync(
+                item.BranchId, AppleEsportsErp.Api.Services.BranchCommands.DeleteInventoryItem,
+                new { inventoryItemId = item.Id }, CurrentUserId(), ct);
+
+            // Head Office's own copy is removed right away rather than waiting on the branch's
+            // confirmation - the branch is the one that must not resurrect it, and it cannot,
+            // once it too has been told. Leaving Head Office's copy sitting here in the
+            // meantime would only mean showing a "deleted" item for a few more seconds.
+            _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.InventoryItem>().Remove(item);
+            await _unitOfWork.SaveChangesAsync();
+
+            await _audit.LogAsync(new AppleEsportsErp.Application.Interfaces.AuditEntry
+            {
+                OperatorId = CurrentUserId(),
+                UserRole = User.FindFirstValue(ClaimTypes.Role) ?? Roles.Admin,
+                Action = AuditActions.ItemDelete,
+                TargetType = "inventory_item",
+                TargetId = item.Id,
+                BranchId = item.BranchId,
+                Details = new { itemName = item.ItemName, routedToBranch = true, receipt.BranchIsReporting },
+            });
+
+            return Ok(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Ok(new { message = receipt.Message }));
+        }
+
         try
         {
             _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.InventoryItem>().Remove(item);
             await _unitOfWork.SaveChangesAsync();
+
+            await _audit.LogAsync(new AppleEsportsErp.Application.Interfaces.AuditEntry
+            {
+                OperatorId = CurrentUserId(),
+                UserRole = User.FindFirstValue(ClaimTypes.Role) ?? Roles.Admin,
+                Action = AuditActions.ItemDelete,
+                TargetType = "inventory_item",
+                TargetId = item.Id,
+                BranchId = item.BranchId,
+                Details = new { itemName = item.ItemName, permanent = true },
+            });
+
             return Ok(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Ok(new { message = "Item deleted successfully" }));
         }
         catch (Exception)
@@ -321,6 +396,18 @@ public class InventoryController : ControllerBase
             item.UpdatedAt = DateTimeOffset.UtcNow;
             _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.InventoryItem>().Update(item);
             await _unitOfWork.SaveChangesAsync();
+
+            await _audit.LogAsync(new AppleEsportsErp.Application.Interfaces.AuditEntry
+            {
+                OperatorId = CurrentUserId(),
+                UserRole = User.FindFirstValue(ClaimTypes.Role) ?? Roles.Admin,
+                Action = AuditActions.ItemDelete,
+                TargetType = "inventory_item",
+                TargetId = item.Id,
+                BranchId = item.BranchId,
+                Details = new { itemName = item.ItemName, permanent = false, reason = "existing orders reference it" },
+            });
+
             return Ok(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Ok(new { message = "Item cannot be permanently deleted due to existing orders. It has been deactivated instead." }));
         }
     }

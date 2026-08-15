@@ -65,6 +65,16 @@ public static class AuditActions
     /// <summary>A stock delivery recorded through InventoryController.AddStock. Admin/Super Admin only.</summary>
     public const string StockAdd = "stock_add";
 
+    /// <summary>A menu item was added to the catalogue - previously unlogged entirely.</summary>
+    public const string ItemCreate = "item_create";
+
+    /// <summary>
+    /// A menu item was removed - permanently if nothing references it, deactivated otherwise.
+    /// Previously unlogged entirely, and previously never told the branch either; see
+    /// BranchCommands.DeleteInventoryItem for the other half of that fix.
+    /// </summary>
+    public const string ItemDelete = "item_delete";
+
     // System
     public const string ShiftStart = "shift_start";
     public const string ShiftEnd = "shift_end";
@@ -84,4 +94,12 @@ public static class AuditActions
     /// Reading both together answers two different questions: who asked, and what happened.
     /// </summary>
     public const string RemoteCommandIssued = "remote_command_issued";
+
+    /// <summary>
+    /// An Admin (not Super Admin, who already moved between branches freely) confirmed their
+    /// own PIN to switch into another branch's data. Access itself was never the gap - Branch
+    /// IsolationAttribute already lets Admin reach any branch - the gap was that it happened
+    /// silently. This is the accountability record: who, which branch, when.
+    /// </summary>
+    public const string BranchSwitch = "branch_switch";
 }
