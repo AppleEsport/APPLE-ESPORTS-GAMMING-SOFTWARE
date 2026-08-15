@@ -227,6 +227,13 @@ public class SyncInboxController : ControllerBase
                 await UpsertRowAsync<CustomerCredit>(held, root);
                 break;
 
+            // Bookings. Head Office's reservations screen queried an empty table until now -
+            // Reservation was never in SyncCapture's watch list, so not one booking taken at
+            // any branch had ever arrived. See SyncCapture.Watched.
+            case "reservation.changed":
+                await UpsertRowAsync<Reservation>(held, root);
+                break;
+
             // Every bill, not just the settled ones. bill.paid still carries the payment
             // itself; this carries the bill's existence, which unpaid bills never had.
             case "bill.changed":
