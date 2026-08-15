@@ -163,6 +163,24 @@ export default function UpdatesPage() {
     }
   };
 
+  // The one control on this page that can go backwards. Everything else only ever hands a
+  // branch the newest approved version — this names an exact one, older or newer, and the
+  // branch does it because Head Office said so, not because it decided to on its own.
+  const installVersion = async (branchId, version) => {
+    if (!branchId || !version) return;
+    setBusy(branchId);
+    try {
+      const res = await api.post(`/versions/branch/${branchId}/install`, { version });
+      setNotice(res.data?.data?.message || `Sent version ${version} to this branch.`);
+      setError(null);
+      await load();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Could not send that version.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <div className="space-y-5">
       <div>
@@ -202,6 +220,7 @@ export default function UpdatesPage() {
               onApprove={approve}
               onPublish={publish}
               onSetAutoUpdate={setAutoUpdate}
+              onInstallVersion={installVersion}
             />
           ) : (
             <BranchView
@@ -222,7 +241,7 @@ export default function UpdatesPage() {
 
 // ── The owner's view ──
 
-function OwnerView({ latest, branches, busy, onApprove, onPublish, onSetAutoUpdate }) {
+function OwnerView({ latest, branches, busy, onApprove, onPublish, onSetAutoUpdate, onInstallVersion }) {
   return (
     <div className="space-y-5">
       <div className="card">
@@ -299,6 +318,7 @@ function OwnerView({ latest, branches, busy, onApprove, onPublish, onSetAutoUpda
                 latest={latest}
                 busy={busy === branch.branchId}
                 onSetAutoUpdate={onSetAutoUpdate}
+                onInstallVersion={onInstallVersion}
               />
             ))}
           </div>
@@ -379,10 +399,12 @@ function PublishForm({ busy, onPublish }) {
   );
 }
 
-function BranchCard({ branch, latest, busy, onSetAutoUpdate }) {
+function BranchCard({ branch, latest, busy, onSetAutoUpdate, onInstallVersion }) {
   const total = branch.gamingPcsTotalCount || 0;
   const upToDate = branch.gamingPcsUpToDateCount || 0;
   const pct = total > 0 ? Math.round((upToDate / total) * 100) : 0;
+  const [showInstall, setShowInstall] = useState(false);
+  const [installTarget, setInstallTarget] = useState('');
 
   return (
     <div className={`bg-bg-3 border rounded-md p-4 space-y-3 ${
@@ -431,6 +453,65 @@ function BranchCard({ branch, latest, busy, onSetAutoUpdate }) {
       <p className="text-text-3 text-[11px]">
         Last heard from {when(branch.lastCheckedForUpdates) || 'never'}
       </p>
+
+      {/* The one control here that can go backwards. Kept out of the way on purpose — this is
+          for putting a branch back on an older version, not something anyone should reach for
+          without meaning to. */}
+      <div className="pt-2 border-t border-border/60">
+        {!showInstall ? (
+          <button
+            type="button"
+            onClick={() => setShowInstall(true)}
+            className="text-[11px] text-text-3 hover:text-neon-orange underline decoration-dotted decoration-text-3/50"
+          >
+            Send this branch a specific version
+          </button>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-[11px] text-text-3 leading-relaxed">
+              For putting this branch back on an older version, or ahead of what has been sent
+              to everyone. This branch will stop and restart its own services to do it.
+            </p>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={installTarget}
+                onChange={(e) => setInstallTarget(e.target.value)}
+                placeholder="2.4.8"
+                className="input font-mono text-sm flex-1 py-1.5"
+              />
+              <button
+                type="button"
+                className="btn-secondary text-xs px-3 py-1.5 shrink-0"
+                disabled={!installTarget.trim() || busy}
+                onClick={() => {
+                  const target = installTarget.trim();
+                  if (!window.confirm(
+                    `Send version ${target} to ${branch.branchName}?\n\n` +
+                    'It will download this, check it against the hash Head Office published, ' +
+                    'and install it — stopping and restarting its own services to do so.\n\n' +
+                    'If that fails partway, Head Office loses its only way to reach this branch ' +
+                    'remotely until someone is physically there, or on remote desktop to it.\n\n' +
+                    'Only continue if you mean it.'
+                  )) return;
+                  onInstallVersion(branch.branchId, target);
+                  setInstallTarget('');
+                  setShowInstall(false);
+                }}
+              >
+                Send
+              </button>
+              <button
+                type="button"
+                className="text-text-3 text-xs hover:text-text px-1"
+                onClick={() => { setShowInstall(false); setInstallTarget(''); }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -151,4 +151,14 @@ public static class BranchCommands
     public const string StartSession = "start_session";
     public const string SetPcState = "set_pc_state";
     public const string TransferSession = "transfer_session";
+
+    /// <summary>
+    /// Installs the exact version named, older or newer than what is currently running - a
+    /// person at Head Office has already decided, so this bypasses the branch's own "only
+    /// ever go forward" rule (desktop-client's UpdateService.CheckAsync), which exists for the
+    /// unattended nightly check, not for an explicit instruction. See
+    /// BranchHeartbeatService.RunInstallVersionAsync for why this is the one command capable
+    /// of cutting off the very channel that carries it, if it goes wrong.
+    /// </summary>
+    public const string InstallVersion = "install_version";
 }
