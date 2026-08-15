@@ -69,11 +69,16 @@ public class BillingService : IBillingService
 
     public async Task<PaginatedResult<BillDto>> GetActiveBillsAsync(Guid branchId, int page = 1, int pageSize = 50)
     {
+        // Pending only, not "not Completed" - Voided is neither. A voided bill is dead, not
+        // owed; != Completed swept it back into the counter's unpaid list right alongside
+        // bills that genuinely need collecting, which is exactly backwards from why a bill
+        // gets voided in the first place. Confirmed live: a bill voided as unrecoverable test
+        // data kept showing up here as if it still needed action.
         var query = _unitOfWork.Repository<Bill>().Query()
             .Include(b => b.Items)
             .Include(b => b.Payments)
             .Include(b => b.Pc)
-            .Where(b => b.BranchId == branchId && b.Status != BillStatus.Completed)
+            .Where(b => b.BranchId == branchId && b.Status == BillStatus.Pending)
             .OrderByDescending(b => b.CreatedAt);
 
         var total = await query.CountAsync();
