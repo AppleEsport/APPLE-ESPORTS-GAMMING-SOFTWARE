@@ -1493,12 +1493,37 @@ public class AuthService : IAuthService
 
     public async Task ConfirmBranchSwitchAsync(Guid userId, string pin, Guid? branchId)
     {
+        // Two separate tables can carry Admin-level access, the same split
+        // AdminSwitchInAsync already has to bridge: a genuine Users-table Admin/Super
+        // Admin, or an Operator promoted with IsGlobalAdmin (managed from the Operators
+        // tab, not the Admins list - "Ankur" and "Nazmin" are this kind, not the other).
+        // Checking Users alone meant a promoted operator's PIN was never going to match
+        // anything and every branch switch they tried would fail outright, which is worse
+        // than the silent-switch behaviour this endpoint exists to replace.
+        Guid actorId; string actorRole; string actorName; string? storedPin;
+
         var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId
             && (u.Role == Roles.Admin || u.Role == Roles.SuperAdmin));
-        if (user is null)
-            throw new AuthenticationException("Admin not found.", "INVALID_ADMIN");
+        if (user is not null)
+        {
+            actorId = user.Id;
+            actorRole = user.Role;
+            actorName = user.FullName;
+            storedPin = user.AccessPin;
+        }
+        else
+        {
+            var op = await _db.Operators.FirstOrDefaultAsync(o => o.Id == userId && o.IsGlobalAdmin);
+            if (op is null)
+                throw new AuthenticationException("Admin not found.", "INVALID_ADMIN");
 
-        if (string.IsNullOrEmpty(user.AccessPin) || user.AccessPin != pin)
+            actorId = op.Id;
+            actorRole = Roles.Admin;
+            actorName = op.FullName;
+            storedPin = op.AccessPin;
+        }
+
+        if (string.IsNullOrEmpty(storedPin) || storedPin != pin)
             throw new AuthenticationException("Invalid PIN.", "INVALID_PIN");
 
         string? branchName = branchId is { } bId
@@ -1507,9 +1532,9 @@ public class AuthService : IAuthService
 
         await _audit.LogAsync(new AuditEntry
         {
-            UserId = user.Id,
-            UserRole = user.Role,
-            UserName = user.FullName,
+            UserId = actorId,
+            UserRole = actorRole,
+            UserName = actorName,
             Action = AuditActions.BranchSwitch,
             BranchId = branchId,
             BranchName = branchName,
