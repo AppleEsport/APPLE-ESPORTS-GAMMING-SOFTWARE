@@ -321,6 +321,24 @@ export default function BillingCounterPage() {
             <BillDetailsPanel
               bill={selectedBillData}
               onBillUpdate={(updated) => {
+                // From Head Office this is not the updated bill - applyDiscount/processPayment
+                // routed to the branch instead, so what comes back is a queue receipt
+                // ({ queued: true, message, ... }) with no bill fields at all. Refetching with
+                // its non-existent `id` silently did nothing, which is why the discount badge
+                // showed "applied" while the total on screen never actually moved: the branch
+                // had not carried it out yet, and nothing ever asked it again once it had.
+                if (updated?.queued) {
+                  toast.success(updated.message || 'Sent to the branch. It applies this within a few seconds.');
+                  const billId = selectedItem?.id;
+                  if (billId) {
+                    // The branch's own confirmation does not push anything back to this screen
+                    // (Head Office only learns of it on the branch's next sync), so this polls
+                    // for the real total rather than waiting for a push that never comes.
+                    setTimeout(() => fetchBillDetails(billId), 4000);
+                    setTimeout(() => fetchBillDetails(billId), 9000);
+                  }
+                  return;
+                }
                 fetchBillDetails(updated.id);
                 fetchDashboardData();
               }}
