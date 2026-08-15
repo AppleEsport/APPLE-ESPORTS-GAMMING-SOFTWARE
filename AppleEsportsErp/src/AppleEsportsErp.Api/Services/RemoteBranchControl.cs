@@ -153,6 +153,26 @@ public static class BranchCommands
     public const string TransferSession = "transfer_session";
 
     /// <summary>
+    /// Money collected at Head Office on the customer's behalf, credited to the branch's own
+    /// till. The bill lives in both databases, but only the branch's copy is the one its
+    /// counter reads and its cash register reconciles against - so paying Head Office's copy
+    /// settles nothing, leaves the PC locked on Billing, and invites the operator to take the
+    /// money a second time. See BranchHeartbeatService.RunProcessPaymentAsync.
+    /// </summary>
+    public const string ProcessPayment = "process_payment";
+
+    /// <summary>
+    /// A PC taken out of service, or put back, WITH the reason and resolution notes that make
+    /// the maintenance log worth reading.
+    ///
+    /// Distinct from <see cref="SetPcState"/> on purpose. That one carries a bare state and
+    /// refuses outright while a PC is Active or AwaitingBilling; this one is what the
+    /// maintenance screens actually use, and it has to carry who said what and why, because a
+    /// MaintenanceLog row without a reason is no better than the flag itself.
+    /// </summary>
+    public const string SetMaintenance = "set_maintenance";
+
+    /// <summary>
     /// Installs the exact version named, older or newer than what is currently running - a
     /// person at Head Office has already decided, so this bypasses the branch's own "only
     /// ever go forward" rule (desktop-client's UpdateService.CheckAsync), which exists for the
@@ -161,4 +181,13 @@ public static class BranchCommands
     /// of cutting off the very channel that carries it, if it goes wrong.
     /// </summary>
     public const string InstallVersion = "install_version";
+
+    /// <summary>
+    /// A stock delivery, told to the branch rather than typed into a number that would only
+    /// ever be overwritten. See InventoryController.AddStock for why this exists at all: Head
+    /// Office cannot know a shelf's real count, only the branch standing in front of it can -
+    /// so this carries how many units arrived, not what the total should now read, and the
+    /// branch adds that to whatever it already honestly has.
+    /// </summary>
+    public const string AdjustStock = "adjust_stock";
 }

@@ -1371,6 +1371,17 @@ public class AuthService : IAuthService
         string? adminDashboardPermissions;
         UserStatus adminStatus;
 
+        // The role this person actually holds, carried through to the token below.
+        //
+        // This used to be hardcoded to Roles.Admin for everybody who elevated, including a
+        // genuine Super Admin - so PIN-elevating at the counter silently demoted them. It is
+        // not a cosmetic claim: Super Admins carry no dashboardPermissions (they are not
+        // permission-gated, they are Super Admin), so arriving as "admin" with no permissions
+        // meant every endpoint that admits SuperAdmin-or-a-named-permission refused them.
+        // The discount button was the visible symptom - an empty 403, which the client renders
+        // as "Failed to apply discount" with no clue why.
+        string adminRole;
+
         // 1. Try to find an Admin or SuperAdmin in the Users table
         var adminUser = await _db.Users.FirstOrDefaultAsync(u => u.Id == dto.AdminId && (u.Role == Roles.Admin || u.Role == Roles.SuperAdmin));
         if (adminUser != null)
@@ -1382,6 +1393,7 @@ public class AuthService : IAuthService
             adminFullName = adminUser.FullName;
             adminDashboardPermissions = adminUser.DashboardPermissions;
             adminStatus = adminUser.Status;
+            adminRole = adminUser.Role;
         }
         else
         {
@@ -1395,6 +1407,8 @@ public class AuthService : IAuthService
                 adminFullName = adminOp.FullName;
                 adminDashboardPermissions = adminOp.DashboardPermissions;
                 adminStatus = adminOp.Status == OperatorStatus.Active ? UserStatus.Active : UserStatus.Disabled;
+                // A promoted operator really is an Admin, not a Super Admin.
+                adminRole = Roles.Admin;
             }
             else
             {
@@ -1413,7 +1427,7 @@ public class AuthService : IAuthService
         var claims = new Dictionary<string, string>
         {
             [ClaimTypes.NameIdentifier] = adminId.ToString(),
-            [ClaimTypes.Role] = Roles.Admin,
+            [ClaimTypes.Role] = adminRole,
             [ClaimTypes.Name] = adminFullName,
             ["originalOperatorId"] = shift.OperatorId.ToString(),
             ["shiftId"] = shift.Id.ToString(),
@@ -1431,7 +1445,7 @@ public class AuthService : IAuthService
         await _audit.LogAsync(new AuditEntry
         {
             UserId = adminId,
-            UserRole = Roles.Admin,
+            UserRole = adminRole,
             UserName = adminFullName,
             OperatorId = shift.OperatorId, // associate with the operator
             Action = AuditActions.AdminSwitchIn,
@@ -1445,7 +1459,10 @@ public class AuthService : IAuthService
                 Id = adminId,
                 FullName = adminFullName,
                 Email = adminFullName, // Set email to full name as fallback
-                Role = Roles.Admin,
+                // Must match the token's role claim. The client decides what to render from
+                // this; the server decides what to allow from the claim. Two different answers
+                // is how you get a button that is offered and then refused.
+                Role = adminRole,
                 BranchId = shift.BranchId,
                 BranchName = shift.Operator.Branch.Name,
                 ShiftId = shift.Id,

@@ -16,19 +16,29 @@ namespace AppleEsportsErp.Api.Services;
 ///
 /// Without this, elapsed time is pure wall-clock subtraction, so a thirty-minute
 /// power cut silently eats thirty minutes of a customer's paid session.
+///
+/// Branch-only, and this one matters more than most. At Head Office it was stamping every
+/// branch's sessions with Head Office's OWN liveness - so a branch that lost power for half an
+/// hour still had an unbroken run of "system was alive" stamps written for it from Surat. The
+/// gap SessionDowntimeRecovery looks for was being filled in by the wrong machine, and the
+/// customer was billed for the power cut after all. See BranchOnlyBackgroundService.
 /// </summary>
-public class SessionHeartbeatService : BackgroundService
+public class SessionHeartbeatService : BranchOnlyBackgroundService
 {
     private readonly IServiceProvider _services;
     private readonly ILogger<SessionHeartbeatService> _logger;
 
-    public SessionHeartbeatService(IServiceProvider services, ILogger<SessionHeartbeatService> logger)
+    public SessionHeartbeatService(
+        IServiceProvider services,
+        ILogger<SessionHeartbeatService> logger,
+        IConfiguration configuration)
+        : base(configuration, logger)
     {
         _services = services;
         _logger = logger;
     }
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task RunAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation(
             "SessionHeartbeatService starting (every {Interval}s).",

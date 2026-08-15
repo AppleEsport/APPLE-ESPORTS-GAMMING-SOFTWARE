@@ -14,18 +14,26 @@ using System.Threading.Tasks;
 
 namespace AppleEsportsErp.Api.Services;
 
-public class DeferredBillingMonitorService : BackgroundService
+/// <summary>
+/// Branch-only: it acts on live bills, and at Head Office the only bills are copies of four
+/// other shops'. See BranchOnlyBackgroundService.
+/// </summary>
+public class DeferredBillingMonitorService : BranchOnlyBackgroundService
 {
     private readonly IServiceProvider _services;
     private readonly ILogger<DeferredBillingMonitorService> _logger;
 
-    public DeferredBillingMonitorService(IServiceProvider services, ILogger<DeferredBillingMonitorService> logger)
+    public DeferredBillingMonitorService(
+        IServiceProvider services,
+        ILogger<DeferredBillingMonitorService> logger,
+        IConfiguration configuration)
+        : base(configuration, logger)
     {
         _services = services;
         _logger = logger;
     }
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task RunAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("DeferredBillingMonitorService is starting.");
 

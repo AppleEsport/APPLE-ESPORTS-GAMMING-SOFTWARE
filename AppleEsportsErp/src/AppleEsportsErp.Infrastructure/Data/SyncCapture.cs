@@ -99,6 +99,23 @@ public static class SyncCapture
         // back down - the config reply carries catalogue fields only - so Head Office cannot
         // restock a branch that has just sold out.
         [typeof(InventoryItem)] = "inventory_item",
+
+        // Reservations, which had never travelled at all.
+        //
+        // This was reported as "reservations are broken on the Head Office panel", and the
+        // suspicion was a wrong query. The query was fine. The table was empty: no reservation
+        // taken at any branch, ever, had reached Head Office, because Reservation was simply
+        // not in this list. Head Office was correctly reporting what it had, which was nothing.
+        //
+        // A booking is a promise made to a customer that occupies a machine and often carries a
+        // deposit, so an owner who cannot see the day's bookings cannot see what the shop has
+        // already committed to - or reconcile a deposit that was taken against a PC that was
+        // held empty for it.
+        //
+        // Snapshot-shaped like the rest: a booking is created, then cancelled, started or
+        // overridden, so it is the current row that matters and a late-arriving update is
+        // resolved the same "newest wins" way as everything else here.
+        [typeof(Reservation)] = "reservation",
     };
 
     /// <summary>

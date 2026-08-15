@@ -63,7 +63,7 @@ export default function PcDetailPanel({
   onStartReservedSession, onOverrideReservation, onApproveWalkin, onDeclineWalkin,
   onFlagMaintenance, onCreditClick,
 }) {
-  const { user } = useAuth();
+  const { user, canApplyDiscount } = useAuth();
   const navigate = useNavigate();
   const toast = useToast();
   const elapsed = useElapsedTime(pc?.sessionStartTime);
@@ -285,7 +285,9 @@ export default function PcDetailPanel({
                 onClick={() => navigate('/app/food-orders', { state: { autoSelectPcId: pc.id } })}
                 small
               />
-              {user?.role === 'super_admin' || (user?.role === 'admin' && user?.dashboardPermissions?.discount === true) ? (
+              {/* Same rule as the billing counter's discount chips and as the server's
+                  own check, expressed once in AuthContext rather than copied per screen. */}
+              {canApplyDiscount() ? (
                 <ActionBtn
                   color="purple"
                   icon={<Gift className="w-3 h-3" />}

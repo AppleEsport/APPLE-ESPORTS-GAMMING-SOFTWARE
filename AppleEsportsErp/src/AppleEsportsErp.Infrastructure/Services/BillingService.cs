@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Billing;
 using AppleEsportsErp.Application.DTOs.Common;
@@ -6,6 +7,7 @@ using AppleEsportsErp.Application.Exceptions;
 using AppleEsportsErp.Application.Interfaces;
 using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
+using AppleEsportsErp.Infrastructure.Configuration;
 
 namespace AppleEsportsErp.Infrastructure.Services;
 
@@ -16,19 +18,44 @@ public class BillingService : IBillingService
     private readonly IHubNotificationService _hubNotification;
     private readonly IWalletService _walletService;
     private readonly IOutboxService _outbox;
+    private readonly IConfiguration _configuration;
 
     public BillingService(
         IUnitOfWork unitOfWork,
         IAuditService auditService,
         IHubNotificationService hubNotification,
         IWalletService walletService,
-        IOutboxService outbox)
+        IOutboxService outbox,
+        IConfiguration configuration)
     {
         _unitOfWork = unitOfWork;
         _auditService = auditService;
         _hubNotification = hubNotification;
         _walletService = walletService;
         _outbox = outbox;
+        _configuration = configuration;
+    }
+
+    /// <summary>
+    /// A payment taken here and nowhere else. Head Office holds a synced copy of every branch's
+    /// bills, and writing "paid" into that copy is easy and looks correct immediately - the
+    /// screen updates, the audit log gets an entry - but the branch that actually has the
+    /// customer, the till and the cash was never told. Its own register stays uncredited and its
+    /// PC stays locked showing Billing, forever, because nothing there ever changed. Same reason
+    /// SessionService refuses to start/stop a session directly at Head Office: see
+    /// BillingController.ProcessPayment for the branch-command instruction this sends instead.
+    /// </summary>
+    private void RefuseIfHeadOffice(string what)
+    {
+        if (!_configuration.IsHeadOffice()) return;
+
+        throw new AppException(
+            $"This bill has to be {what} by the branch itself, not written here at Head Office - " +
+            "a payment written here is invisible to the counter, so the register is never credited " +
+            "and the PC never frees up. Send it as an instruction instead (api/bills/{id}/pay) and " +
+            "the branch will carry it out within a few seconds and report back.",
+            System.Net.HttpStatusCode.BadRequest,
+            "BRANCH_ONLY_OPERATION");
     }
 
     public async Task<PaginatedResult<BillDto>> GetActiveBillsAsync(Guid branchId, int page = 1, int pageSize = 50)
@@ -104,87 +131,153 @@ public class BillingService : IBillingService
             decimal elapsedMinutes = (decimal)(DateTimeOffset.UtcNow - bill.Session.StartTime).TotalMinutes;
             decimal liveGamingAmount = Application.Services.SessionPricingCalculator.CalculateGamingAmount(ratePerHour, bufferMinutes, elapsedMinutes);
 
-            var (displayGaming, displayFood, roundedTotal) = Application.Services.SessionPricingCalculator.ComputeRoundedBreakdown(
-                liveGamingAmount, dto.FoodAmount, dto.DiscountAmount);
+            // The sticker price first — what the customer sees with no discount — THEN the
+            // discount comes off that. See ApplyDiscountAsync for why: rounding the raw
+            // elapsed-time figure and the discount together in one step is what let a real
+            // discount vanish back into the nearest ₹10.
+            var (stickerGaming, stickerFood, preDiscountTotal) = Application.Services.SessionPricingCalculator.ComputeRoundedBreakdown(
+                liveGamingAmount, dto.FoodAmount, 0m);
 
-            dto.GamingAmount = displayGaming;
-            dto.Subtotal = displayGaming + displayFood;
-            dto.TotalAmount = roundedTotal;
+            decimal discount = Math.Min(dto.DiscountAmount, preDiscountTotal);
+            decimal total = Math.Max(0m, Math.Round(preDiscountTotal - discount, 2));
+
+            dto.GamingAmount = stickerGaming;
+            dto.Subtotal = stickerGaming + stickerFood;
+            dto.TotalAmount = total;
 
             var gamingItem = dto.Items.FirstOrDefault(i => i.ItemType == "gaming");
             if (gamingItem != null)
             {
-                gamingItem.UnitPrice = displayGaming;
-                gamingItem.TotalPrice = displayGaming;
+                gamingItem.UnitPrice = stickerGaming;
+                gamingItem.TotalPrice = stickerGaming;
             }
         }
 
         return dto;
     }
 
-    public async Task<BillDto> ApplyDiscountAsync(Guid branchId, Guid superAdminId, Guid id, ApplyDiscountDto dto)
+    public async Task<BillDto> ApplyDiscountAsync(Guid branchId, Guid actorId, string actorRole, Guid id, ApplyDiscountDto dto)
     {
+        RefuseIfHeadOffice("discounted");
+
         var bill = await _unitOfWork.Repository<Bill>().Query()
             .Include(b => b.Items)
             .Include(b => b.Payments)
-            .Include(b => b.Pc)
+            .Include(b => b.Pc).ThenInclude(p => p!.PricingProfile)
+            .Include(b => b.Session)
             .FirstOrDefaultAsync(b => b.Id == id && b.BranchId == branchId)
             ?? throw new NotFoundException("Bill not found.");
 
         if (bill.Status == BillStatus.Completed)
             throw new AppException("Cannot apply discount to a completed bill.");
 
-        decimal discountAmount = 0;
-        if (dto.DiscountType == DiscountType.Percentage)
+        // The sticker price — what the customer would pay with NO discount — rounded to the
+        // nearest ₹10 first, on its own, before the discount ever enters the arithmetic.
+        //
+        // This used to compute the discount off the raw, un-rounded elapsed-time figure and
+        // let the rounding and the discount happen in the same step. For an 11-minute session
+        // at ₹60/hr that raw figure is ₹11, which itself rounds down to the ₹10 everyone
+        // already sees on screen — so a 10% discount, ~₹1, was being taken off ₹11 (giving
+        // ₹9.90), and THEN the final total was rounded to the nearest ₹10 again — and ₹9.90
+        // rounds straight back UP to ₹10. The discount was computed correctly and then
+        // erased by the very next line. Any discount smaller than about ₹5 on a small bill
+        // disappeared completely; the customer could watch a 10% discount change nothing.
+        //
+        // Rounding the sticker FIRST fixes both halves at once: the discount is now taken off
+        // the ₹10 a customer can actually see and be shown reduced, and the result is never
+        // rounded to the nearest ₹10 a second time — only to the nearest paisa, because a
+        // deliberate discount is a precise figure an admin chose, not a cash-drawer
+        // convenience to be smoothed away.
+        //
+        // Recomputed from elapsed time on every call rather than trusted from storage, so a
+        // second press is never discounting an already-discounted number — see the note on
+        // GamingAmount below for why storage is safe to read once a discount also stops
+        // hiding inside it.
+        decimal rawGaming = bill.GamingAmount;
+        if (bill.Session != null && bill.Session.State == Domain.Enums.SessionState.Active)
         {
-            discountAmount = bill.Subtotal * (dto.DiscountValue / 100);
-        }
-        else if (dto.DiscountType == DiscountType.Flat)
-        {
-            discountAmount = dto.DiscountValue;
+            decimal ratePerHour = bill.Pc?.PricingProfile?.BaseHourlyRate
+                ?? Application.Services.SessionPricingCalculator.DefaultRatePerHour;
+            int bufferMinutes = bill.Pc?.PricingProfile?.BufferMinutes
+                ?? Application.Services.SessionPricingCalculator.DefaultBufferMinutes;
+            decimal elapsedMinutes = (decimal)(DateTimeOffset.UtcNow - bill.Session.StartTime).TotalMinutes;
+            rawGaming = Application.Services.SessionPricingCalculator.CalculateGamingAmount(
+                ratePerHour, bufferMinutes, elapsedMinutes);
         }
 
-        if (discountAmount > bill.Subtotal)
-            throw new AppException("Discount amount cannot exceed bill subtotal.");
+        var (stickerGaming, stickerFood, preDiscountTotal) = Application.Services.SessionPricingCalculator.ComputeRoundedBreakdown(
+            rawGaming, bill.FoodAmount, 0m);
 
-        // Discount is an explicit, deliberate figure the admin chose — keep it exact.
-        // The Gaming line (derived, not a fixed price) absorbs any rounding instead.
-        var (displayGaming, displayFood, roundedTotal) = Application.Services.SessionPricingCalculator.ComputeRoundedBreakdown(
-            bill.GamingAmount, bill.FoodAmount, discountAmount);
+        decimal discountAmount = dto.DiscountType == DiscountType.Percentage
+            ? preDiscountTotal * (dto.DiscountValue / 100m)
+            : dto.DiscountValue;
+
+        if (discountAmount > preDiscountTotal)
+            throw new AppException("Discount amount cannot exceed the bill's total.");
+
+        decimal roundedTotal = Math.Max(0m, Math.Round(preDiscountTotal - discountAmount, 2));
 
         bill.DiscountType = dto.DiscountType;
         bill.DiscountValue = dto.DiscountValue;
         bill.DiscountAmount = discountAmount;
-        bill.DiscountBy = superAdminId;
+        bill.DiscountBy = actorId;
         bill.DiscountReason = dto.Reason;
-        bill.GamingAmount = displayGaming;
-        bill.FoodAmount = displayFood;
-        bill.Subtotal = displayGaming + displayFood;
+
+        // Gaming and Food now hold the STICKER price, not a discount-adjusted one. The
+        // discount is its own line (DiscountAmount) rather than something folded invisibly
+        // into Gaming, which is what ProcessPaymentAsync already assumed everywhere it reads
+        // this bill: wallet deductions and GamingPortion/FoodPortion on the Payment row both
+        // prorate DiscountAmount across (GamingAmount / Subtotal) themselves. With the old
+        // fold-it-into-Gaming behaviour, a discounted bill paid by wallet had the discount
+        // subtracted TWICE - once here, once again at payment. It also means GamingAmount is
+        // always safe to read back on a second discount press: it never carries a previous
+        // discount to compound.
+        bill.GamingAmount = stickerGaming;
+        bill.FoodAmount = stickerFood;
+        bill.Subtotal = stickerGaming + stickerFood;
         bill.TotalAmount = roundedTotal;
         bill.UpdatedAt = DateTimeOffset.UtcNow;
 
         var discountGamingItem = bill.Items.FirstOrDefault(i => i.ItemType == "gaming");
         if (discountGamingItem != null)
         {
-            discountGamingItem.TotalPrice = displayGaming;
-            discountGamingItem.UnitPrice = displayGaming;
+            discountGamingItem.TotalPrice = stickerGaming;
+            discountGamingItem.UnitPrice = stickerGaming;
         }
 
         _unitOfWork.Repository<Bill>().Update(bill);
 
         await _auditService.LogAsync(new AuditEntry
         {
-            OperatorId = superAdminId,
-            UserRole = Roles.SuperAdmin, // Must be SuperAdmin
-            UserName = "System",
+            // Whoever actually pressed it. This said UserName = "System" and hardcoded the role
+            // to SuperAdmin, so the audit trail recorded every discount as having been applied
+            // by nobody in particular - on the one action in this system most likely to be
+            // questioned later. The id was always here; only the name and role were invented.
+            // Both, because the actor may live in either table - a branch Admin is an
+            // operator row, a Super Admin is a user row - and AuditService resolves the
+            // real name from whichever one matches.
+            OperatorId = actorId,
+            UserId = actorId,
+            UserRole = actorRole,
+            UserName = string.Empty,
             Action = AuditActions.DiscountApply,
             BranchId = branchId,
             TargetType = "bill",
             TargetId = bill.Id,
-            Details = new { DiscountType = dto.DiscountType.ToString(), Value = dto.DiscountValue, Reason = dto.Reason }
+            Details = new
+            {
+                DiscountType = dto.DiscountType.ToString(),
+                Value = dto.DiscountValue,
+                Reason = dto.Reason,
+                // The figures it was actually computed against, so the amount can be checked
+                // afterwards rather than taken on trust.
+                StickerPrice = preDiscountTotal,
+                DiscountAmount = discountAmount,
+                NewTotal = roundedTotal,
+            }
         });
 
-        await _unitOfWork.CommitTransactionAsync();
+        await _unitOfWork.SaveChangesAsync();
         await _hubNotification.BroadcastBillingUpdateAsync(branchId, bill.Id);
 
         return MapToDto(bill);
@@ -192,6 +285,8 @@ public class BillingService : IBillingService
 
     public async Task<BillDto> ProcessPaymentAsync(Guid branchId, Guid operatorId, Guid shiftId, Guid id, ProcessPaymentDto dto)
     {
+        RefuseIfHeadOffice("paid");
+
         await _unitOfWork.BeginTransactionAsync();
         try
         {
@@ -427,7 +522,20 @@ public class BillingService : IBillingService
                 BranchId = branchId,
                 TargetType = "bill",
                 TargetId = bill.Id,
-                Details = new { PaymentType = dto.PaymentType.ToString(), Total = totalPayment, Cash = dto.CashAmount }
+                // Every leg, not just cash. This used to read
+                // `new { PaymentType, Total, Cash }`, so a Split of Rs 5 cash + Rs 5 online
+                // was recorded as "Split, Total 10, Cash 5" and the other Rs 5 simply was not
+                // there. Anyone reading the audit trail to settle a dispute could see the
+                // money was short and nothing saying where it went.
+                Details = new
+                {
+                    PaymentType = dto.PaymentType.ToString(),
+                    Total = totalPayment,
+                    Cash = dto.CashAmount,
+                    Online = dto.OnlineAmount,
+                    Wallet = dto.WalletAmount,
+                    Credit = dto.CreditAmount,
+                }
             });
 
             await _auditService.LogAsync(new AuditEntry
@@ -453,7 +561,17 @@ public class BillingService : IBillingService
                 operatorId,
                 shiftId,
                 paymentType = dto.PaymentType.ToString(),
+                // Each leg travels as itself. Only cashAmount used to go up, and Head Office
+                // reconstructed the rest as `totalPaid - cash`, guessing from the payment type
+                // whether that remainder was online or wallet. For a Split it could only ever
+                // guess one of them, so a Rs 5 + Rs 5 split arrived as a bill Head Office
+                // recorded as Rs 10 cash - overstating the drawer and losing the online
+                // settlement, on every split bill the company has ever taken.
                 cashAmount = dto.CashAmount,
+                onlineAmount = dto.OnlineAmount,
+                walletAmount = dto.WalletAmount,
+                creditAmount = dto.CreditAmount,
+                actualCashCollected,
                 totalPaid = totalPayment,
                 gamingAmount = bill.GamingAmount,
                 foodAmount = bill.FoodAmount,

@@ -16,6 +16,7 @@ import ShiftGapModal from '../shift/ShiftGapModal';
 import ShiftTakeoverModal from '../shift/ShiftTakeoverModal';
 import GlobalFoodOrderListener from './GlobalFoodOrderListener';
 import GlobalNotificationListener from './GlobalNotificationListener';
+import BranchConflictBanner from './BranchConflictBanner';
 
 const SIDEBAR_WIDTH_KEY = 'sidebar_width';
 const SIDEBAR_COLLAPSED_KEY = 'sidebar_collapsed';
@@ -173,9 +174,15 @@ export default function AppShell() {
         <main className="flex-1 min-w-0 overflow-auto">
           <div className="p-3 sm:p-4 max-w-[1600px]">
             {!pendingTakeover && (
-              <BranchRequired>
-                <Outlet />
-              </BranchRequired>
+              <>
+                {/* Above the page, on every page. While two PCs are both claiming one
+                    branch, every figure below this line is unreliable — and which screen
+                    you happen to be on has nothing to do with whether you need to know. */}
+                <BranchConflictBanner />
+                <BranchRequired>
+                  <Outlet />
+                </BranchRequired>
+              </>
             )}
           </div>
         </main>
