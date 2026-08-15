@@ -35,6 +35,28 @@ function when(value) {
   });
 }
 
+/**
+ * -1 if a is older than b, 0 if equal, 1 if a is newer. Never throws — a version this page
+ * cannot parse compares as equal, which is the safe direction: it falls back to "nothing to
+ * do" rather than claiming a direction that might be wrong.
+ *
+ * Exists because "different" and "newer" were being treated as the same question. A branch
+ * running something newer than what Head Office currently offers (sent to it directly, then
+ * rolled back for everyone else) is not the same situation as one that is behind, and this
+ * page used to show the same "Update waiting" banner and "Install now" button for both —
+ * which, for the first case, pressed and did nothing.
+ */
+function compareVersions(a, b) {
+  if (!a || !b) return 0;
+  const pa = String(a).split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b).split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pa[i] || 0) - (pb[i] || 0);
+    if (diff !== 0) return diff > 0 ? 1 : -1;
+  }
+  return 0;
+}
+
 /** The stages a branch can report, and what to actually say to a human about each. */
 const STAGES = {
   downloading: { label: 'Downloading the update', tone: 'accent', done: false },
@@ -472,14 +494,25 @@ function BranchCard({ branch, latest, busy, onSetAutoUpdate, onInstallVersion })
   const [showInstall, setShowInstall] = useState(false);
   const [installTarget, setInstallTarget] = useState('');
 
+  // The server's own updateAvailable only checks "different", not "newer" - correct here
+  // rather than there, since this is display only and nothing downstream gates on it. A
+  // branch sent a version directly (see the control below) and later left behind when that
+  // version was rolled back for everyone else is ahead, not waiting - it should never show
+  // the same orange "Update waiting" badge as a branch that is genuinely behind.
+  const aheadOfOffered = branch.updateAvailable && branch.latestApprovedVersion
+    && compareVersions(branch.latestApprovedVersion, branch.currentVersion) < 0;
+  const genuinelyWaiting = branch.updateAvailable && !aheadOfOffered;
+
   return (
     <div className={`bg-bg-3 border rounded-md p-4 space-y-3 ${
-      branch.updateAvailable ? 'border-neon-orange/50' : 'border-border'
+      genuinelyWaiting ? 'border-neon-orange/50' : 'border-border'
     }`}>
       <div className="flex items-start justify-between gap-2">
         <h3 className="font-heading font-bold">{branch.branchName}</h3>
-        {branch.updateAvailable ? (
+        {genuinelyWaiting ? (
           <span className="badge badge-awaiting">Update waiting</span>
+        ) : aheadOfOffered ? (
+          <span className="badge badge-awaiting">Ahead of offered</span>
         ) : (
           <span className="badge badge-active">Up to date</span>
         )}
@@ -487,7 +520,7 @@ function BranchCard({ branch, latest, busy, onSetAutoUpdate, onInstallVersion })
 
       <div className="flex items-center gap-2 font-mono text-sm">
         <span>{branch.currentVersion || '—'}</span>
-        {branch.updateAvailable && branch.latestApprovedVersion && (
+        {genuinelyWaiting && branch.latestApprovedVersion && (
           <>
             <span className="text-text-3">→</span>
             <span className="text-neon-orange">{branch.latestApprovedVersion}</span>
@@ -591,7 +624,17 @@ function BranchView({ latest, release, branch, busy, onSetAutoUpdate }) {
   // against this branch's own database — a copy that never learns about anything new — so the
   // page reported "nothing to do" for a version it had simply never been told about.
   const offered = release?.available ? release.version : null;
-  const updateWaiting = !!offered && offered !== current;
+
+  // Not "different" — "newer". A branch can end up running something newer than what Head
+  // Office currently offers (a version sent to it directly and later rolled back for
+  // everyone else), and the branch's own updater refuses on principle to install anything
+  // that isn't strictly newer than what it already has (UpdateService.CheckAsync). This page
+  // used to show "Update waiting" and an "Install now" button for that case too, which pressed
+  // and did nothing — the button called the same refusal, silently. It looked like it worked.
+  // It did not.
+  const comparison = offered && current ? compareVersions(offered, current) : 0;
+  const updateWaiting = !!offered && comparison > 0;
+  const branchIsAhead = !!offered && comparison < 0;
 
   // Only inside the desktop app is there something able to install. In an ordinary browser
   // there is not, so the button is not offered rather than offered and doing nothing.
@@ -639,7 +682,17 @@ function BranchView({ latest, release, branch, busy, onSetAutoUpdate }) {
           </div>
         )}
 
-        {!updateWaiting && current && release && (
+        {branchIsAhead && (
+          <p className="text-text-2 text-sm mt-4">
+            This branch is running <span className="font-mono">{current}</span>, ahead of{' '}
+            <span className="font-mono">{offered}</span> — the version currently offered for
+            new installs. There is nothing to do here. If this branch needs to go back to an
+            older version, that has to be sent from Head Office directly; this screen cannot do
+            it, and pressing anything below will not either.
+          </p>
+        )}
+
+        {!updateWaiting && !branchIsAhead && current && release && (
           <p className="text-text-2 text-sm mt-4">
             This branch has the newest version. There is nothing to do.
           </p>
