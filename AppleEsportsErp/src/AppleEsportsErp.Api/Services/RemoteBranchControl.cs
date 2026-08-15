@@ -153,6 +153,15 @@ public static class BranchCommands
     public const string TransferSession = "transfer_session";
 
     /// <summary>
+    /// Money collected at Head Office on the customer's behalf, credited to the branch's own
+    /// till. The bill lives in both databases, but only the branch's copy is the one its
+    /// counter reads and its cash register reconciles against - so paying Head Office's copy
+    /// settles nothing, leaves the PC locked on Billing, and invites the operator to take the
+    /// money a second time. See BranchHeartbeatService.RunProcessPaymentAsync.
+    /// </summary>
+    public const string ProcessPayment = "process_payment";
+
+    /// <summary>
     /// Installs the exact version named, older or newer than what is currently running - a
     /// person at Head Office has already decided, so this bypasses the branch's own "only
     /// ever go forward" rule (desktop-client's UpdateService.CheckAsync), which exists for the

@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Billing;
 using AppleEsportsErp.Application.DTOs.Common;
@@ -6,6 +7,7 @@ using AppleEsportsErp.Application.Exceptions;
 using AppleEsportsErp.Application.Interfaces;
 using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
+using AppleEsportsErp.Infrastructure.Configuration;
 
 namespace AppleEsportsErp.Infrastructure.Services;
 
@@ -16,19 +18,44 @@ public class BillingService : IBillingService
     private readonly IHubNotificationService _hubNotification;
     private readonly IWalletService _walletService;
     private readonly IOutboxService _outbox;
+    private readonly IConfiguration _configuration;
 
     public BillingService(
         IUnitOfWork unitOfWork,
         IAuditService auditService,
         IHubNotificationService hubNotification,
         IWalletService walletService,
-        IOutboxService outbox)
+        IOutboxService outbox,
+        IConfiguration configuration)
     {
         _unitOfWork = unitOfWork;
         _auditService = auditService;
         _hubNotification = hubNotification;
         _walletService = walletService;
         _outbox = outbox;
+        _configuration = configuration;
+    }
+
+    /// <summary>
+    /// A payment taken here and nowhere else. Head Office holds a synced copy of every branch's
+    /// bills, and writing "paid" into that copy is easy and looks correct immediately - the
+    /// screen updates, the audit log gets an entry - but the branch that actually has the
+    /// customer, the till and the cash was never told. Its own register stays uncredited and its
+    /// PC stays locked showing Billing, forever, because nothing there ever changed. Same reason
+    /// SessionService refuses to start/stop a session directly at Head Office: see
+    /// BillingController.ProcessPayment for the branch-command instruction this sends instead.
+    /// </summary>
+    private void RefuseIfHeadOffice(string what)
+    {
+        if (!_configuration.IsHeadOffice()) return;
+
+        throw new AppException(
+            $"This bill has to be {what} by the branch itself, not written here at Head Office - " +
+            "a payment written here is invisible to the counter, so the register is never credited " +
+            "and the PC never frees up. Send it as an instruction instead (api/bills/{id}/pay) and " +
+            "the branch will carry it out within a few seconds and report back.",
+            System.Net.HttpStatusCode.BadRequest,
+            "BRANCH_ONLY_OPERATION");
     }
 
     public async Task<PaginatedResult<BillDto>> GetActiveBillsAsync(Guid branchId, int page = 1, int pageSize = 50)
@@ -192,6 +219,8 @@ public class BillingService : IBillingService
 
     public async Task<BillDto> ProcessPaymentAsync(Guid branchId, Guid operatorId, Guid shiftId, Guid id, ProcessPaymentDto dto)
     {
+        RefuseIfHeadOffice("paid");
+
         await _unitOfWork.BeginTransactionAsync();
         try
         {
