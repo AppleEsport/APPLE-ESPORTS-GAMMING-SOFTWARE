@@ -22,9 +22,43 @@ export const SIGNALR_HUBS = {
   DASHBOARD: '/hubs/dashboard'
 };
 
-const HUB_BASE_URL = import.meta.env.VITE_API_URL 
-  ? import.meta.env.VITE_API_URL.replace('/api', '') 
+const HUB_BASE_URL = import.meta.env.VITE_API_URL
+  ? import.meta.env.VITE_API_URL.replace('/api', '')
   : '';
+
+// ── Reconnect for a machine that is expected to stay up for days ────────────
+//
+// This replaces `.withAutomaticReconnect([0, 2000, 5000, 10000, 30000])`.
+//
+// Passing an ARRAY to withAutomaticReconnect does not mean "back off like
+// this, forever". It means "make exactly these attempts, then give up and
+// never reconnect again". That is five tries over 47 seconds. Any outage
+// longer than 47 seconds - a router reboot, the branch's line dropping, the
+// server being redeployed - permanently killed every hub for the life of the
+// page, with no error shown and no way back except somebody noticing and
+// pressing F5.
+//
+// A counter PC is left running all day and a Head Office screen is left open
+// all night. Neither has anybody watching for a dead socket. So: never stop
+// trying. Quick retries first so a blip recovers instantly, then settle to
+// every 30s so a branch that is off overnight is not hammering a dead line.
+const foreverRetryPolicy = {
+  nextRetryDelayInMilliseconds: (ctx) => {
+    const ladder = [0, 2000, 5000, 10000, 30000];
+    return ladder[Math.min(ctx.previousRetryCount, ladder.length - 1)];
+  },
+};
+
+// Hubs that carry the live figures on the operational screens. The notifications
+// hub alone used to decide whether the UI showed "LIVE", so a dead pc-status hub
+// left a frozen PC grid sitting under a confident green LIVE badge - which is
+// exactly what the Head Office screenshots showed.
+const CRITICAL_HUBS = [
+  SIGNALR_HUBS.NOTIFICATIONS,
+  SIGNALR_HUBS.PC_STATUS,
+  SIGNALR_HUBS.SESSIONS,
+  SIGNALR_HUBS.BILLING,
+];
 
 export function SocketProvider({ children }) {
   const { isAuthenticated, logout, fetchCurrentUser } = useAuth();
@@ -42,19 +76,32 @@ export function SocketProvider({ children }) {
     }
 
     let isSubscribed = true;
-    const token = localStorage.getItem('accessToken');
+
+    // Which hubs are currently up. `connected` is derived from this rather than
+    // from the notifications hub alone, so the LIVE badge cannot stay green while
+    // the hub feeding the screen you are looking at is dead.
+    const hubHealth = {};
+    const publishHealth = () => {
+      if (!isSubscribed) return;
+      setConnected(CRITICAL_HUBS.every((h) => hubHealth[h] === true));
+    };
 
     const connectHubs = async () => {
       try {
         const hubs = Object.values(SIGNALR_HUBS);
-        
+
         for (const hubPath of hubs) {
           if (!hubsRef.current[hubPath]) {
             const connection = new signalR.HubConnectionBuilder()
               .withUrl(`${HUB_BASE_URL}${hubPath}`, {
-                accessTokenFactory: () => token
+                // Read fresh on every connect AND every reconnect. This used to
+                // close over a token captured once at mount, so after a refresh
+                // every reconnect re-presented the expired one, failed auth, and
+                // burned through the (then finite) retry budget - turning a
+                // recoverable blip into a permanently dead hub.
+                accessTokenFactory: () => localStorage.getItem('accessToken'),
               })
-              .withAutomaticReconnect([0, 2000, 5000, 10000, 30000]) // Exponential backoff
+              .withAutomaticReconnect(foreverRetryPolicy)
               .configureLogging(signalR.LogLevel.Warning)
               .build();
 
@@ -63,22 +110,42 @@ export function SocketProvider({ children }) {
 
             // Handle lifecycle events
             connection.onreconnecting(() => {
-              if (hubPath === SIGNALR_HUBS.NOTIFICATIONS) setConnected(false);
+              hubHealth[hubPath] = false;
+              publishHealth();
             });
-            
+
             connection.onreconnected(() => {
-              if (hubPath === SIGNALR_HUBS.NOTIFICATIONS) setConnected(true);
+              hubHealth[hubPath] = true;
+              publishHealth();
             });
-            
+
             connection.onclose(() => {
-              if (hubPath === SIGNALR_HUBS.NOTIFICATIONS) setConnected(false);
+              hubHealth[hubPath] = false;
+              publishHealth();
             });
 
             // Store the start promise so we can await it during cleanup
             connection.startPromise = connection.start().then(() => {
-              if (isSubscribed && hubPath === SIGNALR_HUBS.NOTIFICATIONS) setConnected(true);
+              hubHealth[hubPath] = true;
+              publishHealth();
             }).catch(err => {
+              hubHealth[hubPath] = false;
+              publishHealth();
               if (err.name !== 'AbortError') console.error('SignalR start error:', err);
+
+              // withAutomaticReconnect only covers a connection that was once
+              // established; it does nothing for a start() that never succeeded.
+              // Without this a hub that was down at page load stayed down forever.
+              if (isSubscribed && err.name !== 'AbortError') {
+                setTimeout(function retryStart() {
+                  const conn = hubsRef.current[hubPath];
+                  if (!isSubscribed || !conn) return;
+                  if (conn.state !== signalR.HubConnectionState.Disconnected) return;
+                  conn.start()
+                    .then(() => { hubHealth[hubPath] = true; publishHealth(); })
+                    .catch(() => { if (isSubscribed) setTimeout(retryStart, 15000); });
+                }, 5000);
+              }
             });
           }
         }

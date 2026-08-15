@@ -10,18 +10,32 @@ using AppleEsportsErp.Infrastructure.Data;
 
 namespace AppleEsportsErp.Api.Services;
 
-public class ReservationBackgroundService : BackgroundService
+/// <summary>
+/// Expires overdue reservations and moves PCs in and out of Reserved.
+///
+/// Branch-only, and it was not - this ran at Head Office too, where its queries have no
+/// BranchId filter at all and therefore selected every branch's pending reservations. Every
+/// ten seconds it expired other shops' bookings and rewrote their PCs' State in Head Office's
+/// synced copy, which the next heartbeat from the real branch then contradicted. That is the
+/// flip-flop RemoteBranchControl's own comment describes, generated locally rather than by any
+/// sync fault. See BranchOnlyBackgroundService for why this class of job is dangerous here.
+/// </summary>
+public class ReservationBackgroundService : BranchOnlyBackgroundService
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<ReservationBackgroundService> _logger;
 
-    public ReservationBackgroundService(IServiceScopeFactory scopeFactory, ILogger<ReservationBackgroundService> logger)
+    public ReservationBackgroundService(
+        IServiceScopeFactory scopeFactory,
+        ILogger<ReservationBackgroundService> logger,
+        IConfiguration configuration)
+        : base(configuration, logger)
     {
         _scopeFactory = scopeFactory;
         _logger = logger;
     }
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task RunAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("Reservation Background Service started.");
 
