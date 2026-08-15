@@ -121,14 +121,48 @@ public class PcManagementController : ControllerBase
     }
 
     // Maintenance Logs Endpoints
+    //
+    // This is the pair the UI actually calls (client/src/api/maintenanceLogs.api.js), and until
+    // now neither travelled. The routed endpoint above - POST {pcId}/maintenance - was correct
+    // and unused, so flagging a PC from Head Office wrote Head Office's own copy, the branch was
+    // never told, and a machine taken out of service remained sellable to a walk-in at the
+    // counter. The reverse direction always worked, which is why it looked like a one-way sync
+    // fault rather than a screen calling the wrong endpoint.
     [HttpPost("maintenance-logs/mark")]
     [Authorize(Policy = "OperatorOrAdmin")]
-    public async Task<IActionResult> MarkMaintenance([FromBody] MarkMaintenanceDto dto)
+    public async Task<IActionResult> MarkMaintenance([FromBody] MarkMaintenanceDto dto, CancellationToken ct)
     {
         try
         {
             if (string.IsNullOrWhiteSpace(dto.Reason))
                 return BadRequest(new { error = "Reason is required when marking PC for maintenance" });
+
+            if (_remote.MustTravel)
+            {
+                // Taken from the PC rather than the body: the PC belongs to exactly one shop, so
+                // this cannot send "take PC-04 down" to a branch that has no PC-04.
+                var branchId = await _db.Pcs.AsNoTracking()
+                    .Where(p => p.Id == dto.PcId).Select(p => p.BranchId).FirstOrDefaultAsync(ct);
+
+                if (branchId == Guid.Empty)
+                    return NotFound(new { error = "Head Office has no such PC." });
+
+                var receipt = await _remote.SendAsync(branchId, AppleEsportsErp.Api.Services.BranchCommands.SetMaintenance, new
+                {
+                    pcId = dto.PcId,
+                    enable = true,
+                    reason = dto.Reason,
+                }, GetSuperAdminId(), ct);
+
+                return Accepted(new
+                {
+                    success = true,
+                    queued = true,
+                    commandId = receipt.CommandId,
+                    branchIsReporting = receipt.BranchIsReporting,
+                    message = receipt.Message,
+                });
+            }
 
             // Get operator ID from token
             var operatorIdString = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
@@ -153,10 +187,35 @@ public class PcManagementController : ControllerBase
 
     [HttpPost("maintenance-logs/resolve/{pcId:guid}")]
     [Authorize(Policy = "OperatorOrAdmin")]
-    public async Task<IActionResult> ResolveMaintenance(Guid pcId, [FromBody] ResolveMaintenanceDto? dto = null)
+    public async Task<IActionResult> ResolveMaintenance(Guid pcId, [FromBody] ResolveMaintenanceDto? dto = null, CancellationToken ct = default)
     {
         try
         {
+            if (_remote.MustTravel)
+            {
+                var branchId = await _db.Pcs.AsNoTracking()
+                    .Where(p => p.Id == pcId).Select(p => p.BranchId).FirstOrDefaultAsync(ct);
+
+                if (branchId == Guid.Empty)
+                    return NotFound(new { error = "Head Office has no such PC." });
+
+                var receipt = await _remote.SendAsync(branchId, AppleEsportsErp.Api.Services.BranchCommands.SetMaintenance, new
+                {
+                    pcId,
+                    enable = false,
+                    notes = dto?.ResolutionNotes,
+                }, GetSuperAdminId(), ct);
+
+                return Accepted(new
+                {
+                    success = true,
+                    queued = true,
+                    commandId = receipt.CommandId,
+                    branchIsReporting = receipt.BranchIsReporting,
+                    message = receipt.Message,
+                });
+            }
+
             var operatorIdString = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
                 ?? User.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)?.Value;
 

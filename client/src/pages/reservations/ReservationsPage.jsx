@@ -139,7 +139,16 @@ export default function ReservationsPage() {
 
   // ── Fetch Reservations & PCs ──
   const fetchReservationsList = useCallback(async () => {
-    if (!targetBranchId) return;
+    // Clear the spinner before bailing out. This used to `return` while loadingList was
+    // still true from its initial useState(true), so a Super Admin on "All Branches" -
+    // which BranchContext defaults to on every login with no saved branch - got a spinner
+    // that never stopped, with no request made and no error shown. It read as "reservations
+    // are broken at Head Office"; the page had simply never asked for anything.
+    if (!targetBranchId) {
+      setReservations([]);
+      setLoadingList(false);
+      return;
+    }
     setLoadingList(true);
     try {
       const list = await getActiveReservations(1, 100);

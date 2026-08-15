@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Sessions;
 using AppleEsportsErp.Application.DTOs.Sync;
 using AppleEsportsErp.Application.Interfaces;
@@ -12,6 +13,7 @@ using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
 using AppleEsportsErp.Infrastructure.Configuration;
 using AppleEsportsErp.Infrastructure.Data;
+using AppleEsportsErp.Infrastructure.Services;
 
 namespace AppleEsportsErp.Api.Services;
 
@@ -361,6 +363,15 @@ public class BranchHeartbeatService : BackgroundService
             case BranchCommands.InstallVersion:
                 return await RunInstallVersionAsync(scoped, command.Payload, ct);
 
+            case BranchCommands.ProcessPayment:
+                return await RunProcessPaymentAsync(scoped, command.Payload, ct);
+
+            case BranchCommands.SetMaintenance:
+                return await RunSetMaintenanceAsync(scoped, command.Payload, ct);
+
+            case BranchCommands.AdjustStock:
+                return await RunAdjustStockAsync(scoped, command.Payload, ct);
+
             default:
                 return (false, $"This branch does not know the command '{command.CommandType}' yet.");
         }
@@ -490,6 +501,78 @@ public class BranchHeartbeatService : BackgroundService
         {
             return (false, ex.GetBaseException().Message);
         }
+    }
+
+    /// <summary>
+    /// Applies a stock delivery an Admin or Super Admin recorded from Head Office, exactly as
+    /// if it had been entered here at the counter - see InventoryController.AddStock for why
+    /// this only ever adds to what the branch already has, never sets an absolute number.
+    /// </summary>
+    private static async Task<(bool, string)> RunAdjustStockAsync(
+        IServiceProvider scoped, string payload, CancellationToken ct)
+    {
+        Guid inventoryId;
+        int quantity;
+        string? reason;
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            var root = doc.RootElement;
+            inventoryId = root.GetProperty("inventoryId").GetGuid();
+            quantity = root.GetProperty("quantity").GetInt32();
+            reason = root.TryGetProperty("reason", out var r) && r.ValueKind == JsonValueKind.String
+                ? r.GetString() : null;
+        }
+        catch
+        {
+            return (false, "The stock delivery arrived without a readable item and quantity.");
+        }
+
+        if (quantity <= 0)
+            return (false, "A stock delivery must add at least one unit.");
+
+        var db = scoped.GetRequiredService<AppDbContext>();
+        var item = await db.Set<InventoryItem>().FirstOrDefaultAsync(i => i.Id == inventoryId, ct);
+
+        if (item is null)
+            return (false, "No such menu item exists at this branch.");
+
+        var oldStock = item.CurrentStock;
+        var now = DateTimeOffset.UtcNow;
+
+        item.CurrentStock += quantity;
+        item.UpdatedAt = now;
+
+        if (item.Status == FoodAvailability.OutOfStock && item.CurrentStock > 0)
+            item.Status = FoodAvailability.Available;
+
+        db.Add(new InventoryLog
+        {
+            Id = Guid.NewGuid(),
+            InventoryId = item.Id,
+            BranchId = item.BranchId,
+            Action = "refill",
+            Quantity = quantity,
+            OldValue = oldStock.ToString(),
+            NewValue = item.CurrentStock.ToString(),
+            Reason = reason ?? "Stock delivery (from Head Office)",
+            CreatedAt = now,
+        });
+
+        var audit = scoped.GetRequiredService<IAuditService>();
+        await audit.LogAsync(new AuditEntry
+        {
+            Action = AuditActions.StockAdd,
+            UserRole = Roles.Admin,
+            TargetType = "inventory_item",
+            TargetId = item.Id,
+            BranchId = item.BranchId,
+            Details = new { itemName = item.ItemName, quantity, oldStock, newStock = item.CurrentStock, reason, viaRemoteCommand = true },
+        });
+
+        await db.SaveChangesAsync(ct);
+
+        return (true, $"{item.ItemName}: {oldStock} + {quantity} = {item.CurrentStock}.");
     }
 
     /// <summary>
@@ -712,6 +795,158 @@ public class BranchHeartbeatService : BackgroundService
     private static void TryDeleteInstaller(string path)
     {
         try { if (File.Exists(path)) File.Delete(path); } catch { /* best effort */ }
+    }
+
+    /// <summary>
+    /// Takes a PC out of service, or puts it back, because Head Office asked - carrying the
+    /// reason with it, so the branch's maintenance log reads the same as if the operator had
+    /// typed it at the counter.
+    ///
+    /// Unlike RunSetPcStateAsync this does not refuse while the PC is busy. Head Office marking
+    /// a machine faulty is a statement about the hardware, not about the booking, and a PC that
+    /// has just started smoking should not stay bookable until someone remembers to stop the
+    /// session first. The session is left alone deliberately: it is real, it is running, and the
+    /// customer still owes for the minutes they played. Stopping it is a separate command Head
+    /// Office can also send.
+    ///
+    /// The actor recorded is whoever is on shift here, because they are the person who will be
+    /// asked about it. If nobody is on shift - a PC flagged overnight - it falls back to the
+    /// operator who last used the machine, and only refuses when there is nobody at all to name.
+    /// </summary>
+    private static async Task<(bool, string)> RunSetMaintenanceAsync(
+        IServiceProvider scoped, string payload, CancellationToken ct)
+    {
+        Guid pcId;
+        bool enable;
+        string? reason;
+        string? notes;
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            var root = doc.RootElement;
+            pcId = root.GetProperty("pcId").GetGuid();
+            enable = root.GetProperty("enable").GetBoolean();
+            reason = root.TryGetProperty("reason", out var r) && r.ValueKind == JsonValueKind.String
+                ? r.GetString() : null;
+            notes = root.TryGetProperty("notes", out var n) && n.ValueKind == JsonValueKind.String
+                ? n.GetString() : null;
+        }
+        catch
+        {
+            return (false, "The maintenance command arrived without a readable PC and setting.");
+        }
+
+        var db = scoped.GetRequiredService<AppDbContext>();
+        var pc = await db.Pcs.AsNoTracking().FirstOrDefaultAsync(p => p.Id == pcId, ct);
+        if (pc is null) return (false, "No such PC exists at this branch.");
+
+        var alreadyThere = enable
+            ? pc.State == PcState.UnderMaintenance
+            : pc.State != PcState.UnderMaintenance;
+
+        if (alreadyThere)
+            return (true, enable
+                ? $"{pc.PcNumber} is already under maintenance - nothing to do."
+                : $"{pc.PcNumber} is not under maintenance - nothing to do.");
+
+        var actorId = await db.Shifts.AsNoTracking()
+            .Where(s => s.BranchId == pc.BranchId && s.Status == ShiftStatus.Active)
+            .OrderByDescending(s => s.LoginTime)
+            .Select(s => (Guid?)s.OperatorId)
+            .FirstOrDefaultAsync(ct)
+            ?? pc.LastOperatorId;
+
+        if (actorId is null)
+            return (false,
+                "Nobody is on shift and this PC has no last operator, so there is nobody at " +
+                "this branch to record the maintenance against.");
+
+        try
+        {
+            var pcManagement = scoped.GetRequiredService<IPcManagementService>();
+            var maintenanceLogs = scoped.GetRequiredService<IMaintenanceLogService>();
+
+            if (enable)
+            {
+                await maintenanceLogs.LogMaintenanceAsync(
+                    pcId, pc.BranchId, actorId.Value, Roles.Operator,
+                    string.IsNullOrWhiteSpace(reason) ? "Marked from Head Office" : reason);
+            }
+            else
+            {
+                var active = await maintenanceLogs.GetActiveMaintenanceAsync(pcId);
+                if (active is not null)
+                {
+                    await maintenanceLogs.ResolveMaintenanceAsync(
+                        active.Id, actorId.Value, Roles.Operator, notes);
+                }
+            }
+
+            await pcManagement.MarkMaintenanceAsync(pcId, actorId.Value, Roles.Operator, enable);
+
+            return (true, enable
+                ? $"{pc.PcNumber} is now under maintenance."
+                : $"{pc.PcNumber} is back in service.");
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.GetBaseException().Message);
+        }
+    }
+
+    /// <summary>
+    /// Collects a payment because Head Office asked for it on the customer's behalf.
+    ///
+    /// The branch, not Head Office, owns the till and the register this money actually lands
+    /// in - a payment marked "paid" only in Head Office's synced copy leaves the counter still
+    /// showing the bill open and the PC still locked on Billing, because nothing here actually
+    /// changed. Amounts and payment type travel in the command exactly as the person at Head
+    /// Office entered them; the branch, operator and shift the money is credited to are read
+    /// off the bill's own row, never trusted from the payload, so this can only ever pay the
+    /// bill it names and nothing else.
+    /// </summary>
+    private static async Task<(bool, string)> RunProcessPaymentAsync(
+        IServiceProvider scoped, string payload, CancellationToken ct)
+    {
+        Guid billId;
+        Application.DTOs.Billing.ProcessPaymentDto dto;
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            billId = doc.RootElement.GetProperty("billId").GetGuid();
+            dto = JsonSerializer.Deserialize<Application.DTOs.Billing.ProcessPaymentDto>(
+                payload, new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                ?? throw new InvalidOperationException("Empty payment payload.");
+        }
+        catch
+        {
+            return (false, "The payment command arrived without a readable bill id or amounts.");
+        }
+
+        var db = scoped.GetRequiredService<AppDbContext>();
+        var bill = await db.Bills.AsNoTracking().FirstOrDefaultAsync(b => b.Id == billId, ct);
+
+        if (bill is null)
+            return (false, "No such bill exists at this branch.");
+
+        // Genuinely nothing left to do - the operator at the counter may well have collected
+        // this payment themselves in the time the command took to arrive, and that is the
+        // correct outcome either way: the bill is paid, which is all Head Office actually asked.
+        if (bill.Status == BillStatus.Completed)
+            return (true, "Already paid - nothing to do.");
+
+        try
+        {
+            var billingService = scoped.GetRequiredService<IBillingService>();
+            var result = await billingService.ProcessPaymentAsync(
+                bill.BranchId, bill.OperatorId, bill.ShiftId ?? Guid.Empty, billId, dto);
+
+            return (true, $"Paid. {dto.PaymentType}, Rs {result.TotalAmount}.");
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.GetBaseException().Message);
+        }
     }
 
     /// <summary>

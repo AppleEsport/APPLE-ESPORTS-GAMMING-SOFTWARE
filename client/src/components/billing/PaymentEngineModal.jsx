@@ -198,7 +198,7 @@ export default function PaymentEngineModal({ bill, onClose, onPaymentSuccess }) 
     setLoading(true);
     setError(null);
     try {
-      await processPayment(bill.id, {
+      const result = await processPayment(bill.id, {
         paymentType: pType,
         cashAmount,
         onlineAmount,
@@ -206,7 +206,11 @@ export default function PaymentEngineModal({ bill, onClose, onPaymentSuccess }) 
         cashReceived: cashAmount > 0 ? cashReceived : 0,
         memberId: selectedMember?.id,
       });
-      toast.success('Payment processed — PC released!');
+      if (result?.queued) {
+        toast.success(result.message || 'Sent to the branch. It collects this payment within a few seconds.');
+      } else {
+        toast.success('Payment processed — PC released!');
+      }
       onPaymentSuccess?.();
       onClose();
     } catch (err) {
