@@ -37,10 +37,16 @@ happen for real:
    `BranchHeartbeatService.cs`) from two different sessions on the same night.
 3. **Never `git push --force`, never `git reset --hard`, never `git checkout -- .` without
    checking `git status` first and understanding what you'd be discarding.**
-4. **Never push to `origin` or `meetmoliya`.** The only remote that matters is `new-origin` →
-   `harshal4172005/APPLE-ESPORTS-GAMMING-SOFTWARE-new`. `origin` (the old repo, no `-new`
-   suffix) is deleted from GitHub — pushing there just fails. `meetmoliya` is someone else's
-   fork.
+4. **What matters is the URL, not the remote's local name.** The only repo to push to is
+   `harshal4172005/APPLE-ESPORTS-GAMMING-SOFTWARE-new` — run `git remote -v` and check the
+   *URL*, not what it's called locally. On Harshal's machine this repo is aliased `new-origin`
+   (because `origin` there is an older, now-deleted repo without the `-new` suffix, left over
+   from before this one was created — pushing to *that* `origin` just fails). On a fresh clone
+   made directly from the `-new` URL, git names it `origin` by default, and that's correct too
+   — there's nothing to rename or fix. Don't copy the literal string `new-origin` from this
+   file into a command without first checking what your own `git remote -v` actually calls it.
+   Never push to a remote pointing at `MeetMoliya06/...` (someone else's fork) or at
+   `harshal4172005/APPLE-ESPORTS-GAMMING-SOFTWARE` (no `-new` — the deleted repo).
 5. **Two branches, two purposes — don't mix them up:**
    - `phase2-exe` — where you actually work. Has everything: the API, the React dashboard, the
      WPF desktop client, the installer scripts.
@@ -48,7 +54,7 @@ happen for real:
      client or installer — only the API and the dashboard. You get things onto `main` by
      `git cherry-pick`-ing the relevant commit from `phase2-exe`, never by working on `main`
      directly.
-   - Always run `git branch --show-current` before you push. `git push new-origin main` pushes
+   - Always run `git branch --show-current` before you push. `git push <remote> main` pushes
      whatever your local `main` ref currently points at — if you're actually standing on
      `phase2-exe`, that command silently does nothing useful ("Everything up-to-date") while
      you think you just shipped.
@@ -181,7 +187,9 @@ easy path). What it won't tell you, because it can't be committed to git:
 ### The live Head Office server, for reference
 
 - Oracle Cloud, `140.245.195.222`, repo at `~/APPLE-ESPORTS-GAMMING-SOFTWARE-new` on the
-  server, tracking `new-origin`/`main`.
+  server. The server's own remote is called `origin` there (confirmed live) and points at the
+  same `harshal4172005/.../APPLE-ESPORTS-GAMMING-SOFTWARE-new` URL as everywhere else — it
+  tracks `main`.
 - `ssh -i "<key path>" ubuntu@140.245.195.222`
 - Containers: `appleesports-v2-api`, `appleesports-v2-client`, plus `postgres`, `redis`, `nginx`,
   `certbot`, `db-backup` (the last five aren't rebuilt for an ordinary release).
@@ -202,11 +210,13 @@ account is still a planned future step, not something that's happened yet.
 
 1. Read this file fully (you're almost done), then `README.md`'s Architecture and Getting
    Started sections.
-2. `git remote -v` — confirm you're pointed at `new-origin` →
-   `harshal4172005/APPLE-ESPORTS-GAMMING-SOFTWARE-new`, not a fork.
-3. `git checkout phase2-exe && git pull new-origin phase2-exe` — this is current as of tonight
-   (commit `587ea834`, "an approved update can be un-approved or removed entirely"). Get your
-   local copy to match before you start anything new.
+2. `git remote -v` — find whichever local name points at the URL
+   `harshal4172005/APPLE-ESPORTS-GAMMING-SOFTWARE-new` (not a fork, not the no-`-new` repo).
+   Call that `<remote>` in every command below — it might be `origin`, might be something else,
+   depending on how you cloned. See Rule 4 above.
+3. `git checkout phase2-exe && git pull <remote> phase2-exe` — this is current as of tonight
+   (commit `5ae958d6`, "onboarding for a second developer working alongside Claude Code"). Get
+   your local copy to match before you start anything new.
 4. `git status` — confirm it's clean. If it isn't and you didn't leave it that way, stop and
    ask before touching anything (see Rule 1).
 5. Get your `.env` and set up local Docker Compose per `README.md`. Confirm you can log in
