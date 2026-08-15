@@ -1355,8 +1355,15 @@ public class AuthService : IAuthService
             })
             .ToListAsync();
 
+        // Not gated on Active - LoggedOut is Operators' ordinary "not currently signed in
+        // anywhere" state, not a block, and requiring Active defeated the entire point of
+        // being promoted: a Global Admin is reached from a DIFFERENT branch's counter
+        // precisely because they are not logged in there. Only Suspended/Disabled - genuine
+        // access revocation - actually should hide someone from this list.
         var activeOps = await _db.Operators
-            .Where(o => o.IsGlobalAdmin && o.Status == OperatorStatus.Active && !string.IsNullOrEmpty(o.AccessPin))
+            .Where(o => o.IsGlobalAdmin
+                && o.Status != OperatorStatus.Suspended && o.Status != OperatorStatus.Disabled
+                && !string.IsNullOrEmpty(o.AccessPin))
             .Select(o => new AvailableAdminDto
             {
                 Id = o.Id,
@@ -1408,7 +1415,13 @@ public class AuthService : IAuthService
                 adminId = adminOp.Id;
                 adminFullName = adminOp.FullName;
                 adminDashboardPermissions = adminOp.DashboardPermissions;
-                adminStatus = adminOp.Status == OperatorStatus.Active ? UserStatus.Active : UserStatus.Disabled;
+                // LoggedOut counts as eligible, same reasoning as the list this is picked
+                // from: it is Operators' ordinary "not signed in anywhere right now" state,
+                // and a Global Admin being reached from a station they are not logged into
+                // is the entire point of this feature, not a reason to refuse it.
+                adminStatus = adminOp.Status is OperatorStatus.Suspended or OperatorStatus.Disabled
+                    ? UserStatus.Disabled
+                    : UserStatus.Active;
                 // A promoted operator really is an Admin, not a Super Admin.
                 adminRole = Roles.Admin;
             }
