@@ -16,6 +16,28 @@ public class Pc
     /// </summary>
     public PcState State { get; set; } = PcState.AwaitingSetup;
     public Guid? CurrentSessionId { get; set; }
+
+    /// <summary>
+    /// When the session named by <see cref="CurrentSessionId"/> started, and when it is due to
+    /// end (null if open-ended / Pay-As-You-Go) - carried in on the branch's own heartbeat
+    /// alongside State and CurrentSessionId, the same way and for the same reason.
+    ///
+    /// A branch never needs to read these: it has the real Session row and reads that instead.
+    /// They exist for Head Office, which does not - Session itself was never part of what
+    /// syncs upward (only Bill is, and only once a session is paid), so without this Head
+    /// Office's own PC grid had a State but nothing to time it against. A session just started,
+    /// or just transferred onto a different PC, showed as bare "Active"/"Occupied" with no
+    /// detail at all - or, worse, was read as "confirmed Pay-As-You-Go" simply because the real
+    /// answer was missing, which is a different and misleading claim.
+    ///
+    /// Refreshed on every heartbeat that reports this PC's state or session as changed - see
+    /// BranchHeartbeatService.BeatAsync and BranchHeartbeatController.ApplyPcStatesAsync. Not
+    /// synced any other way, and not meant to be: this is a snapshot for display, not a second
+    /// source of truth for billing.
+    /// </summary>
+    public DateTimeOffset? CurrentSessionStartTime { get; set; }
+    public DateTimeOffset? CurrentSessionEndTime { get; set; }
+
     public Guid? CurrentReservationId { get; set; }
     public DateTimeOffset? LastActiveAt { get; set; }
     public Guid? LastOperatorId { get; set; }

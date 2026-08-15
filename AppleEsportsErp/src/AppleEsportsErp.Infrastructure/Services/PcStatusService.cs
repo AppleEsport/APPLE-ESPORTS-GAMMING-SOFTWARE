@@ -126,6 +126,29 @@ public class PcStatusService : IPcStatusService
                 if (session.EndTime.HasValue)
                     dto.SessionEndTime = session.EndTime;
             }
+            else if (pc.State is PcState.Active or PcState.AwaitingBilling && pc.CurrentSessionId.HasValue)
+            {
+                // Head Office. There is no local Session row for this PC's session - Session is
+                // never synced (only Bill is, once paid) - so this is Head Office's only source
+                // for what the branch's own screen already knows directly: everything below
+                // comes from the heartbeat snapshot rather than a live session read, refreshed
+                // every three seconds the same as State and CurrentSessionId themselves. See
+                // Pc.CurrentSessionStartTime for why this exists.
+                //
+                // ActiveSessionId matters as much as the timing fields do: it is what tells the
+                // client this PC's Pay-As-You-Go-or-not is a real, known answer rather than a
+                // missing one - see PcTile.jsx's isPayAsYouGo.
+                dto.ActiveSessionId = pc.CurrentSessionId;
+                dto.SessionStartTime = pc.CurrentSessionStartTime;
+                dto.SessionEndTime = pc.CurrentSessionEndTime;
+
+                if (pc.State == PcState.Active && pc.CurrentSessionStartTime.HasValue)
+                {
+                    decimal elapsedMinutes = SessionTimeCalculator.ElapsedMinutes(
+                        pc.CurrentSessionStartTime.Value, 0, now);
+                    dto.TotalAmount = SessionPricingCalculator.CalculateGamingAmount(calculatedRate, bufferMinutes, elapsedMinutes);
+                }
+            }
             else if (recentCompletedSessions.TryGetValue(pc.Id, out var lastSession) && lastSession != null)
             {
                 // If there's no active session, provide the last customer details for a quick restart

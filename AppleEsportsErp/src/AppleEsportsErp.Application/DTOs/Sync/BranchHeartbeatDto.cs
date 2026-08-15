@@ -71,4 +71,14 @@ public class PcStateDto
     public string State { get; set; } = "idle";
 
     public Guid? CurrentSessionId { get; set; }
+
+    /// <summary>
+    /// When the session named by <see cref="CurrentSessionId"/> started, and when it is due
+    /// to end (null if open-ended). Only meaningful alongside a non-null CurrentSessionId; a
+    /// branch's own screens never read these back — they exist so Head Office, which does not
+    /// have the real Session row, can still show something better than a bare "Active" with no
+    /// detail. See Pc.CurrentSessionStartTime for the full reasoning.
+    /// </summary>
+    public DateTimeOffset? SessionStartTime { get; set; }
+    public DateTimeOffset? SessionEndTime { get; set; }
 }
