@@ -1,10 +1,13 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using AppleEsportsErp.Api.Extensions;
+using AppleEsportsErp.Api.Services;
 using AppleEsportsErp.Application.DTOs;
 using AppleEsportsErp.Application.DTOs.Common;
 using AppleEsportsErp.Application.Interfaces;
+using AppleEsportsErp.Infrastructure.Data;
 
 namespace AppleEsportsErp.Api.Controllers;
 
@@ -14,11 +17,18 @@ namespace AppleEsportsErp.Api.Controllers;
 public class VersionController : ControllerBase
 {
     private readonly IVersionService _versionService;
+    private readonly AppDbContext _db;
+    private readonly IRemoteBranchControl _remote;
 
-    public VersionController(IVersionService versionService)
+    public VersionController(IVersionService versionService, AppDbContext db, IRemoteBranchControl remote)
     {
         _versionService = versionService;
+        _db = db;
+        _remote = remote;
     }
+
+    private Guid CurrentUserId() =>
+        Guid.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : Guid.Empty;
 
     [HttpGet("latest")]
     [AllowAnonymous]
@@ -112,6 +122,64 @@ public class VersionController : ControllerBase
         await _versionService.ReportUpdateProgressAsync(branchId, dto.Stage, dto.ProgressPercent, dto.Message);
         return Ok(ApiResponse<object>.Ok("Progress recorded"));
     }
+
+    /// <summary>
+    /// Sends one branch an exact, already-published version to run - the one remote action
+    /// that can go backwards. Every other update path in this system only ever moves a branch
+    /// forward, because a branch checking on its own schedule (desktop-client's UpdateService)
+    /// deliberately refuses anything that is not strictly newer than what it already runs.
+    /// This is different: a person at Head Office has decided precisely what a branch should
+    /// be running, older or newer, and that decision is allowed to override the branch's own
+    /// caution.
+    ///
+    /// Restricted to Super Admin alone, tighter than every other remote command in this
+    /// system. If the branch's own attempt to carry this out fails partway, it can take down
+    /// the very service that would have reported the failure - there is no channel left for
+    /// Head Office to retry through, only physical or remote-desktop access to that PC. See
+    /// BranchHeartbeatService.RunInstallVersionAsync.
+    /// </summary>
+    [HttpPost("branch/{branchId}/install")]
+    [Authorize(Policy = "SuperAdminOnly")]
+    public async Task<IActionResult> InstallVersionOnBranch(
+        Guid branchId, [FromBody] InstallVersionDto dto, CancellationToken ct)
+    {
+        if (!_remote.MustTravel)
+            return BadRequest(ApiResponse<object>.Fail(
+                "This only makes sense from Head Office, telling a branch what to run.",
+                "HEAD_OFFICE_ONLY"));
+
+        if (string.IsNullOrWhiteSpace(dto.Version))
+            return BadRequest(ApiResponse<object>.Fail("Which version should this branch run?", "VERSION_REQUIRED"));
+
+        var version = await _db.Set<AppleEsportsErp.Domain.Entities.VersionInfo>().AsNoTracking()
+            .FirstOrDefaultAsync(v => v.CurrentVersion == dto.Version, ct);
+
+        if (version is null)
+            return NotFound(ApiResponse<object>.Fail(
+                $"There is no version {dto.Version} on record.", "VERSION_NOT_FOUND"));
+
+        if (string.IsNullOrWhiteSpace(version.InstallerFileName) || string.IsNullOrWhiteSpace(version.InstallerSha256))
+            return BadRequest(ApiResponse<object>.Fail(
+                $"Version {dto.Version} has no installer published against it, so there is nothing to send.",
+                "NO_INSTALLER"));
+
+        var receipt = await _remote.SendAsync(branchId, BranchCommands.InstallVersion, new
+        {
+            version = version.CurrentVersion,
+            sha256 = version.InstallerSha256,
+            downloadPath = $"/api/releases/download/{version.InstallerFileName}",
+            sizeBytes = version.InstallerSizeBytes,
+            reason = dto.Reason,
+        }, CurrentUserId(), ct);
+
+        return Accepted(ApiResponse<object>.Ok(new
+        {
+            queued = true,
+            commandId = receipt.CommandId,
+            branchIsReporting = receipt.BranchIsReporting,
+            message = receipt.Message,
+        }));
+    }
 }
 
 public class UpdateProgressDto
@@ -133,4 +201,12 @@ public class UpdateBranchVersionStatusDto
     public string CurrentVersion { get; set; } = string.Empty;
     public int UpToDateCount { get; set; }
     public int TotalCount { get; set; }
+}
+
+public class InstallVersionDto
+{
+    public string Version { get; set; } = string.Empty;
+
+    /// <summary>Why, for whoever reads the audit trail later - "downgrading after 2.4.9 was rolled back", not left blank.</summary>
+    public string? Reason { get; set; }
 }

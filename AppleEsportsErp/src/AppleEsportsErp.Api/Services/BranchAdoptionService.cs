@@ -114,7 +114,22 @@ public sealed class BranchAdoptionService
         {
             using var client = _httpFactory.CreateClient();
             client.Timeout = TimeSpan.FromSeconds(30);
-            var response = await client.GetAsync($"{HeadOfficeUrl}/api/provisioning/branch/{branchId}", ct);
+
+            // This machine's own name, so Head Office can tell "the PC that already runs this
+            // branch, checking in again" apart from "a second PC trying to become it" - the
+            // same distinction BranchHeartbeatController.Receive already draws once a branch is
+            // live, moved earlier so it can refuse before a second local database is ever
+            // written rather than merely warn after two are already writing.
+            var url = $"{HeadOfficeUrl}/api/provisioning/branch/{branchId}" +
+                      $"?machineName={Uri.EscapeDataString(Environment.MachineName)}&force={force}";
+            var response = await client.GetAsync(url, ct);
+
+            if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
+            {
+                var conflictBody = await response.Content.ReadAsStringAsync(ct);
+                return AdoptionResult.Failed(ExtractError(conflictBody)
+                    ?? "This branch is already running on another PC.");
+            }
 
             if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
                 return AdoptionResult.Failed("Head Office does not have a branch with that id.");
@@ -260,6 +275,19 @@ public sealed class BranchAdoptionService
 
     private static TimeOnly ParseTime(string? value, TimeOnly fallback) =>
         TimeOnly.TryParse(value, out var parsed) ? parsed : fallback;
+
+    private static string? ExtractError(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            return doc.RootElement.TryGetProperty("error", out var e) ? e.GetString() : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     // ── Wire shapes ───────────────────────────────────────────────────────────
 

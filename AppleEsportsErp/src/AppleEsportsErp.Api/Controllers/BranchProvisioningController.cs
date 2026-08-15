@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using AppleEsportsErp.Api.Services;
 using AppleEsportsErp.Application.DTOs.Common;
+using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Infrastructure.Data;
 
 namespace AppleEsportsErp.Api.Controllers;
@@ -62,11 +63,40 @@ public class BranchProvisioningController : ControllerBase
     /// </summary>
     [HttpGet("branch/{branchId:guid}")]
     [AllowAnonymous]
-    public async Task<IActionResult> GetBranchProvisioning(Guid branchId)
+    public async Task<IActionResult> GetBranchProvisioning(
+        Guid branchId, [FromQuery] string? machineName, [FromQuery] bool force = false)
     {
         var branch = await _db.Branches.AsNoTracking().FirstOrDefaultAsync(b => b.Id == branchId);
         if (branch is null)
             return NotFound(ApiResponse<object>.Fail("Branch not found at Head Office.", "BRANCH_NOT_FOUND"));
+
+        // A second machine adopting a branch identity that is already live is exactly how two
+        // tills end up recording one shop's takings separately, with no way to un-merge them
+        // afterwards - see BranchHeartbeatController.Receive's own warning for what that costs
+        // once it happens. Caught here rather than there, because this is the one place that
+        // can see every branch's heartbeat before the damage starts: a fresh install's own
+        // database is empty and has no way to know somebody else is already running this
+        // branch, so it cannot refuse on its own.
+        if (!force && !string.IsNullOrWhiteSpace(machineName))
+        {
+            var beat = await _db.Set<BranchHeartbeat>().AsNoTracking()
+                .FirstOrDefaultAsync(h => h.BranchId == branchId);
+
+            if (beat is not null
+                && !string.IsNullOrWhiteSpace(beat.ReportedByMachine)
+                && !string.Equals(beat.ReportedByMachine, machineName, StringComparison.OrdinalIgnoreCase)
+                && DateTimeOffset.UtcNow - beat.LastSeenAt < BranchHeartbeatController.SilentAfter)
+            {
+                return Conflict(ApiResponse<object>.Fail(
+                    $"{branch.Name} is already running on {beat.ReportedByMachine}, and it reported in " +
+                    "within the last minute - it is not switched off. Setting this PC up as the same " +
+                    "branch will start two tills recording this shop's takings separately, with no way " +
+                    "to un-merge them afterwards. If you are deliberately replacing the PC that runs " +
+                    "this branch, stop the Apple Esports API service on the old PC first - then confirm " +
+                    "you want to continue anyway.",
+                    "BRANCH_ALREADY_ACTIVE"));
+            }
+        }
 
         var pcs = await _db.Pcs
             .AsNoTracking()

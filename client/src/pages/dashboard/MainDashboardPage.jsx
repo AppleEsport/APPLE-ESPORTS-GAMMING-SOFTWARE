@@ -17,6 +17,7 @@ export default function MainDashboardPage() {
   const [summary, setSummary] = useState(null);
   const [transactions, setTransactions] = useState([]);
   const [branchSummaries, setBranchSummaries] = useState([]);
+  const [branchConflicts, setBranchConflicts] = useState([]);
   const [systemHealth, setSystemHealth] = useState(null);
   const [systemAlerts, setSystemAlerts] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -60,17 +61,29 @@ export default function MainDashboardPage() {
       const fetchBranchBreakdown = isSuperAdmin && !targetBranchId;
       if (fetchBranchBreakdown) {
         promises.push(api.get('/dashboard/branches-summary'));
+        // Whether two PCs are both claiming to be the same branch - see
+        // BranchHeartbeatController.Receive. Fetched alongside the breakdown because that is
+        // the one screen a Super Admin actually looks at daily; the conflict was previously
+        // real and visible only in a server log nobody was reading.
+        promises.push(api.get('/branch-status').catch(() => null));
       }
 
       const results = await Promise.all(promises);
-      
+
       setSummary(results[0].data.data);
       setTransactions(results[1].data.data);
-      
+
       if (fetchBranchBreakdown && results[2]) {
         setBranchSummaries(results[2].data.data);
       } else {
         setBranchSummaries([]);
+      }
+
+      if (fetchBranchBreakdown && results[3]) {
+        const rows = results[3].data?.data ?? [];
+        setBranchConflicts(rows.filter((r) => r.conflictingMachine));
+      } else {
+        setBranchConflicts([]);
       }
     } catch (err) {
       console.error("Failed to load dashboard data", err);
@@ -212,6 +225,31 @@ export default function MainDashboardPage() {
           delay={0.4}
         />
       </div>
+
+      {/* Two PCs both claiming the same branch - shown before anything else, because every
+          number below is unreliable while it is true and nobody would think to doubt them
+          otherwise. See BranchHeartbeatController.Receive for what causes this. */}
+      {isSuperAdmin && !activeBranch && branchConflicts.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 15 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-red-500/10 border border-red-500/40 rounded-lg p-4 space-y-2"
+        >
+          {branchConflicts.map((c) => (
+            <div key={c.branchId} className="flex items-start gap-2.5">
+              <AlertTriangle className="w-4 h-4 text-red-500 mt-0.5 shrink-0" />
+              <p className="text-sm text-text leading-relaxed">
+                <span className="font-bold">{c.branchName}</span> has two PCs both reporting as
+                itself right now: <span className="font-mono">{c.reportedByMachine}</span> and{' '}
+                <span className="font-mono">{c.conflictingMachine}</span>. Each is keeping its
+                own records and syncing them under this one branch — their takings are being
+                merged and cannot be separated afterwards. Stop the Apple Esports API service on
+                whichever one is not the real counter PC.
+              </p>
+            </div>
+          ))}
+        </motion.div>
+      )}
 
       {/* Branch Breakdown Table (Super Admin only - Global View) */}
       {isSuperAdmin && !activeBranch && (

@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
@@ -356,6 +358,9 @@ public class BranchHeartbeatService : BackgroundService
             case BranchCommands.TransferSession:
                 return await RunTransferSessionAsync(scoped, command.Payload, ct);
 
+            case BranchCommands.InstallVersion:
+                return await RunInstallVersionAsync(scoped, command.Payload, ct);
+
             default:
                 return (false, $"This branch does not know the command '{command.CommandType}' yet.");
         }
@@ -583,6 +588,130 @@ public class BranchHeartbeatService : BackgroundService
         {
             return (false, ex.GetBaseException().Message);
         }
+    }
+
+    /// <summary>
+    /// Installs the exact version Head Office named - downloads it, verifies it against the
+    /// published hash, and runs it silently, the same three steps the desktop app's own
+    /// UpdateService performs on its nightly check. The difference is what happens before
+    /// those steps: UpdateService refuses anything that is not strictly newer than what is
+    /// installed, because it is acting on its own, unsupervised, in the middle of the night.
+    /// A command that reached this method already passed through a Super Admin naming this
+    /// exact version on purpose - that decision is allowed to go backwards, and this trusts it
+    /// without asking whether the number is bigger.
+    ///
+    /// Runs directly from inside this Windows service rather than handing off to the desktop
+    /// app, and that is safe only because of how this service is registered: New-Service with
+    /// no -Credential runs it as LocalSystem, which already has every right the installer
+    /// needs. The desktop app has to request elevation with a UAC prompt because it normally
+    /// runs as whoever is logged in; this has nothing to request permission from, and nothing
+    /// to show the prompt on even if it needed one - a Windows service has no desktop session.
+    ///
+    /// What is worth naming plainly: the moment the installer stops this service to replace
+    /// its files is also the moment Head Office's only channel to this branch goes quiet. A
+    /// clean install restarts everything within moments and the next heartbeat confirms the
+    /// new version. A failed one does not, and because the failure kills the very thing that
+    /// would have reported it, there is nothing left here to send a "this went wrong" message
+    /// with - recovering from that needs a person at the branch, or remote desktop to it. This
+    /// is why the endpoint that queues this command is Super Admin only, one branch at a time,
+    /// never a bulk push to the whole fleet at once.
+    /// </summary>
+    private static async Task<(bool, string)> RunInstallVersionAsync(
+        IServiceProvider scoped, string payload, CancellationToken ct)
+    {
+        string version, sha256, downloadPath;
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            var root = doc.RootElement;
+            version = root.GetProperty("version").GetString() ?? "";
+            sha256 = root.GetProperty("sha256").GetString() ?? "";
+            downloadPath = root.GetProperty("downloadPath").GetString() ?? "";
+
+            if (version.Length == 0 || sha256.Length == 0 || downloadPath.Length == 0)
+                throw new InvalidOperationException();
+        }
+        catch
+        {
+            return (false, "The install command arrived without a readable version, hash and download path.");
+        }
+
+        var configuration = scoped.GetRequiredService<IConfiguration>();
+        var headOffice = configuration["Sync:HeadOfficeUrl"]?.TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(headOffice))
+            return (false, "This branch has no Head Office address configured.");
+
+        var folder = Path.Combine(Path.GetTempPath(), "AppleEsportsUpdate");
+        Directory.CreateDirectory(folder);
+        var target = Path.Combine(folder, $"AppleEsports-Branch-Setup-{version}.exe");
+
+        try
+        {
+            var httpClientFactory = scoped.GetRequiredService<IHttpClientFactory>();
+            using var client = httpClientFactory.CreateClient();
+            client.Timeout = TimeSpan.FromMinutes(15);   // installers are large
+
+            using (var response = await client.GetAsync(
+                $"{headOffice}{downloadPath}", HttpCompletionOption.ResponseHeadersRead, ct))
+            {
+                if (!response.IsSuccessStatusCode)
+                    return (false, $"Head Office answered {(int)response.StatusCode} for the installer download.");
+
+                await using var source = await response.Content.ReadAsStreamAsync(ct);
+                await using var destination = File.Create(target);
+                await source.CopyToAsync(destination, ct);
+            }
+
+            string actual;
+            await using (var stream = File.OpenRead(target))
+            {
+                actual = Convert.ToHexString(await SHA256.HashDataAsync(stream, ct)).ToLowerInvariant();
+            }
+
+            // Corrupted in transit, or worse - either way this does not run.
+            if (!actual.Equals(sha256, StringComparison.OrdinalIgnoreCase))
+            {
+                TryDeleteInstaller(target);
+                return (false, "The downloaded installer did not match the hash Head Office published. Nothing was run.");
+            }
+        }
+        catch (Exception ex)
+        {
+            TryDeleteInstaller(target);
+            return (false, $"Could not download or verify the installer: {ex.GetBaseException().Message}");
+        }
+
+        try
+        {
+            // /LOG for the same reason the desktop app's own installs write one - without it a
+            // failure this far into the process leaves nothing to read afterwards.
+            var log = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                "Apple Esports", "logs", "remote-install.log");
+            Directory.CreateDirectory(Path.GetDirectoryName(log)!);
+
+            // No Verb = "runas" - this process is already LocalSystem, and a Windows service
+            // has no desktop session to show a UAC prompt on even if it asked for one.
+            Process.Start(new ProcessStartInfo(target)
+            {
+                Arguments = $"/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /RESTARTAPPLICATIONS \"/LOG={log}\"",
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            TryDeleteInstaller(target);
+            return (false, $"The installer was downloaded and verified but could not be started: {ex.GetBaseException().Message}");
+        }
+
+        return (true,
+            $"Installer for {version} verified and launched. This branch's services restart shortly " +
+            "running it - the next heartbeat confirms whether it took.");
+    }
+
+    private static void TryDeleteInstaller(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); } catch { /* best effort */ }
     }
 
     /// <summary>
