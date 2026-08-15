@@ -223,4 +223,14 @@ public static class BranchCommands
     /// command arrived.
     /// </summary>
     public const string ApplyDiscount = "apply_discount";
+
+    /// <summary>
+    /// Removes a menu item from the branch's own catalogue - permanently deletes it there too
+    /// if nothing local references it, deactivates it otherwise. Without this, a delete at Head
+    /// Office only ever removed Head Office's copy: the branch's row sat there untouched, and
+    /// the next time anything about it changed - a price edit, a delivery, even its own next
+    /// stock reconciliation - that untouched row synced straight back up and undid the delete.
+    /// "Permanently deleted" was never actually true for anything requested from Head Office.
+    /// </summary>
+    public const string DeleteInventoryItem = "delete_inventory_item";
 }
