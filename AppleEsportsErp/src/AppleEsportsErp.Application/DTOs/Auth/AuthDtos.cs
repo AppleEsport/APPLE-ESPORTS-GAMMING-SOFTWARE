@@ -191,6 +191,12 @@ public class AdminSwitchInDto
     public Guid ShiftId { get; set; }
 }
 
+public class ConfirmBranchSwitchDto
+{
+    public string AccessPin { get; set; } = null!;
+    public Guid? BranchId { get; set; }
+}
+
 public class AvailableAdminDto
 {
     public Guid Id { get; set; }

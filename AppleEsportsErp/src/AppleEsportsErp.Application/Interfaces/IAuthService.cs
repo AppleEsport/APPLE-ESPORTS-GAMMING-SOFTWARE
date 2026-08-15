@@ -45,6 +45,15 @@ public interface IAuthService
     /// <summary>SOP §22: Admin Quick-Switch Out</summary>
     Task AdminSwitchOutAsync(Guid adminId, Guid shiftId);
 
+    /// <summary>
+    /// An Admin confirms their own PIN before switching into another branch's data. Access
+    /// itself was never gated behind this - BranchIsolationAttribute already lets Admin reach
+    /// any branch - so this exists purely for the accountability record: whoever did this
+    /// meant to, and it says so in the Audit Trail. Throws AuthenticationException on a wrong
+    /// PIN, exactly like every other PIN check in this service.
+    /// </summary>
+    Task ConfirmBranchSwitchAsync(Guid userId, string pin, Guid? branchId);
+
     /// <summary>Refresh access token</summary>
     Task<TokenResponseDto> RefreshAccessTokenAsync(string refreshToken);
 

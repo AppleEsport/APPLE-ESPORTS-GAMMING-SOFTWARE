@@ -1491,6 +1491,32 @@ public class AuthService : IAuthService
         }
     }
 
+    public async Task ConfirmBranchSwitchAsync(Guid userId, string pin, Guid? branchId)
+    {
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId
+            && (u.Role == Roles.Admin || u.Role == Roles.SuperAdmin));
+        if (user is null)
+            throw new AuthenticationException("Admin not found.", "INVALID_ADMIN");
+
+        if (string.IsNullOrEmpty(user.AccessPin) || user.AccessPin != pin)
+            throw new AuthenticationException("Invalid PIN.", "INVALID_PIN");
+
+        string? branchName = branchId is { } bId
+            ? await _db.Branches.AsNoTracking().Where(b => b.Id == bId).Select(b => b.Name).FirstOrDefaultAsync()
+            : null;
+
+        await _audit.LogAsync(new AuditEntry
+        {
+            UserId = user.Id,
+            UserRole = user.Role,
+            UserName = user.FullName,
+            Action = AuditActions.BranchSwitch,
+            BranchId = branchId,
+            BranchName = branchName,
+            Details = new { switchedTo = branchName ?? "All Branches (Global)" },
+        });
+    }
+
     public async Task CompletePasswordResetAsync(ResetPasswordDto dto)
     {
         var email = dto.Email.Trim().ToLowerInvariant();

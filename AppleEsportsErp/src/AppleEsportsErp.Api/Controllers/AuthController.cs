@@ -260,6 +260,22 @@ public class AuthController : ControllerBase
         return Ok(ApiResponse.Ok());
     }
 
+    /// <summary>
+    /// An Admin confirms their own PIN before switching into another branch's data. Access was
+    /// never actually the gap - BranchIsolationAttribute already lets Admin reach any branch,
+    /// same as Super Admin - this exists so the switch leaves an accountability record instead
+    /// of happening silently. Super Admin is deliberately not required to call this: their
+    /// free branch switching is pre-existing, unchanged behaviour, not a new gate.
+    /// </summary>
+    [HttpPost("branches/switch-confirm")]
+    [Authorize(Roles = Roles.Admin)]
+    public async Task<IActionResult> ConfirmBranchSwitch([FromBody] ConfirmBranchSwitchDto dto)
+    {
+        var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        await _authService.ConfirmBranchSwitchAsync(userId, dto.AccessPin, dto.BranchId);
+        return Ok(ApiResponse.Ok());
+    }
+
     private void ClearAuthCookies()
     {
         // Must match the attributes the cookies were written with, or the browser treats
