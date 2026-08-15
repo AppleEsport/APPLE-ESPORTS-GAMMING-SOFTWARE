@@ -49,8 +49,6 @@ public sealed class AppConfig
 
     public string GatePassword { get; set; } = "";
 
-    public bool StartMaximized { get; set; } = true;
-
     /// <summary>
     /// "operator" for the counter PC, "user" for a customer-facing gaming PC.
     ///
@@ -174,7 +172,6 @@ public sealed class AppConfig
             if (!string.IsNullOrWhiteSpace(loaded.ServerUrl)) target.ServerUrl = loaded.ServerUrl.Trim();
             if (loaded.GateUsername is not null) target.GateUsername = loaded.GateUsername;
             if (loaded.GatePassword is not null) target.GatePassword = loaded.GatePassword;
-            target.StartMaximized = loaded.StartMaximized;
             if (!string.IsNullOrWhiteSpace(loaded.Role)) target.Role = loaded.Role.Trim();
             if (loaded.AdminPin is not null) target.AdminPin = loaded.AdminPin;
             if (loaded.PcNumber is not null) target.PcNumber = loaded.PcNumber;

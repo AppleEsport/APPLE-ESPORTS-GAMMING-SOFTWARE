@@ -13,31 +13,37 @@ Print this and keep it at the counter.
 | **Ctrl + Shift + S** | Change which server this PC talks to 🔒 |
 | **Ctrl + Shift + P** | Change which PC this machine is 🔒 |
 | **Ctrl + Shift + U** | Remove this machine's setup 🔒 |
-| **Ctrl + Alt + Q** | Close the app on a locked gaming PC 🔒 |
+| **Ctrl + Alt + Q** | Close the application 🔒 |
 
-🔒 = asks for the **admin PIN** first.
+🔒 = asks for the **admin PIN**, but only if one has been set (see below).
 
 ---
 
 ## Two kinds of PC
 
-A machine is set up as one or the other. It changes what staff and customers can do.
+A machine is set up as one or the other. Both now run with no title bar and no close
+button — there is nothing to click by accident, on either one.
 
 ### Operator PC — the counter
 
-The normal dashboard. Staff can minimise it, close it, use it like any other program.
+The normal dashboard, staff-facing. No X button, no minimise, Alt+F4 does nothing —
+staff never close this by accident mid-shift. Ending a shift (inside the dashboard,
+**End Shift**) sends the screen back to the operator login, in the same window — the
+program is still running, just showing the login screen. Still shown in the taskbar,
+and `F11` still toggles a border back on if you genuinely need to move the window.
 
-### Customer gaming PC — locked down
+Actually quitting the program is `Ctrl + Alt + Q`. If no admin PIN is configured on
+this machine, it just works — no prompt. Set one in `AppleEsports.config.json` if you
+want closing the app itself to require a PIN too.
 
-Deliberately sealed so a customer cannot get out to Windows:
+### Customer gaming PC — locked down further still
 
-- **No X button** in the corner
-- **No minimise button**
-- **Alt + F4 does nothing**
+Everything above, plus:
+
 - Not shown in the taskbar
 - No full screen toggle — it is always full screen
-
-The **only** way out is `Ctrl + Alt + Q` with the admin PIN.
+- `Ctrl + Alt + Q` **requires** the admin PIN — with none configured, it refuses outright
+  rather than becoming an unprotected escape hatch a customer could stumble onto
 
 > **Why so strict?** If a customer can close the app, they are sitting at your Windows
 > desktop with your files and your browser. The lock is the whole point of a gaming PC.
@@ -51,9 +57,10 @@ Reloads the current screen. Use it if something looks stuck or out of date. Safe
 time. It does **not** log anyone out and does **not** stop a running session.
 
 ### F11 — Full screen
-Toggles the window border on and off. `Esc` also exits full screen.
+Toggles the window border on and off, in case you need to move or resize the window.
+`Esc` also exits full screen.
 
-Does nothing on a customer gaming PC — that is already permanently full screen.
+Does nothing on a customer gaming PC — that is always locked full screen regardless.
 
 ### Ctrl + Shift + S — Change the server 🔒
 Points this machine at a different Apple Esports server. You would use this when moving
@@ -80,10 +87,15 @@ Asks for the admin PIN, then confirms before doing anything.
 
 > **Stop any running session first.** The seat disappears from the dashboard.
 
-### Ctrl + Alt + Q — Close a locked PC 🔒
-The escape hatch for a customer gaming PC, where the normal close button is gone.
+### Ctrl + Alt + Q — Close the application 🔒
+Neither kind of PC has a close button any more, so this is the only way to quit the
+program on either one. It is not how staff end a shift day to day — that is **End
+Shift** inside the dashboard, which logs the operator out and returns to the login
+screen without closing anything. This shortcut is for actually shutting the program
+down, typically at close of business or before restarting the machine.
 
-Asks for the admin PIN. On an operator PC just close the window normally.
+Asks for the admin PIN on an operator PC only if one has been configured; always
+required on a customer gaming PC.
 
 ---
 

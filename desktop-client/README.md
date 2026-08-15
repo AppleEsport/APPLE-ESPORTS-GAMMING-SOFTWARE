@@ -74,7 +74,6 @@ Settings resolve in this order, later winning:
   "ServerUrl": "http://140.245.195.222:8081",
   "GateUsername": "admin",
   "GatePassword": "Admin@123",
-  "StartMaximized": true,
   "Kiosk": false
 }
 ```
@@ -83,7 +82,6 @@ Settings resolve in this order, later winning:
 |---|---|
 | `ServerUrl` | Server this PC talks to. Scheme optional — `140.245.195.222:8081` works. |
 | `GateUsername` / `GatePassword` | Credentials for the **nginx Basic Auth gate** in front of the dashboard. Leave blank to let the browser prompt instead. This is *not* the app login. |
-| `StartMaximized` | Open maximised. |
 | `Kiosk` | Borderless, always maximised — for gaming PCs. |
 
 ### Security note on `GatePassword`

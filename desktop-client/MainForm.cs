@@ -138,22 +138,24 @@ public sealed class MainForm : Form
             // Cosmetic only — a missing icon must not stop the app.
         }
 
-        // A customer-facing PC is sealed: no close button, no minimise, no border to drag.
-        // If a customer can shut this window they are looking at the Windows desktop, and
-        // the kiosk is worthless. Getting out requires the admin PIN (Ctrl+Alt+Q).
-        if (_config.IsUserPc)
-        {
-            FormBorderStyle = FormBorderStyle.None;
-            ControlBox = false;
-            MinimizeBox = false;
-            MaximizeBox = false;
-            ShowInTaskbar = !_config.IsUserPc;
-            WindowState = FormWindowState.Maximized;
-        }
-        else if (_config.StartMaximized)
-        {
-            WindowState = FormWindowState.Maximized;
-        }
+        // Both kinds of PC now run with no title bar and no close button - an operator
+        // clicking the corner X mid-shift was closing the whole counter by accident, which is
+        // exactly the "goes some where else" this replaces. The one real difference between
+        // the two roles is what it costs to get out: Ctrl+Alt+Q always works (see
+        // ProcessCmdKey), asking for the admin PIN only when one has actually been configured
+        // - the same rule that already applied to this shortcut, now the only door on either
+        // kind of machine instead of one of several. Deliberate day-to-day exit is End Shift,
+        // inside the dashboard itself; this shortcut is for actually quitting the program.
+        //
+        // Still shown in the taskbar and still lets F11 toggle a border back on, unlike a
+        // customer PC - staff need to Alt-Tab to a print dialog or the clock now and then, the
+        // public never should.
+        FormBorderStyle = FormBorderStyle.None;
+        ControlBox = false;
+        MinimizeBox = false;
+        MaximizeBox = false;
+        ShowInTaskbar = !_config.IsUserPc;
+        WindowState = FormWindowState.Maximized;
 
         BuildOverlay();
 
@@ -681,8 +683,10 @@ public sealed class MainForm : Form
                 if (Unlocked("close Apple Esports")) ForceExit();
                 return true;
 
-            // Swallow Alt+F4 on a locked PC so a customer cannot reach the desktop.
-            case Keys.Alt | Keys.F4 when _config.IsUserPc:
+            // Swallowed on both roles now that neither has a close button - Alt+F4 must not
+            // reopen the exact door removing the title bar was meant to close. Ctrl+Alt+Q is
+            // the one way out on either kind of machine.
+            case Keys.Alt | Keys.F4:
                 return true;
         }
         return base.ProcessCmdKey(ref msg, keyData);
@@ -778,10 +782,15 @@ public sealed class MainForm : Form
         Application.Exit();
     }
 
-    // Blocks the window's own close path (Alt+F4, taskbar, task switcher) on a locked PC.
+    // Blocks the window's own close path (task switcher, taskbar right-click, a script
+    // sending WM_CLOSE) on either kind of machine now - there is no title bar for this to be
+    // "the X button" any more, but Windows offers several other ways to ask a window to
+    // close and all of them used to work. _allowClose is set only by ForceExit (Ctrl+Alt+Q,
+    // itself PIN-gated when a PIN is configured) and by the update installer's own restart,
+    // which is the deliberate exit this is not meant to block.
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
-        if (_config.IsUserPc && !_allowClose && e.CloseReason is CloseReason.UserClosing)
+        if (!_allowClose && e.CloseReason is CloseReason.UserClosing)
         {
             e.Cancel = true;
             return;

@@ -2,6 +2,5 @@
   "ServerUrl": "http://140.245.195.222:8081",
   "GateUsername": "admin",
   "GatePassword": "Admin@123",
-  "StartMaximized": true,
   "Kiosk": false
 }
