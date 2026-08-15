@@ -587,9 +587,30 @@ public class SyncInboxController : ControllerBase
 
         Enum.TryParse<PaymentType>(ReadString(root, "paymentType"), ignoreCase: true, out var method);
 
-        // Anything not taken in cash is whatever the branch settled it with. Split out this way
-        // rather than guessed per method, because the drawer only ever cares about the cash.
-        var nonCash = Math.Max(0m, totalPaid - cash);
+        // Each leg as the branch actually took it.
+        //
+        // This used to be `nonCash = totalPaid - cash`, then assigned wholly to Online or wholly
+        // to Wallet depending on the payment type - which cannot represent a Split at all. A
+        // Rs 5 cash + Rs 5 online bill arrived here as Rs 10 with no idea where half of it went,
+        // and the Bill row below was never given any of the legs, so Head Office booked the lot
+        // as cash: drawer overstated by Rs 5, online settlement missing Rs 5, on every split
+        // bill ever taken.
+        //
+        // Older branches predating this send only cashAmount. For them the old inference is
+        // still the best available answer, so it is kept as the fallback rather than silently
+        // recording zero - a 2.4.10 branch must not start reporting worse figures than it did.
+        var legsPresent = root.TryGetProperty("onlineAmount", out _) || root.TryGetProperty("walletAmount", out _);
+        var inferredNonCash = Math.Max(0m, totalPaid - cash);
+
+        var online = legsPresent
+            ? ReadDecimal(root, "onlineAmount") ?? 0m
+            : (method == PaymentType.Wallet ? 0m : inferredNonCash);
+
+        var wallet = legsPresent
+            ? ReadDecimal(root, "walletAmount") ?? 0m
+            : (method == PaymentType.Wallet ? inferredNonCash : 0m);
+
+        var actualCash = ReadDecimal(root, "actualCashCollected") ?? cash;
 
         if (!await _db.Bills.AnyAsync(b => b.Id == billId))
         {
@@ -607,6 +628,16 @@ public class SyncInboxController : ControllerBase
                 DiscountAmount = discount,
                 TotalAmount = billTotal,
                 PaymentType = method,
+                // The Bill's own legs were never set here at all, so they defaulted to zero
+                // while the Payment row beside them carried the real figures - two rows in one
+                // database disagreeing about the same money. Every report that reads the bill
+                // rather than the payment (End of Day's payment breakdown among them) was
+                // reading those zeros.
+                CashAmount = cash,
+                OnlineAmount = online,
+                WalletAmount = wallet,
+                CashReceived = cash,
+                ActualCashCollected = actualCash,
                 Status = BillStatus.Completed,
                 CreatedAt = paidAt,
                 CompletedAt = paidAt,
@@ -622,11 +653,11 @@ public class SyncInboxController : ControllerBase
             PaymentType = method,
             TotalAmount = totalPaid,
             CashAmount = cash,
-            OnlineAmount = method == PaymentType.Wallet ? 0m : nonCash,
-            WalletAmount = method == PaymentType.Wallet ? nonCash : 0m,
+            OnlineAmount = online,
+            WalletAmount = wallet,
             CashReceived = cash,
             ChangeReturned = 0m,
-            ActualCashCollected = cash,
+            ActualCashCollected = actualCash,
             GamingPortion = gaming,
             FoodPortion = food,
             Status = "completed",

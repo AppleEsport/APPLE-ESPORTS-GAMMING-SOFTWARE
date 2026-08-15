@@ -456,7 +456,20 @@ public class BillingService : IBillingService
                 BranchId = branchId,
                 TargetType = "bill",
                 TargetId = bill.Id,
-                Details = new { PaymentType = dto.PaymentType.ToString(), Total = totalPayment, Cash = dto.CashAmount }
+                // Every leg, not just cash. This used to read
+                // `new { PaymentType, Total, Cash }`, so a Split of Rs 5 cash + Rs 5 online
+                // was recorded as "Split, Total 10, Cash 5" and the other Rs 5 simply was not
+                // there. Anyone reading the audit trail to settle a dispute could see the
+                // money was short and nothing saying where it went.
+                Details = new
+                {
+                    PaymentType = dto.PaymentType.ToString(),
+                    Total = totalPayment,
+                    Cash = dto.CashAmount,
+                    Online = dto.OnlineAmount,
+                    Wallet = dto.WalletAmount,
+                    Credit = dto.CreditAmount,
+                }
             });
 
             await _auditService.LogAsync(new AuditEntry
@@ -482,7 +495,17 @@ public class BillingService : IBillingService
                 operatorId,
                 shiftId,
                 paymentType = dto.PaymentType.ToString(),
+                // Each leg travels as itself. Only cashAmount used to go up, and Head Office
+                // reconstructed the rest as `totalPaid - cash`, guessing from the payment type
+                // whether that remainder was online or wallet. For a Split it could only ever
+                // guess one of them, so a Rs 5 + Rs 5 split arrived as a bill Head Office
+                // recorded as Rs 10 cash - overstating the drawer and losing the online
+                // settlement, on every split bill the company has ever taken.
                 cashAmount = dto.CashAmount,
+                onlineAmount = dto.OnlineAmount,
+                walletAmount = dto.WalletAmount,
+                creditAmount = dto.CreditAmount,
+                actualCashCollected,
                 totalPaid = totalPayment,
                 gamingAmount = bill.GamingAmount,
                 foodAmount = bill.FoodAmount,
