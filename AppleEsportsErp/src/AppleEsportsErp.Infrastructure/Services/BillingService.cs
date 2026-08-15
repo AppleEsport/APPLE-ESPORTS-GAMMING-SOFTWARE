@@ -45,15 +45,24 @@ public class BillingService : IBillingService
     /// SessionService refuses to start/stop a session directly at Head Office: see
     /// BillingController.ProcessPayment for the branch-command instruction this sends instead.
     /// </summary>
+    /// <summary>
+    /// Shared by every bill-mutating method here, so <paramref name="what"/> is the only thing
+    /// that ever changes between callers. It used to not be shared cleanly - this message body
+    /// was written for ProcessPaymentAsync specifically ("a payment written here...", pointing
+    /// at api/bills/{id}/pay) and then reused verbatim for ApplyDiscountAsync, so refusing a
+    /// discount came back talking about a payment and pointing at the pay endpoint - correct
+    /// for one caller, wrong and confusing for the other. Kept generic now on purpose: whoever
+    /// calls this next does not get to be the one who has to remember to update the wording.
+    /// </summary>
     private void RefuseIfHeadOffice(string what)
     {
         if (!_configuration.IsHeadOffice()) return;
 
         throw new AppException(
             $"This bill has to be {what} by the branch itself, not written here at Head Office - " +
-            "a payment written here is invisible to the counter, so the register is never credited " +
-            "and the PC never frees up. Send it as an instruction instead (api/bills/{id}/pay) and " +
-            "the branch will carry it out within a few seconds and report back.",
+            "a change written here is invisible to the counter, so the branch's own copy never " +
+            "agrees with what Head Office just did. Send it as an instruction instead and the " +
+            "branch will carry it out within a few seconds and report back.",
             System.Net.HttpStatusCode.BadRequest,
             "BRANCH_ONLY_OPERATION");
     }

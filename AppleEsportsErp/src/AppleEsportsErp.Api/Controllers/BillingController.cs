@@ -94,11 +94,11 @@ public class BillingController : ControllerBase
     [HttpPost("{id:guid}/discount")]
     [Idempotent]
     [Authorize] // Replaced strict policy with inline check
-    public async Task<IActionResult> ApplyDiscount(Guid id, [FromBody] ApplyDiscountDto dto)
+    public async Task<IActionResult> ApplyDiscount(Guid id, [FromBody] ApplyDiscountDto dto, CancellationToken ct)
     {
         var role = User.FindFirstValue(ClaimTypes.Role);
         var permissionsStr = User.FindFirstValue("dashboardPermissions");
-        
+
         bool canDiscount = role == AppleEsportsErp.Application.Constants.Roles.SuperAdmin;
         if (!canDiscount && role == AppleEsportsErp.Application.Constants.Roles.Admin && !string.IsNullOrEmpty(permissionsStr))
         {
@@ -116,6 +116,31 @@ public class BillingController : ControllerBase
         if (!canDiscount) return Forbid();
 
         var adminId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+
+        // Same reasoning as payment: a discount is a change to money the branch's own bill
+        // is holding, and only the branch's copy is the one its counter and register read.
+        // BillingService.ApplyDiscountAsync refuses to write this directly at Head Office -
+        // this is the other half of that fix, actually sending it somewhere useful instead
+        // of just failing.
+        if (_remote.MustTravel)
+        {
+            var branchId = await _db.Set<AppleEsportsErp.Domain.Entities.Bill>().AsNoTracking()
+                .Where(b => b.Id == id).Select(b => b.BranchId).FirstOrDefaultAsync(ct);
+
+            if (branchId == Guid.Empty)
+                return NotFound(ApiResponse<object>.Fail("Head Office has no such bill.", "BILL_NOT_FOUND"));
+
+            return await SendToBranchAsync(branchId, AppleEsportsErp.Api.Services.BranchCommands.ApplyDiscount, new
+            {
+                billId = id,
+                dto.DiscountType,
+                dto.DiscountValue,
+                dto.Reason,
+                actorId = adminId,
+                actorRole = role,
+            }, ct);
+        }
+
         var result = await _billingService.ApplyDiscountAsync(GetBranchId(), adminId, role!, id, dto);
         return Ok(ApiResponse<BillDto>.Ok(result));
     }

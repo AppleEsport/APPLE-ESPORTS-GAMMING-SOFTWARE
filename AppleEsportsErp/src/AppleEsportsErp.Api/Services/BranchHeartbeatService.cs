@@ -150,6 +150,12 @@ public class BranchHeartbeatService : BackgroundService
                   })
             .ToListAsync(ct);
 
+        // SessionStartTime/SessionEndTime ride along here for the same reason State and
+        // CurrentSessionId do: Head Office has no other way to learn them. Session itself is
+        // never synced (only Bill is, once paid), so without this a session that just started,
+        // or that was just transferred onto a different PC, showed at Head Office as a bare
+        // "Active" with nothing to time it against - or worse, was read as confirmed
+        // open-ended simply because the real answer was missing. See Pc.CurrentSessionStartTime.
         var pcs = await db.Pcs.AsNoTracking()
             .Where(p => p.BranchId == branchId && !p.IsDeleted)
             .Select(p => new PcStateDto
@@ -383,6 +389,9 @@ public class BranchHeartbeatService : BackgroundService
 
             case BranchCommands.OverrideReservation:
                 return await RunOverrideReservationAsync(scoped, command.Payload, ct);
+
+            case BranchCommands.ApplyDiscount:
+                return await RunApplyDiscountAsync(scoped, command.Payload, ct);
 
             default:
                 return (false, $"This branch does not know the command '{command.CommandType}' yet.");
@@ -1185,6 +1194,61 @@ public class BranchHeartbeatService : BackgroundService
                 bill.BranchId, bill.OperatorId, bill.ShiftId ?? Guid.Empty, billId, dto);
 
             return (true, $"Paid. {dto.PaymentType}, Rs {result.TotalAmount}.");
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.GetBaseException().Message);
+        }
+    }
+
+    /// <summary>
+    /// Applies a discount decided at Head Office to the branch's own copy of the bill.
+    ///
+    /// The actor is read straight from the payload rather than looked up from the shift on
+    /// duty, unlike every other command here - a discount is a specific, accountable decision
+    /// by whoever pressed the button (the Super Admin, or an Admin with the discount
+    /// permission, both already verified by BillingController before the command was ever
+    /// sent), and crediting it to whichever operator happens to be on shift when it arrives
+    /// would misattribute the one action on a bill most likely to be questioned later.
+    /// </summary>
+    private static async Task<(bool, string)> RunApplyDiscountAsync(
+        IServiceProvider scoped, string payload, CancellationToken ct)
+    {
+        Guid billId, actorId;
+        string actorRole;
+        Application.DTOs.Billing.ApplyDiscountDto dto;
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            var root = doc.RootElement;
+            billId = root.GetProperty("billId").GetGuid();
+            actorId = root.GetProperty("actorId").GetGuid();
+            actorRole = root.GetProperty("actorRole").GetString() ?? Roles.SuperAdmin;
+            dto = JsonSerializer.Deserialize<Application.DTOs.Billing.ApplyDiscountDto>(
+                payload, new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                ?? throw new InvalidOperationException("Empty discount payload.");
+        }
+        catch
+        {
+            return (false, "The discount command arrived without a readable bill id and amount.");
+        }
+
+        var db = scoped.GetRequiredService<AppDbContext>();
+        var bill = await db.Bills.AsNoTracking().FirstOrDefaultAsync(b => b.Id == billId, ct);
+
+        if (bill is null)
+            return (false, "No such bill exists at this branch.");
+
+        if (bill.Status == BillStatus.Completed)
+            return (false, "This bill has already been paid, so a discount can no longer be applied to it.");
+
+        try
+        {
+            var billingService = scoped.GetRequiredService<IBillingService>();
+            var result = await billingService.ApplyDiscountAsync(
+                bill.BranchId, actorId, actorRole, billId, dto);
+
+            return (true, $"Discount applied. New total Rs {result.TotalAmount}.");
         }
         catch (Exception ex)
         {
