@@ -524,7 +524,16 @@ public class BranchHeartbeatController : ControllerBase
             //
             // It also made UpdatedAt useless. "Last changed" that changes every three seconds
             // whether or not anything changed answers no question anybody would ask of it.
-            if (pc.State == state && pc.CurrentSessionId == reported.CurrentSessionId) continue;
+            //
+            // SessionStartTime/EndTime compared too, not just the session id - a session gets
+            // extended without ever changing which session it is, and an extension is exactly
+            // the kind of change Head Office needs to actually see, or its screen would show a
+            // customer's remaining time as whatever the original plan said, forever.
+            if (pc.State == state
+                && pc.CurrentSessionId == reported.CurrentSessionId
+                && pc.CurrentSessionStartTime == reported.SessionStartTime
+                && pc.CurrentSessionEndTime == reported.SessionEndTime)
+                continue;
 
             _logger.LogInformation(
                 "PC {PcNumber} ({PcId}) on branch {BranchId} moving {OldState}/{OldSession} -> " +
@@ -533,6 +542,8 @@ public class BranchHeartbeatController : ControllerBase
 
             pc.State = state;
             pc.CurrentSessionId = reported.CurrentSessionId;
+            pc.CurrentSessionStartTime = reported.SessionStartTime;
+            pc.CurrentSessionEndTime = reported.SessionEndTime;
             pc.LastActiveAt = DateTimeOffset.UtcNow;
             pc.UpdatedAt = DateTimeOffset.UtcNow;
         }
