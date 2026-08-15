@@ -546,11 +546,39 @@ public class BranchHeartbeatService : BackgroundService
         if (item.Status == FoodAvailability.OutOfStock && item.CurrentStock > 0)
             item.Status = FoodAvailability.Available;
 
+        // Whoever is on shift, the same convention RunSetMaintenanceAsync uses - they are the
+        // person who will actually be asked about a delivery that shows up at their counter.
+        //
+        // Unlike a PC, a stock delivery has no reasonable "refuse if nobody's on shift" rule:
+        // a supplier can drop off stock overnight, and Head Office logging that while the shop
+        // is closed is a completely ordinary case, not an error. So this never refuses - only
+        // OperatorId is left null when there is truly nobody to name, and UserName is always
+        // set explicitly below regardless, so there is nothing left for AuditService's own
+        // Operator/User lookup to fail at.
+        //
+        // This is the fix for the bug that shipped in 2.4.11: this audit entry was built with
+        // none of UserId, OperatorId or UserName set. AuditService found nothing to resolve a
+        // name from and inserted NULL into audit_logs.UserName, which the table's NOT NULL
+        // constraint rejects - and that failed INSERT, still tracked as a pending change on
+        // this same DbContext, then failed the *next* SaveChangesAsync too: the one actually
+        // recording the stock delivery. The whole command reported "Unexpected error: 23502
+        // ... UserName" and nothing was saved, stock included.
+        var onShiftOperatorId = await db.Shifts.AsNoTracking()
+            .Where(s => s.BranchId == item.BranchId && s.Status == ShiftStatus.Active)
+            .OrderByDescending(s => s.LoginTime)
+            .Select(s => (Guid?)s.OperatorId)
+            .FirstOrDefaultAsync(ct);
+
+        string? onShiftName = onShiftOperatorId is { } opId
+            ? await db.Operators.AsNoTracking().Where(o => o.Id == opId).Select(o => o.FullName).FirstOrDefaultAsync(ct)
+            : null;
+
         db.Add(new InventoryLog
         {
             Id = Guid.NewGuid(),
             InventoryId = item.Id,
             BranchId = item.BranchId,
+            OperatorId = onShiftOperatorId,
             Action = "refill",
             Quantity = quantity,
             OldValue = oldStock.ToString(),
@@ -562,8 +590,10 @@ public class BranchHeartbeatService : BackgroundService
         var audit = scoped.GetRequiredService<IAuditService>();
         await audit.LogAsync(new AuditEntry
         {
+            OperatorId = onShiftOperatorId,
             Action = AuditActions.StockAdd,
             UserRole = Roles.Admin,
+            UserName = string.IsNullOrWhiteSpace(onShiftName) ? "Head Office" : onShiftName,
             TargetType = "inventory_item",
             TargetId = item.Id,
             BranchId = item.BranchId,
