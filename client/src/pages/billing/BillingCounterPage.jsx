@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Receipt, Clock, IndianRupee, User } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useBranch } from '../../contexts/BranchContext';
@@ -33,6 +33,7 @@ export default function BillingCounterPage() {
   const { activeBranch } = useBranch();
   const { subscribe, connected, SIGNALR_HUBS } = useSocket();
   const { state } = useLocation();
+  const navigate = useNavigate();
   const autoSelectPcId = state?.autoSelectPcId;
 
   const [bills, setBills] = useState([]);
@@ -324,8 +325,12 @@ export default function BillingCounterPage() {
                 fetchDashboardData();
               }}
               onPaymentSuccess={() => {
+                // Same behaviour for every role that can complete a payment here - operator,
+                // admin and Super Admin all render this exact component, so fixing it once
+                // here covers all three rather than needing three separate patches.
                 setSelectedItem(null);
                 fetchDashboardData();
+                navigate('/app/sessions');
               }}
               defaultPaymentMethod={selectedBillData.pcId === autoSelectPcId ? state?.autoSelectPaymentMethod : undefined}
             />
