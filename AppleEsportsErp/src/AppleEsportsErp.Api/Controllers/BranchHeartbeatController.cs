@@ -320,8 +320,15 @@ public class BranchHeartbeatController : ControllerBase
     private async Task<BranchConfigDto?> ConfigForBranchIfChangedAsync(
         Guid branchId, string? branchHasVersion, CancellationToken ct)
     {
+        // This branch's own operators, plus every Global Admin from every OTHER branch too -
+        // "reachable from any counter" was the entire point of being promoted, and it was
+        // never actually true. A promoted operator's own branch got the change (they are one
+        // of "this branch's own operators" to themselves); nobody else's branch ever received
+        // a row for them at all, so Admin Quick-Switch at any other branch could only ever
+        // list people who happened to already be native there. Confirmed live: Nazmin
+        // (Citylight's own Global Admin) never appeared at Adajan or anywhere but home.
         var operators = await _db.Operators.AsNoTracking()
-            .Where(o => o.BranchId == branchId)
+            .Where(o => o.BranchId == branchId || o.IsGlobalAdmin)
             .OrderBy(o => o.Id)   // stable order, or the fingerprint changes on its own
             .Select(o => new BranchOperatorConfigDto
             {
