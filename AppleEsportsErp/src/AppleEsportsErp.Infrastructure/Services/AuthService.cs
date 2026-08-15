@@ -1339,8 +1339,13 @@ public class AuthService : IAuthService
 
     public async Task<IEnumerable<AvailableAdminDto>> GetAvailableAdminsForSwitchAsync()
     {
+        // Admin-level profiles only - a Users-table Admin, or an Operator promoted with
+        // IsGlobalAdmin. Super Admin is deliberately excluded even if one happens to have a
+        // PIN set: Super Admin is not a profile anyone quick-switches into from an operator
+        // station, it is its own separate login. Listing it here would let an operator's PIN
+        // guess reach the single most powerful account in the system from the counter.
         var activeAdmins = await _db.Users
-            .Where(u => (u.Role == Roles.Admin || u.Role == Roles.SuperAdmin) && u.Status == UserStatus.Active && !string.IsNullOrEmpty(u.AccessPin))
+            .Where(u => u.Role == Roles.Admin && u.Status == UserStatus.Active && !string.IsNullOrEmpty(u.AccessPin))
             .Select(u => new AvailableAdminDto
             {
                 Id = u.Id,
