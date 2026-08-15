@@ -11,6 +11,7 @@ import { useBranch } from '../../contexts/BranchContext';
 import { useSocket } from '../../contexts/SocketContext';
 import { ROLES } from '../../config/constants';
 import AdminSwitchModal from '../auth/AdminSwitchModal';
+import BranchSwitchPinModal from '../auth/BranchSwitchPinModal';
 
 export default function Topbar({ onToggleSidebar, sidebarOpen, onLogoutClick }) {
   const navigate = useNavigate();
@@ -23,6 +24,31 @@ export default function Topbar({ onToggleSidebar, sidebarOpen, onLogoutClick }) 
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showBranchMenu, setShowBranchMenu] = useState(false);
   const [showAdminSwitchModal, setShowAdminSwitchModal] = useState(false);
+  const [pendingBranchSwitch, setPendingBranchSwitch] = useState(null); // { id, name } | null while the PIN modal is open
+
+  // Regular Admin gets the same free branch access Super Admin already has -
+  // BranchIsolationAttribute grants both roles equally - but their switch is not pre-existing,
+  // unattributed behaviour the way Super Admin's is, so it goes through a PIN confirmation
+  // that leaves an Audit Trail entry. A literal Super Admin keeps the instant switch.
+  const isTrueSuperAdmin = user?.role === ROLES.SUPER_ADMIN;
+
+  const completeBranchSwitch = useCallback((branchId) => {
+    switchBranch(branchId);
+    setShowBranchMenu(false);
+    const GLOBAL_PATHS = ['/app/dashboard', '/app/settings', '/app/employee-forms'];
+    if (!GLOBAL_PATHS.some(p => location.pathname.startsWith(p))) {
+      navigate('/app/dashboard');
+    }
+  }, [switchBranch, location.pathname, navigate]);
+
+  const requestBranchSwitch = useCallback((branch) => {
+    if (isTrueSuperAdmin) {
+      completeBranchSwitch(branch?.id ?? null);
+      return;
+    }
+    setShowBranchMenu(false);
+    setPendingBranchSwitch(branch ?? { id: null, name: null });
+  }, [isTrueSuperAdmin, completeBranchSwitch]);
 
   // ── Live Clock ──
   useEffect(() => {
@@ -150,15 +176,7 @@ export default function Topbar({ onToggleSidebar, sidebarOpen, onLogoutClick }) 
                 </div>
                 
                 <button
-                  onClick={() => { 
-                    switchBranch(null); 
-                    setShowBranchMenu(false); 
-                    
-                    const GLOBAL_PATHS = ['/app/dashboard', '/app/settings', '/app/employee-forms'];
-                    if (!GLOBAL_PATHS.some(p => location.pathname.startsWith(p))) {
-                      navigate('/app/dashboard');
-                    }
-                  }}
+                  onClick={() => requestBranchSwitch(null)}
                   className={`w-full text-left px-3 py-2 text-xs hover:bg-bg-3 transition-colors flex items-center gap-2 border-b border-border/40 ${
                     activeBranch === null ? 'text-accent bg-accent/5' : 'text-text'
                   }`}
@@ -172,7 +190,7 @@ export default function Topbar({ onToggleSidebar, sidebarOpen, onLogoutClick }) 
                 {branches.map((b) => (
                   <button
                     key={b.id}
-                    onClick={() => { switchBranch(b.id); setShowBranchMenu(false); }}
+                    onClick={() => requestBranchSwitch(b)}
                     className={`w-full text-left px-3 py-2 text-xs hover:bg-bg-3 transition-colors flex items-center gap-2 ${
                       activeBranch?.id === b.id ? 'text-accent bg-accent/5' : 'text-text'
                     }`}
@@ -323,6 +341,15 @@ export default function Topbar({ onToggleSidebar, sidebarOpen, onLogoutClick }) 
       </div>
     </header>
     <AdminSwitchModal isOpen={showAdminSwitchModal} onClose={() => setShowAdminSwitchModal(false)} />
+    <BranchSwitchPinModal
+      isOpen={!!pendingBranchSwitch}
+      branch={pendingBranchSwitch}
+      onClose={() => setPendingBranchSwitch(null)}
+      onConfirmed={() => {
+        completeBranchSwitch(pendingBranchSwitch?.id ?? null);
+        setPendingBranchSwitch(null);
+      }}
+    />
     </>
   );
 }
