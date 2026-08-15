@@ -138,6 +138,16 @@ that is the point.
 
 ## For developers
 
-The shortcuts live in `ProcessCmdKey` in
-[`desktop-client/MainForm.cs`](desktop-client/MainForm.cs). **Keep this file in step with
-that code** — this page is what branch staff are handed.
+Most shortcuts live in `HandleShortcut` (called from `ProcessCmdKey`) in
+[`desktop-client/MainForm.cs`](desktop-client/MainForm.cs), which only sees key presses when
+a native WinForms control has focus - a dialog, or the form itself before the dashboard has
+loaded.
+
+`Ctrl + Alt + Q` is the exception, wired separately in `OnLoadAsync`: this SDK's WebView2
+WinForms wrapper keeps its `CoreWebView2Controller` private, so there is no supported way to
+intercept a key at the host level while the dashboard - which has focus essentially the
+entire time this app is in use - is what is actually focused. It is instead caught by a
+script injected into the page itself and carried back to the host over the same
+`postMessage` bridge `check-for-updates` already uses, as the fixed word `close-app`.
+
+**Keep this file in step with the code** — this page is what branch staff are handed.

@@ -284,6 +284,22 @@ public sealed class MainForm : Form
 
         var core = _web.CoreWebView2;
 
+        // Ctrl+Alt+Q has to work regardless of where keyboard focus is, and focus is on the
+        // dashboard - inside WebView2 - almost the entire time this app is in use. This SDK's
+        // WinForms wrapper keeps its CoreWebView2Controller private, so there is no supported
+        // way to intercept the key at the .NET host level while WebView2 has focus; the
+        // documented fix (Controller.AcceleratorKeyPressed) simply is not reachable here.
+        // Caught in the page itself instead - the same postMessage bridge WebMessageReceived
+        // below already trusts for "check-for-updates" - and run on every document, since the
+        // dashboard is a client-side router that never reloads the outer page as it navigates.
+        await core.AddScriptToExecuteOnDocumentCreatedAsync(
+            "window.addEventListener('keydown', function(e) {" +
+            "  if (e.ctrlKey && e.altKey && !e.shiftKey && (e.key === 'q' || e.key === 'Q')) {" +
+            "    e.preventDefault();" +
+            "    window.chrome.webview.postMessage('close-app');" +
+            "  }" +
+            "}, true);");
+
         core.Settings.AreDefaultContextMenusEnabled = true;
         core.Settings.AreDevToolsEnabled = false;
         core.Settings.IsStatusBarEnabled = false;
@@ -369,21 +385,32 @@ public sealed class MainForm : Form
         core.ProcessFailed += (_, _) =>
             ShowOverlay("The embedded browser stopped responding.", showActions: true);
 
-        // The one thing the dashboard is allowed to ask of the machine it runs on.
+        // What the dashboard is allowed to ask of the machine it runs on.
         //
         // The Updates page can see that a newer version exists - it asks Head Office directly -
         // but only this process can install one. Without a way across, the best that page could
         // ever offer was "it will happen on its own eventually", which is no use to somebody
         // standing at a counter wondering whether updates work at all.
         //
-        // Deliberately not a general bridge. It takes one fixed word and grants nothing else:
-        // the page cannot name a file, a version or a URL, so the worst a compromised dashboard
-        // achieves here is asking Head Office for the update it was going to take anyway.
+        // "close-app" is the other side of the injected keydown listener above - Ctrl+Alt+Q
+        // caught in the page, carried back here the same way, because the WinForms host
+        // cannot see the key press directly while WebView2 has focus.
+        //
+        // Deliberately not a general bridge. Both are fixed words with no parameters: the page
+        // cannot name a file, a version or a URL, so the worst a compromised dashboard achieves
+        // here is asking Head Office for the update it was going to take anyway, or triggering
+        // the same PIN-gated close a keypress would have.
         core.WebMessageReceived += (_, args) =>
         {
             string message;
             try { message = args.TryGetWebMessageAsString() ?? string.Empty; }
             catch { return; }   // not a string - not ours
+
+            if (string.Equals(message, "close-app", StringComparison.Ordinal))
+            {
+                if (Unlocked("close Apple Esports")) ForceExit();
+                return;
+            }
 
             if (!string.Equals(message, "check-for-updates", StringComparison.Ordinal)) return;
 
@@ -649,7 +676,20 @@ public sealed class MainForm : Form
     // ── Keyboard ──────────────────────────────────────────────────────────
 
     // Keep this in step with SHORTCUT_KEYS.md — that file is what the branch staff are given.
-    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    //
+    // Shared between two very different paths: ProcessCmdKey sees keys when a native WinForms
+    // control has focus (a dialog, this form itself), but the dashboard lives inside WebView2,
+    // and Chromium's own out-of-process message handling swallows key presses before .NET's
+    // message loop - and therefore ProcessCmdKey - ever sees them. That is the entire form
+    // most of the time this app is actually in use, which meant Ctrl+Alt+Q silently did
+    // nothing the moment the dashboard finished loading. Ctrl+Alt+Q specifically is instead
+    // caught by a script injected in OnLoadAsync and carried back via WebMessageReceived
+    // ("close-app") - see the comment there for why: this SDK's WinForms wrapper keeps its
+    // CoreWebView2Controller private, so the documented AcceleratorKeyPressed fix for this
+    // exact problem is not reachable from here. The other shortcuts (F5, F11, Ctrl+Shift+…)
+    // still only work when a native control has focus - a real gap, just a smaller one, since
+    // none of them are the only way to do something the way Ctrl+Alt+Q now is.
+    private bool HandleShortcut(Keys keyData)
     {
         switch (keyData)
         {
@@ -689,6 +729,16 @@ public sealed class MainForm : Form
             case Keys.Alt | Keys.F4:
                 return true;
         }
+
+        return false;
+    }
+
+    // Native WinForms controls only (a dialog, this form itself) - see HandleShortcut's own
+    // comment for why the dashboard, which has focus almost all the time, cannot be reached
+    // this way, and needs the separate injected-script path in OnLoadAsync instead.
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if (HandleShortcut(keyData)) return true;
         return base.ProcessCmdKey(ref msg, keyData);
     }
 
