@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Tag } from 'lucide-react';
 import { useToast } from '../ui/Toast';
-import api from '../../config/api';
+import { applyDiscount } from '../../api/billing.api';
 
 const DISCOUNT_OPTIONS = [
   { label: 'NONE', value: 0, type: 'Percentage' },
@@ -29,12 +29,16 @@ export default function SessionDiscountModal({ isOpen, onClose, pc, onRefresh })
     setLoading(true);
     try {
       const opt = DISCOUNT_OPTIONS.find(o => o.value === selectedDiscount);
-      await api.post(`/bills/${pc.activeBillId}/discount`, {
+      const result = await applyDiscount(pc.activeBillId, {
         discountType: opt.type,
         discountValue: opt.value,
         reason: 'Session Discount applied by Admin'
       });
-      toast.success(`Discount ${opt.label !== 'NONE' ? opt.label : 'removed'} applied successfully!`);
+      toast.success(
+        result?.queued
+          ? (result.message || 'Sent to the branch. It applies this within a few seconds.')
+          : `Discount ${opt.label !== 'NONE' ? opt.label : 'removed'} applied successfully!`
+      );
       onRefresh?.();
       onClose();
     } catch (err) {
