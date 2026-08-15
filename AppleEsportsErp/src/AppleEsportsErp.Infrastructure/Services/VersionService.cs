@@ -140,6 +140,62 @@ public class VersionService : IVersionService
     }
 
     /// <summary>
+    /// Takes a version off the branches without deleting its record - the release notes and
+    /// installer both stay, so it can be approved again later without re-uploading anything.
+    /// This is the soft version of DeleteVersionAsync, for when it might still be wanted.
+    ///
+    /// Exists because approval had no way back. A version approved by mistake - or approved
+    /// again after being deliberately rolled back, which is exactly what happened the one time
+    /// this was needed - stayed the newest approved version forever, with nothing on this
+    /// screen able to undo it short of editing the database directly.
+    /// </summary>
+    public async Task<VersionInfoDto> UnapproveVersionAsync(int versionInfoId)
+    {
+        var version = await _unitOfWork.Repository<VersionInfo>()
+            .Query()
+            .FirstOrDefaultAsync(v => v.Id == versionInfoId);
+
+        if (version == null)
+            throw new Exception($"Version {versionInfoId} not found");
+
+        version.ApprovedForRollout = false;
+
+        _unitOfWork.Repository<VersionInfo>().Update(version);
+        await _unitOfWork.CommitTransactionAsync();
+
+        return MapToVersionInfoDto(version);
+    }
+
+    /// <summary>
+    /// Removes a version's record outright, approved or not - what "this should never have
+    /// existed" actually needs, rather than merely hiding it. GetLatestVersionAsync takes
+    /// whichever record is newest by creation date with no regard for approval, so a version
+    /// rolled back by UnapproveVersionAsync alone still shows as "Newest update" on this same
+    /// screen; deleting it here is what actually lets the previous version take that place
+    /// again.
+    ///
+    /// Only removes the database record. The installer file itself is left for the caller to
+    /// delete - this layer has no notion of where releases are stored on disk, and should not
+    /// need one just to remove a row.
+    /// </summary>
+    public async Task<string?> DeleteVersionAsync(int versionInfoId)
+    {
+        var version = await _unitOfWork.Repository<VersionInfo>()
+            .Query()
+            .FirstOrDefaultAsync(v => v.Id == versionInfoId);
+
+        if (version == null)
+            throw new Exception($"Version {versionInfoId} not found");
+
+        var fileName = version.InstallerFileName;
+
+        _unitOfWork.Repository<VersionInfo>().Remove(version);
+        await _unitOfWork.CommitTransactionAsync();
+
+        return fileName;
+    }
+
+    /// <summary>
     /// Tells the branches an update is waiting. Plain English throughout - the person reading
     /// this is behind a counter, not at a keyboard, and "artefact", "rollout" and "deployment"
     /// mean nothing to them.

@@ -136,6 +136,42 @@ export default function UpdatesPage() {
     }
   };
 
+  // "Approve" never had a way back — the one time this was needed, an update rolled back at
+  // Head Office got approved again by mistake, kept offering itself to every branch, and
+  // nothing on this page could undo it short of editing the database directly.
+  const unapprove = async (versionInfoId) => {
+    setBusy('unapprove');
+    try {
+      await api.post(`/versions/${versionInfoId}/unapprove`);
+      setNotice('Taken off the branches. Nobody will be offered this update until it is approved again.');
+      await load();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Could not un-approve this update.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const removeVersion = async (versionInfoId, version) => {
+    if (!window.confirm(
+      `Remove version ${version} entirely?\n\n` +
+      'This deletes its record and its installer file. No branch will be offered it again, ' +
+      'and the previous version becomes "Newest update" in its place.\n\n' +
+      'This cannot be undone from here — only re-adding it the same way it was added the first time.'
+    )) return;
+
+    setBusy('remove');
+    try {
+      await api.delete(`/versions/${versionInfoId}`);
+      setNotice(`Version ${version} removed.`);
+      await load();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Could not remove this update.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const publish = async (version, releaseNotes) => {
     setBusy('publish');
     try {
@@ -218,6 +254,8 @@ export default function UpdatesPage() {
               branches={branches}
               busy={busy}
               onApprove={approve}
+              onUnapprove={unapprove}
+              onRemove={removeVersion}
               onPublish={publish}
               onSetAutoUpdate={setAutoUpdate}
               onInstallVersion={installVersion}
@@ -241,7 +279,7 @@ export default function UpdatesPage() {
 
 // ── The owner's view ──
 
-function OwnerView({ latest, branches, busy, onApprove, onPublish, onSetAutoUpdate, onInstallVersion }) {
+function OwnerView({ latest, branches, busy, onApprove, onUnapprove, onRemove, onPublish, onSetAutoUpdate, onInstallVersion }) {
   return (
     <div className="space-y-5">
       <div className="card">
@@ -271,7 +309,7 @@ function OwnerView({ latest, branches, busy, onApprove, onPublish, onSetAutoUpda
 
             <WhatChanged notes={latest.releaseNotes} />
 
-            {!latest.approvedForRollout && (
+            {!latest.approvedForRollout ? (
               <div className="pt-1">
                 <button
                   className="btn-primary flex items-center gap-2"
@@ -288,7 +326,35 @@ function OwnerView({ latest, branches, busy, onApprove, onPublish, onSetAutoUpda
                   by themselves will take it on their own.
                 </p>
               </div>
+            ) : (
+              <div className="pt-1">
+                <button
+                  className="btn-secondary flex items-center gap-2"
+                  disabled={busy === 'unapprove'}
+                  onClick={() => onUnapprove(latest.id)}
+                >
+                  {busy === 'unapprove'
+                    ? <Loader2 className="w-4 h-4 animate-spin" />
+                    : <XCircle className="w-4 h-4" />}
+                  Un-approve — stop offering this to branches
+                </button>
+                <p className="text-text-3 text-xs mt-2">
+                  Keeps the record and the installer, just stops any branch from being sent
+                  this version until it is approved again.
+                </p>
+              </div>
             )}
+
+            <div className="pt-2 border-t border-border/60">
+              <button
+                type="button"
+                onClick={() => onRemove(latest.id, latest.currentVersion)}
+                disabled={busy === 'remove'}
+                className="text-[11px] text-text-3 hover:text-neon-red underline decoration-dotted decoration-text-3/50"
+              >
+                {busy === 'remove' ? 'Removing…' : 'Remove this update entirely'}
+              </button>
+            </div>
           </div>
         ) : (
           <p className="text-text-2 text-sm">

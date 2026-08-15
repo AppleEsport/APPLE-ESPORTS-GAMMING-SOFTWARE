@@ -19,12 +19,15 @@ public class VersionController : ControllerBase
     private readonly IVersionService _versionService;
     private readonly AppDbContext _db;
     private readonly IRemoteBranchControl _remote;
+    private readonly IWebHostEnvironment _env;
 
-    public VersionController(IVersionService versionService, AppDbContext db, IRemoteBranchControl remote)
+    public VersionController(
+        IVersionService versionService, AppDbContext db, IRemoteBranchControl remote, IWebHostEnvironment env)
     {
         _versionService = versionService;
         _db = db;
         _remote = remote;
+        _env = env;
     }
 
     private Guid CurrentUserId() =>
@@ -86,6 +89,42 @@ public class VersionController : ControllerBase
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)!;
         var version = await _versionService.ApproveVersionAsync(dto.VersionInfoId, userId);
         return Ok(ApiResponse<VersionInfoDto>.Ok(version));
+    }
+
+    /// <summary>
+    /// Takes a version off the branches without deleting it - the record, its release notes
+    /// and its installer all stay, so it can be approved again later. What "Approve" never had
+    /// a way back from.
+    /// </summary>
+    [HttpPost("{id:int}/unapprove")]
+    [Authorize(Policy = "SuperAdminOnly")]
+    public async Task<IActionResult> UnapproveVersion(int id)
+    {
+        var version = await _versionService.UnapproveVersionAsync(id);
+        return Ok(ApiResponse<VersionInfoDto>.Ok(version));
+    }
+
+    /// <summary>
+    /// Removes a version's record entirely, and its installer file with it - what "this should
+    /// never have existed" actually needs. Deleting it, rather than only unapproving it, is
+    /// also what lets the version before it become "Newest update" again: that display takes
+    /// whichever record is newest by creation date with no regard for approval, so an
+    /// unapproved-but-undeleted version still shows there.
+    /// </summary>
+    [HttpDelete("{id:int}")]
+    [Authorize(Policy = "SuperAdminOnly")]
+    public async Task<IActionResult> DeleteVersion(int id)
+    {
+        var fileName = await _versionService.DeleteVersionAsync(id);
+
+        if (!string.IsNullOrWhiteSpace(fileName))
+        {
+            var path = Path.Combine(ReleasesController.ResolveReleaseFolder(_env), fileName);
+            try { if (System.IO.File.Exists(path)) System.IO.File.Delete(path); }
+            catch { /* the record is gone either way; a leftover file on disk harms nothing */ }
+        }
+
+        return Ok(ApiResponse<object>.Ok(new { deleted = true }));
     }
 
     [HttpPut("branch/{branchId}/auto-update")]

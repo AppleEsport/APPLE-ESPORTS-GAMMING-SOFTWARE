@@ -10,6 +10,8 @@ public interface IVersionService
     Task<BranchVersionStatusDto?> GetBranchVersionStatusAsync(Guid branchId);
     Task<VersionInfoDto> CreateVersionAsync(string version, string releaseNotes);
     Task<VersionInfoDto> ApproveVersionAsync(int versionInfoId, string userId);
+    Task<VersionInfoDto> UnapproveVersionAsync(int versionInfoId);
+    Task<string?> DeleteVersionAsync(int versionInfoId);
     Task UpdateBranchAutoUpdateAsync(Guid branchId, bool autoUpdateEnabled);
     Task UpdateBranchVersionStatusAsync(Guid branchId, string currentVersion, int upToDateCount, int totalCount);
     Task ReportUpdateProgressAsync(Guid branchId, string stage, int progressPercent, string? message);
