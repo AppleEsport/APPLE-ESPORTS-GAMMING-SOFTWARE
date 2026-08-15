@@ -66,17 +66,21 @@ public class ReleasesController : ControllerBase
     /// Where published installers are kept. Outside the application directory on purpose: an
     /// upgrade replaces the application, and anything stored inside it goes with it.
     /// </summary>
-    private string ReleaseFolder
+    private string ReleaseFolder => ResolveReleaseFolder(_env);
+
+    /// <summary>
+    /// Public so VersionController's delete can clean up an installer file without inventing
+    /// a second opinion on where releases live - there is exactly one answer to that question,
+    /// and it belongs here rather than duplicated wherever else needs it.
+    /// </summary>
+    public static string ResolveReleaseFolder(IWebHostEnvironment env)
     {
-        get
-        {
-            var configured = Environment.GetEnvironmentVariable("Releases__Path");
-            var path = string.IsNullOrWhiteSpace(configured)
-                ? Path.Combine(Path.GetPathRoot(_env.ContentRootPath) ?? "/", "releases")
-                : configured;
-            Directory.CreateDirectory(path);
-            return path;
-        }
+        var configured = Environment.GetEnvironmentVariable("Releases__Path");
+        var path = string.IsNullOrWhiteSpace(configured)
+            ? Path.Combine(Path.GetPathRoot(env.ContentRootPath) ?? "/", "releases")
+            : configured;
+        Directory.CreateDirectory(path);
+        return path;
     }
 
     /// <summary>
