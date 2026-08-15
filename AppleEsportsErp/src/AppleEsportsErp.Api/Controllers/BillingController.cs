@@ -116,7 +116,7 @@ public class BillingController : ControllerBase
         if (!canDiscount) return Forbid();
 
         var adminId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-        var result = await _billingService.ApplyDiscountAsync(GetBranchId(), adminId, id, dto);
+        var result = await _billingService.ApplyDiscountAsync(GetBranchId(), adminId, role!, id, dto);
         return Ok(ApiResponse<BillDto>.Ok(result));
     }
 

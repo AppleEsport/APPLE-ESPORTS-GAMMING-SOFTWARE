@@ -15,7 +15,7 @@ const DENOMINATIONS = [10, 20, 50, 100, 200, 500];
 const DISC_PRESETS   = [0, 5, 10, 15, 20];
 
 export default function BillDetailsPanel({ bill, onBillUpdate, onPaymentSuccess, defaultPaymentMethod }) {
-  const { isSuperAdmin } = useAuth();
+  const { isSuperAdmin, canApplyDiscount } = useAuth();
   const { subscribe, SIGNALR_HUBS } = useSocket();
   const toast = useToast();
 
@@ -330,8 +330,10 @@ export default function BillDetailsPanel({ bill, onBillUpdate, onPaymentSuccess,
       {!isPaid && (
         <div className="flex-1 border-t border-border px-5 py-4 bg-bg-3/30 overflow-y-auto flex flex-col gap-4 min-h-0">
 
-          {/* Discount quick-tags — SuperAdmin only */}
-          {isSuperAdmin && (
+          {/* Discount quick-tags. Gated on the same rule the server enforces
+              (canApplyDiscount) rather than the looser isSuperAdmin, which offered
+              the button to Admins the server then refused with a bare 403. */}
+          {canApplyDiscount() && (
             <div>
               <div className="flex items-center justify-between mb-2">
                 <span className="text-[10px] text-text-3 font-bold uppercase tracking-widest flex items-center gap-1">

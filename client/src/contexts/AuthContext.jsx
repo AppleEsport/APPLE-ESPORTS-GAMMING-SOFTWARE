@@ -230,6 +230,26 @@ export function AuthProvider({ children }) {
     return checkUser.dashboardPermissions?.[dashboardKey] === true;
   }, [user, adminSwitchUser]);
 
+  // ── Can this person actually apply a discount? ──
+  //
+  // Mirrors BillingController.ApplyDiscount exactly: Super Admin always, an Admin only
+  // with an explicit `discount` permission, an Operator never.
+  //
+  // The discount controls used to be gated on `isSuperAdmin`, which is deliberately loose
+  // (any role containing "admin") because the rest of the app uses it to mean "elevated,
+  // not an operator". For discount that looseness offered the button to Admins the server
+  // then refused with a bare 403 - no body, so the client could only say "Failed to apply
+  // discount". Asking the same question the server asks means the button is simply not
+  // there instead.
+  const canApplyDiscount = useCallback(() => {
+    const checkUser = adminSwitchUser || user;
+    if (!checkUser) return false;
+    const role = checkUser.role || checkUser.Role;
+    if (role === ROLES.SUPER_ADMIN) return true;
+    if (role === ROLES.ADMIN) return checkUser.dashboardPermissions?.discount === true;
+    return false;
+  }, [user, adminSwitchUser]);
+
   const value = {
     user: adminSwitchUser || user,
     baseUser: user, // Keep track of the original operator
@@ -247,6 +267,7 @@ export function AuthProvider({ children }) {
     exitAdminSwitch,
     fetchAvailableAdminsForSwitch,
     hasDashboardAccess,
+    canApplyDiscount,
     fetchCurrentUser,
     setError,
   };

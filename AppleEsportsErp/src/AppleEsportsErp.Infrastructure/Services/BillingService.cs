@@ -149,40 +149,74 @@ public class BillingService : IBillingService
         return dto;
     }
 
-    public async Task<BillDto> ApplyDiscountAsync(Guid branchId, Guid superAdminId, Guid id, ApplyDiscountDto dto)
+    public async Task<BillDto> ApplyDiscountAsync(Guid branchId, Guid actorId, string actorRole, Guid id, ApplyDiscountDto dto)
     {
+        RefuseIfHeadOffice("discounted");
+
         var bill = await _unitOfWork.Repository<Bill>().Query()
             .Include(b => b.Items)
             .Include(b => b.Payments)
-            .Include(b => b.Pc)
+            .Include(b => b.Pc).ThenInclude(p => p!.PricingProfile)
+            .Include(b => b.Session)
             .FirstOrDefaultAsync(b => b.Id == id && b.BranchId == branchId)
             ?? throw new NotFoundException("Bill not found.");
 
         if (bill.Status == BillStatus.Completed)
             throw new AppException("Cannot apply discount to a completed bill.");
 
+        // What the gaming line is worth RIGHT NOW, before any discount.
+        //
+        // Two bugs lived in reading bill.GamingAmount/bill.Subtotal directly here.
+        //
+        // The stored figure is written once at session start as ExpectedAmount, which for an
+        // open/PAYG session is 0 - so a percentage discount computed 0% of 0, saved happily,
+        // and returned 200 OK having done nothing. That is the "button applies no value at
+        // all" report. Every screen meanwhile shows the live figure via
+        // MapToDtoWithLiveAmount, so the number the admin was discounting was never the
+        // number they could see.
+        //
+        // And because the block below writes the rounding-adjusted gaming back onto the bill,
+        // a second press discounted an already-discounted base and folded another rounding
+        // delta in. Pressing 10% twice did not mean 10%.
+        //
+        // Recomputing from elapsed time each call fixes both: the base is always the true
+        // pre-discount charge, so the discount is never compounded and never applied to zero.
+        decimal baseGaming = bill.GamingAmount;
+        if (bill.Session != null && bill.Session.State == Domain.Enums.SessionState.Active)
+        {
+            decimal ratePerHour = bill.Pc?.PricingProfile?.BaseHourlyRate
+                ?? Application.Services.SessionPricingCalculator.DefaultRatePerHour;
+            int bufferMinutes = bill.Pc?.PricingProfile?.BufferMinutes
+                ?? Application.Services.SessionPricingCalculator.DefaultBufferMinutes;
+            decimal elapsedMinutes = (decimal)(DateTimeOffset.UtcNow - bill.Session.StartTime).TotalMinutes;
+            baseGaming = Application.Services.SessionPricingCalculator.CalculateGamingAmount(
+                ratePerHour, bufferMinutes, elapsedMinutes);
+        }
+
+        decimal baseSubtotal = baseGaming + bill.FoodAmount;
+
         decimal discountAmount = 0;
         if (dto.DiscountType == DiscountType.Percentage)
         {
-            discountAmount = bill.Subtotal * (dto.DiscountValue / 100);
+            discountAmount = baseSubtotal * (dto.DiscountValue / 100);
         }
         else if (dto.DiscountType == DiscountType.Flat)
         {
             discountAmount = dto.DiscountValue;
         }
 
-        if (discountAmount > bill.Subtotal)
+        if (discountAmount > baseSubtotal)
             throw new AppException("Discount amount cannot exceed bill subtotal.");
 
         // Discount is an explicit, deliberate figure the admin chose — keep it exact.
         // The Gaming line (derived, not a fixed price) absorbs any rounding instead.
         var (displayGaming, displayFood, roundedTotal) = Application.Services.SessionPricingCalculator.ComputeRoundedBreakdown(
-            bill.GamingAmount, bill.FoodAmount, discountAmount);
+            baseGaming, bill.FoodAmount, discountAmount);
 
         bill.DiscountType = dto.DiscountType;
         bill.DiscountValue = dto.DiscountValue;
         bill.DiscountAmount = discountAmount;
-        bill.DiscountBy = superAdminId;
+        bill.DiscountBy = actorId;
         bill.DiscountReason = dto.Reason;
         bill.GamingAmount = displayGaming;
         bill.FoodAmount = displayFood;
@@ -201,17 +235,35 @@ public class BillingService : IBillingService
 
         await _auditService.LogAsync(new AuditEntry
         {
-            OperatorId = superAdminId,
-            UserRole = Roles.SuperAdmin, // Must be SuperAdmin
-            UserName = "System",
+            // Whoever actually pressed it. This said UserName = "System" and hardcoded the role
+            // to SuperAdmin, so the audit trail recorded every discount as having been applied
+            // by nobody in particular - on the one action in this system most likely to be
+            // questioned later. The id was always here; only the name and role were invented.
+            // Both, because the actor may live in either table - a branch Admin is an
+            // operator row, a Super Admin is a user row - and AuditService resolves the
+            // real name from whichever one matches.
+            OperatorId = actorId,
+            UserId = actorId,
+            UserRole = actorRole,
+            UserName = string.Empty,
             Action = AuditActions.DiscountApply,
             BranchId = branchId,
             TargetType = "bill",
             TargetId = bill.Id,
-            Details = new { DiscountType = dto.DiscountType.ToString(), Value = dto.DiscountValue, Reason = dto.Reason }
+            Details = new
+            {
+                DiscountType = dto.DiscountType.ToString(),
+                Value = dto.DiscountValue,
+                Reason = dto.Reason,
+                // The figures it was actually computed against, so the amount can be checked
+                // afterwards rather than taken on trust.
+                BaseSubtotal = baseSubtotal,
+                DiscountAmount = discountAmount,
+                NewTotal = roundedTotal,
+            }
         });
 
-        await _unitOfWork.CommitTransactionAsync();
+        await _unitOfWork.SaveChangesAsync();
         await _hubNotification.BroadcastBillingUpdateAsync(branchId, bill.Id);
 
         return MapToDto(bill);

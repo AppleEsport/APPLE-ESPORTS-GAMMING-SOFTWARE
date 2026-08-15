@@ -57,15 +57,32 @@ public class AuditService : IAuditService
             // to the trouble of looking up a real name (UserId path, member logins, and so on)
             // is left alone.
             var userName = entry.UserName;
-            if ((string.IsNullOrWhiteSpace(userName) || userName == "System")
-                && entry.OperatorId is { } operatorId)
+            if (string.IsNullOrWhiteSpace(userName) || userName == "System")
             {
-                var resolved = await _db.Operators.AsNoTracking()
-                    .Where(o => o.Id == operatorId)
-                    .Select(o => o.FullName)
-                    .FirstOrDefaultAsync();
+                if (entry.OperatorId is { } operatorId)
+                {
+                    var resolved = await _db.Operators.AsNoTracking()
+                        .Where(o => o.Id == operatorId)
+                        .Select(o => o.FullName)
+                        .FirstOrDefaultAsync();
 
-                if (!string.IsNullOrWhiteSpace(resolved)) userName = resolved;
+                    if (!string.IsNullOrWhiteSpace(resolved)) userName = resolved;
+                }
+
+                // Admins and Super Admins live in `users`, not `operators`, so an action taken
+                // by one of them found nothing above and stayed "System" forever. Discounts are
+                // the case that mattered: the single most questioned action in the system was
+                // recorded as having been applied by nobody.
+                if ((string.IsNullOrWhiteSpace(userName) || userName == "System")
+                    && entry.UserId is { } userId)
+                {
+                    var resolvedUser = await _db.Users.AsNoTracking()
+                        .Where(u => u.Id == userId)
+                        .Select(u => u.FullName)
+                        .FirstOrDefaultAsync();
+
+                    if (!string.IsNullOrWhiteSpace(resolvedUser)) userName = resolvedUser;
+                }
             }
 
             var auditLog = new AuditLog
