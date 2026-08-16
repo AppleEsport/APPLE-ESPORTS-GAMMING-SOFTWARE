@@ -48,20 +48,35 @@ public partial class LockScreen : Window
         // Prevent closing via Alt+F4
         Closing += (s, e) => e.Cancel = true;
 
-        // Secret escape hatch for developers/emergency (Ctrl+Shift+Alt+U)
+        // The one way out of a locked machine (Ctrl+Shift+Alt+U), behind the admin PIN.
         KeyDown += LockScreen_KeyDown;
     }
 
+    /// <summary>
+    /// The escape hatch. It used to call DisableLock() and Shutdown() the moment the keys were
+    /// pressed, with no check of any kind — anyone who knew the combination was out to the
+    /// Windows desktop of a machine sitting in front of the public. It now goes through the same
+    /// PIN gate as every other way out, and refuses outright when no PIN has been set.
+    /// </summary>
     private void LockScreen_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.U && 
-            Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && 
-            Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) && 
-            Keyboard.Modifiers.HasFlag(ModifierKeys.Alt))
-        {
-            _systemLock.DisableLock();
-            Application.Current.Shutdown();
-        }
+        // With Alt held, WPF reports the key as Key.System and puts the real one in SystemKey.
+        // Reading e.Key alone means an Alt combination is never recognised — the same class of
+        // fault as the counter shell's quit shortcut, which silently did nothing for weeks.
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+
+        if (key != Key.U) return;
+        if (!Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) return;
+        if (!Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)) return;
+        if (!Keyboard.Modifiers.HasFlag(ModifierKeys.Alt)) return;
+
+        e.Handled = true;
+
+        if (!Services.AdminPinService.Current.RequirePin(this, "quit Apple Esports and unlock this PC"))
+            return;
+
+        _systemLock.DisableLock();
+        Application.Current.Shutdown();
     }
 
     /// <summary>Called by SessionControlService when an unlock command is received</summary>
