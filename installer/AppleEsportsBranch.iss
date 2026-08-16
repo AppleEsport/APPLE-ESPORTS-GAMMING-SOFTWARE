@@ -293,7 +293,8 @@ end;
 procedure EnsureServicesRunning();
 var
   ResultCode, Port, Waited: Integer;
-  PortFile, PortStr, PgIsReady: String;
+  PortFile, PgIsReady: String;
+  PortStr: AnsiString;
 begin
   Exec('sc.exe', 'start AppleEsportsDb', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
