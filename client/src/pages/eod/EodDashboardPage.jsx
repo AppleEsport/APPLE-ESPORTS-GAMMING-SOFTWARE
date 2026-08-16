@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from 'react';
 import { ShieldCheck, AlertTriangle, FileText, CheckCircle, Lock, Monitor, Utensils, Clock, Printer, Download, Wrench, ZapOff, Clock as ClockIcon } from 'lucide-react';
 import { printBill } from '../../utils/printBill';
 import { useAuth } from '../../contexts/AuthContext';
@@ -6,10 +6,52 @@ import { useBranch } from '../../contexts/BranchContext';
 import api from '../../config/api';
 import PageHeader from '../../components/layout/PageHeader';
 import { useSocket } from '../../contexts/SocketContext';
-import { createReport, addStatGrid, addTable, save, ROW_TINT_RED, ROW_TINT_GREEN } from '../../utils/pdfReport';
+import { createReport, addStatGrid, addTable, save, ROW_TINT_RED, ROW_TINT_GREEN, ROW_TINT_NEUTRAL } from '../../utils/pdfReport';
 import EodPaymentSummaryBar from '../../components/eod/EodPaymentSummaryBar';
 import { getBranchMaintenanceLogs } from '../../api/maintenanceLogs.api';
 import { currentTradingDayIst, tradingDayRangeIst, toIstDateString } from '../../utils/timeUtils';
+
+/**
+ * Buckets bill-like rows (bills, credit clearances, wallet top-ups - anything with a `date`)
+ * into the shift whose [loginTime, logoutTime ?? now] window contains it, so the day's billing
+ * log can be read shift by shift instead of as one undifferentiated list. A row that falls
+ * outside every shift's window - the gap between one shift ending and the next beginning - lands
+ * in a trailing "outside any shift" bucket rather than being silently dropped from the report.
+ */
+function groupBillsByShift(bills, shifts) {
+  const sortedShifts = [...(shifts || [])].sort((a, b) => new Date(a.loginTime) - new Date(b.loginTime));
+  const groups = sortedShifts.map(shift => ({
+    key: shift.id,
+    operatorName: shift.operatorName,
+    loginTime: shift.loginTime,
+    logoutTime: shift.logoutTime,
+    bills: [],
+  }));
+  const unassigned = { key: 'unassigned', operatorName: null, loginTime: null, logoutTime: null, bills: [] };
+
+  for (const bill of bills || []) {
+    const billTime = new Date(bill.date).getTime();
+    const match = groups.find(g => {
+      const start = new Date(g.loginTime).getTime();
+      const end = g.logoutTime ? new Date(g.logoutTime).getTime() : Infinity;
+      return billTime >= start && billTime <= end;
+    });
+    (match || unassigned).bills.push(bill);
+  }
+
+  const result = groups.filter(g => g.bills.length > 0);
+  if (unassigned.bills.length > 0) result.push(unassigned);
+  return result;
+}
+
+function shiftGroupLabel(group) {
+  if (!group.loginTime) return 'Outside any shift';
+  const start = new Date(group.loginTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+  const end = group.logoutTime
+    ? new Date(group.logoutTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })
+    : 'still on shift';
+  return `${group.operatorName} — ${start} to ${end}`;
+}
 
 export default function EodDashboardPage() {
   const { isSuperAdmin, user } = useAuth();
@@ -30,6 +72,9 @@ export default function EodDashboardPage() {
 
   const [pcs, setPcs] = useState([]);
   const [allBills, setAllBills] = useState([]);
+  // Every shift touching this window, so the billing log can be read shift by shift instead of
+  // as one undifferentiated list for the whole trading day.
+  const [shifts, setShifts] = useState([]);
   // Power cuts and lost connections for the day — shown beside the money because they
   // explain it. A thin evening reads very differently once you can see the branch was dark.
   const [downtime, setDowntime] = useState([]);
@@ -102,6 +147,7 @@ export default function EodDashboardPage() {
       setPcs(pcsRes.data?.data || []);
       setAllBills(billsRes.data?.data?.allBills || []);
       setDowntime(billsRes.data?.data?.downtime || []);
+      setShifts(billsRes.data?.data?.shifts || []);
 
       // Fetch maintenance logs separately so it doesn't break EOD if it fails
       try {
@@ -284,11 +330,16 @@ export default function EodDashboardPage() {
       });
     }
 
-    y = addTable(doc, y, {
-      title, subtitle,
-      heading: `Complete Billing Audit Logs (${targetDate})`,
-      head: ['Date', 'PC Number', 'Start Time', 'End Time', 'Customer', 'Payment', 'Gaming', 'Food', 'Discount', 'Total', 'Note', 'Operator'],
-      body: (allBills || []).map(b => [
+    // Grouped shift by shift rather than as one flat list for the whole trading day - each
+    // shift gets a highlighted heading row (operator, login-to-logout window) ahead of its own
+    // bills, so a printed report answers "whose shift was this" without cross-referencing
+    // anything else.
+    const billBody = [];
+    const shiftHeaderRows = new Set();
+    groupedBills.forEach(group => {
+      shiftHeaderRows.add(billBody.length);
+      billBody.push([shiftGroupLabel(group), '', '', '', '', '', '', '', '', '', '', '']);
+      group.bills.forEach(b => billBody.push([
         new Date(b.date).toLocaleDateString(),
         b.pcName || '-',
         b.sessionStartTime ? new Date(b.sessionStartTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true }) : '-',
@@ -297,7 +348,15 @@ export default function EodDashboardPage() {
         `Rs ${b.gamingRevenue.toFixed(2)}`, `Rs ${b.foodRevenue.toFixed(2)}`,
         b.discount > 0 ? `-Rs ${b.discount.toFixed(2)}` : '-', `Rs ${b.totalRevenue.toFixed(2)}`,
         b.sessionNotes || '-', b.operator
-      ]),
+      ]));
+    });
+
+    y = addTable(doc, y, {
+      title, subtitle,
+      heading: `Complete Billing Audit Logs (${targetDate})`,
+      head: ['Date', 'PC Number', 'Start Time', 'End Time', 'Customer', 'Payment', 'Gaming', 'Food', 'Discount', 'Total', 'Note', 'Operator'],
+      body: billBody,
+      rowColor: (rowIndex) => shiftHeaderRows.has(rowIndex) ? ROW_TINT_NEUTRAL : null,
     });
 
     const eodCreditRows = report.creditLogs || [];
@@ -355,6 +414,8 @@ export default function EodDashboardPage() {
 
     save(doc, `Apple_Esports_EOD_${targetDate}.pdf`);
   };
+
+  const groupedBills = useMemo(() => groupBillsByShift(allBills, shifts), [allBills, shifts]);
 
   if (isSuperAdmin && !activeBranch) {
     return (
@@ -732,7 +793,17 @@ export default function EodDashboardPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/40 font-mono">
-                    {allBills.map(bill => (
+                    {groupedBills.map(group => (
+                      <Fragment key={group.key}>
+                        <tr className="bg-bg-3/70">
+                          <td colSpan={13} className="py-2 px-4 text-[10px] font-bold uppercase tracking-wider text-text-2 font-sans">
+                            {shiftGroupLabel(group)}
+                            <span className="text-text-3 font-normal normal-case ml-2">
+                              — ₹{group.bills.reduce((sum, b) => sum + (b.totalRevenue || 0), 0).toFixed(2)} across {group.bills.length} entr{group.bills.length === 1 ? 'y' : 'ies'}
+                            </span>
+                          </td>
+                        </tr>
+                        {group.bills.map(bill => (
                       <tr key={bill.billId} className="hover:bg-bg-3/40 transition-colors">
                         <td className="py-3 px-4 text-text-2">
                           {new Date(bill.date).toLocaleDateString()}
@@ -791,6 +862,8 @@ export default function EodDashboardPage() {
                           </button>
                         </td>
                       </tr>
+                        ))}
+                      </Fragment>
                     ))}
                   </tbody>
                 </table>

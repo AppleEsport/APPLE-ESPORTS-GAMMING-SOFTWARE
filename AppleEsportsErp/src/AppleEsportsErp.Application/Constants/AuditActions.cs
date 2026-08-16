@@ -32,6 +32,15 @@ public static class AuditActions
     public const string PaymentProcess = "payment_process";
     public const string DiscountApply = "discount_apply";
 
+    /// <summary>
+    /// A customer credit (money owed from an earlier session left unpaid) was settled.
+    /// Previously unlogged entirely - CreditService.ClearCreditAsync updated the credit, wrote
+    /// its Payment and CashTransaction rows, and never once called the audit service, so the
+    /// one action this whole trail exists to answer for - who cleared this, when, how - had no
+    /// record of its own at all.
+    /// </summary>
+    public const string CreditClear = "credit_clear";
+
     // Food orders - previously two raw strings ("food_order_create", "food_order_update") that
     // did not live here and were not recognised by anything reading the trail.
     public const string FoodOrderPlace = "food_order_place";
