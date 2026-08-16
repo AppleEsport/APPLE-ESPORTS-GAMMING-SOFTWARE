@@ -6,6 +6,14 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <!-- Without these the agent reports 1.0.0.0 whatever build it came from, which is the
+         exact fault RELEASING.md records being diagnosed twice as a broken installer on the
+         API. It matters more here: once a gaming PC reports in, the Updates page counts how
+         many of a branch's PCs are up to date, and a fleet that all claims 1.0.0.0 makes that
+         count a guess. Kept in step with the other three version files by hand. -->
+    <Version>3.0.0</Version>
+    <FileVersion>3.0.0.0</FileVersion>
+    <AssemblyVersion>3.0.0.0</AssemblyVersion>
     <AssemblyName>AppleEsportsAgent</AssemblyName>
     <RootNamespace>AppleEsportsErp.ClientAgent</RootNamespace>
     <ApplicationIcon>Assets\logo.ico</ApplicationIcon>
