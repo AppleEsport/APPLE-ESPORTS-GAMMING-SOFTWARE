@@ -568,15 +568,46 @@ public sealed class MainForm : Form
         }
     }
 
+    /// <summary>
+    /// Where this window should actually be pointed: the operator dashboard, or - for a
+    /// "customer gaming PC" role that has genuinely been provisioned - the locked customer
+    /// overlay for its own seat.
+    ///
+    /// Previously this was always the dashboard root regardless of role: Role only changed
+    /// window chrome (taskbar, kiosk shortcuts), never what actually loaded, so a "user" PC
+    /// showed staff the exact same screen an operator PC did. Null return means "cannot
+    /// connect yet" - a user role PC that has never been provisioned (no PcId), which Connect
+    /// reports rather than silently falling back to the dashboard a customer must never see.
+    /// </summary>
+    private string? TargetUrl()
+    {
+        if (!_config.IsUserPc) return _config.NormalisedUrl();
+
+        if (_config.PcId is not { } pcId)
+            return null;
+
+        return $"{_config.NormalisedUrl()}/pc-overlay/{pcId}";
+    }
+
     private void Connect()
     {
         if (_web.CoreWebView2 is null) return;
+
+        var target = TargetUrl();
+        if (target is null)
+        {
+            ShowOverlay(
+                "This machine is set up as a customer gaming PC but has never actually claimed a seat.\n\n" +
+                "Press Ctrl+Shift+P and set it up again to fix this.",
+                showActions: true);
+            return;
+        }
 
         ShowOverlay($"Connecting to {HostLabel()}…", showActions: false);
 
         try
         {
-            _web.CoreWebView2.Navigate(_config.NormalisedUrl());
+            _web.CoreWebView2.Navigate(target);
         }
         catch (Exception ex)
         {
@@ -777,21 +808,84 @@ public sealed class MainForm : Form
         return false;
     }
 
-    private void ChangePcSetup()
+    /// <summary>
+    /// A PC number and a role are only a local label. A "customer gaming PC" is also a real
+    /// seat Head Office bills sessions against, so that role additionally has to actually
+    /// claim one through <c>/api/agent/provision</c> - the same call the setup wizard would
+    /// make for it - or this machine ends up with a role but no <see cref="AppConfig.PcId"/>
+    /// to send the browser to, which is exactly the bug this replaces: Role changed the window
+    /// chrome and nothing else, so a "user" PC quietly showed the operator dashboard.
+    /// </summary>
+    private async void ChangePcSetup()
     {
         using var dialog = new PcSetupDialog(_config);
         if (dialog.ShowDialog(this) != DialogResult.OK) return;
 
-        _config.PcNumber = dialog.PcNumber;
-        _config.Role = dialog.Role;
-        SaveConfig();
+        var pcNumber = dialog.PcNumber;
+        var role = dialog.Role;
 
-        MessageBox.Show(this,
-            $"This machine is now set up as {_config.PcNumber} ({_config.Role}).\n\n" +
-            "Apple Esports will restart to apply it.",
-            "Apple Esports", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        if (!string.Equals(role, "user", StringComparison.OrdinalIgnoreCase))
+        {
+            // The operator counter is not a billable seat - nothing to claim, just a label.
+            _config.PcNumber = pcNumber;
+            _config.Role = role;
+            _config.PcId = null;
+            SaveConfig();
 
-        Restart();
+            MessageBox.Show(this,
+                $"This machine is now set up as {pcNumber} ({role}).\n\n" +
+                "Apple Esports will restart to apply it.",
+                "Apple Esports", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            Restart();
+            return;
+        }
+
+        Cursor = Cursors.WaitCursor;
+        try
+        {
+            using var client = new HeadOfficeClient(_config.ServerUrl, _config.GateUsername, _config.GatePassword);
+
+            // A gaming PC has no branch id of its own - only the counter PC across the LAN
+            // knows what branch it is, from its own adoption.
+            var (adopted, branchId, _) = await client.GetIdentityAsync();
+            if (!adopted || branchId is null)
+            {
+                MessageBox.Show(this,
+                    $"Could not confirm which branch this is from {HostLabel()}.\n\n" +
+                    "A customer gaming PC needs to reach the counter PC's branch across the shop " +
+                    "network first — check the server address above.",
+                    "Apple Esports", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            var (ok, message, _, pcId) = await client.ProvisionAsync(branchId.Value, pcNumber, MachineIdentity.Current());
+            if (!ok || pcId is null)
+            {
+                // Left exactly as it was rather than half-applied — the setup wizard follows
+                // the same rule for the same reason.
+                MessageBox.Show(this, message, "Apple Esports", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            _config.PcNumber = pcNumber;
+            _config.Role = role;
+            _config.PcId = pcId;
+            SaveConfig();
+
+            MessageBox.Show(this,
+                $"{message}\n\nApple Esports will restart to apply it.",
+                "Apple Esports", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            Restart();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Could not set this PC up.\n\n{ex.Message}",
+                "Apple Esports", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        finally
+        {
+            Cursor = Cursors.Default;
+        }
     }
 
     private void Unconfigure()
@@ -806,6 +900,7 @@ public sealed class MainForm : Form
 
         _config.PcNumber = "";
         _config.Role = "operator";
+        _config.PcId = null;
         SaveConfig();
 
         Restart();

@@ -64,7 +64,7 @@ public sealed class HeadOfficeClient : IDisposable
     }
 
     /// <summary>Claims a PC number for this machine. Head Office refuses a second claim.</summary>
-    public async Task<(bool Ok, string Message, string? Token)> ProvisionAsync(
+    public async Task<(bool Ok, string Message, string? Token, Guid? PcId)> ProvisionAsync(
         Guid branchId, string pcNumber, string machineId)
     {
         var body = JsonSerializer.Serialize(new { branchId, pcNumber, machineId });
@@ -77,14 +77,44 @@ public sealed class HeadOfficeClient : IDisposable
         {
             var parsed = JsonSerializer.Deserialize<ApiEnvelope<ProvisionResult>>(text, Json);
             if (response.IsSuccessStatusCode && parsed?.Data is { } ok)
-                return (true, ok.Reused ? $"{pcNumber} was already set up on this machine." : $"Set up as {pcNumber}.", ok.Token);
+                return (true, ok.Reused ? $"{pcNumber} was already set up on this machine." : $"Set up as {pcNumber}.", ok.Token, ok.PcId);
 
             // Head Office's refusals are written for staff — pass them through unchanged.
-            return (false, parsed?.Error ?? $"Setup failed ({(int)response.StatusCode}).", null);
+            return (false, parsed?.Error ?? $"Setup failed ({(int)response.StatusCode}).", null, null);
         }
         catch (JsonException)
         {
-            return (false, $"Unexpected reply from the server ({(int)response.StatusCode}).", null);
+            return (false, $"Unexpected reply from the server ({(int)response.StatusCode}).", null, null);
+        }
+    }
+
+    /// <summary>
+    /// What branch this address actually is, if it has been set up as exactly one.
+    ///
+    /// A "user" (gaming PC) role has no branch id of its own to send with a provisioning
+    /// claim - only the counter PC across the LAN knows that, from its own adoption. This asks
+    /// it, the same way the setup wizard already does for the counter PC itself.
+    /// </summary>
+    public async Task<(bool Adopted, Guid? BranchId, string? BranchName)> GetIdentityAsync()
+    {
+        try
+        {
+            var json = await _http.GetStringAsync($"{_baseUrl}/api/provisioning/identity");
+            using var doc = JsonDocument.Parse(json);
+            var data = doc.RootElement.GetProperty("data");
+
+            var adopted = data.TryGetProperty("adopted", out var a) && a.GetBoolean();
+            if (!adopted) return (false, null, null);
+
+            var branches = data.GetProperty("branches");
+            if (branches.GetArrayLength() == 0) return (false, null, null);
+
+            var first = branches[0];
+            return (true, first.GetProperty("id").GetGuid(), first.GetProperty("name").GetString());
+        }
+        catch
+        {
+            return (false, null, null);
         }
     }
 
@@ -103,6 +133,7 @@ public sealed class HeadOfficeClient : IDisposable
     {
         public string? Token { get; set; }
         public bool Reused { get; set; }
+        public Guid? PcId { get; set; }
     }
 
     public sealed class BranchOption

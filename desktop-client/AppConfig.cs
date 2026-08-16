@@ -70,6 +70,19 @@ public sealed class AppConfig
     /// <summary>Which PC this machine is set up as, e.g. "PC-1". Empty until setup is done.</summary>
     public string PcNumber { get; set; } = "";
 
+    /// <summary>
+    /// Head Office's own id for the seat named by <see cref="PcNumber"/>. Null until a
+    /// "customer gaming PC" role has actually been provisioned against
+    /// <c>/api/agent/provision</c> - never assumed from the PC number alone, which is only a
+    /// label a person chose and has no guaranteed relationship to any real record.
+    ///
+    /// This is what <see cref="MainForm"/> needs to send the browser to
+    /// <c>/pc-overlay/{PcId}</c> instead of the operator dashboard. Without it a "user" role
+    /// PC had nothing to route to and silently showed the same dashboard as an operator PC -
+    /// the role changed the window chrome and nothing else.
+    /// </summary>
+    public Guid? PcId { get; set; }
+
     /// <summary>Branch this machine belongs to, as Head Office knows it.</summary>
     public string BranchId { get; set; } = "";
 
@@ -175,6 +188,7 @@ public sealed class AppConfig
             if (!string.IsNullOrWhiteSpace(loaded.Role)) target.Role = loaded.Role.Trim();
             if (loaded.AdminPin is not null) target.AdminPin = loaded.AdminPin;
             if (loaded.PcNumber is not null) target.PcNumber = loaded.PcNumber;
+            if (loaded.PcId is not null) target.PcId = loaded.PcId;
             if (loaded.BranchId is not null) target.BranchId = loaded.BranchId;
             if (loaded.BranchName is not null) target.BranchName = loaded.BranchName;
             if (loaded.IsSetUp) target.IsSetUp = true;
