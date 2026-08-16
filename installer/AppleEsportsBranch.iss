@@ -75,6 +75,10 @@ Source: "branch\setup-database.ps1"; DestDir: "{app}"; Components: server; Check
 Source: "branch\stop-services.ps1"; Flags: dontcopy
 Source: "branch\setup-api.ps1";      DestDir: "{app}"; Components: server; Check: InstallServerParts; Flags: ignoreversion
 
+; Staff-facing workaround for Ctrl+Alt+Q not registering on some keyboard layouts - simulates
+; the real shortcut rather than force-killing the app. See SHORTCUT_KEYS.md.
+Source: "branch\quit-app.ps1"; DestDir: "{app}"; Components: server; Check: InstallServerParts; Flags: ignoreversion
+
 ; -- Customer gaming PC --
 Source: "..\AppleEsportsErp\src\AppleEsportsErp.ClientAgent\publish\AppleEsportsAgent.exe"; DestDir: "{app}"; Components: agent; Check: InstallAgentParts; Flags: ignoreversion
 
