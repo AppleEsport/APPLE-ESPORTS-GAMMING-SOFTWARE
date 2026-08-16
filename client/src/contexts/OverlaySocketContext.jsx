@@ -397,6 +397,14 @@ export function OverlaySocketProvider({ children, pcId, isMinimized: initialMini
 
     newConnection.on('SessionStopped', (finalBill) => {
       setSessionData(prev => ({ ...prev, ...finalBill, sessionStatus: 'awaiting_billing' }));
+
+      // Tells the native shell hosting this page (desktop-client's MainForm) that play has
+      // actually ended, so it can close whatever the customer opened during the session -
+      // games, browsers, Discord, anything with a window - before the next customer sits
+      // down to a desktop still full of the last one's stuff. Only meaningful inside that
+      // WebView2 host; a plain browser tab (support, testing) has no such bridge and this
+      // must not throw there.
+      try { window.chrome?.webview?.postMessage('session-ended'); } catch { /* not hosted */ }
     });
 
     newConnection.on('SessionEnded', () => {
