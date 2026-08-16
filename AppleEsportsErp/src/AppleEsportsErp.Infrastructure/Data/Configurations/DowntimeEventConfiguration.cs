@@ -16,10 +16,16 @@ public class DowntimeEventConfiguration : IEntityTypeConfiguration<DowntimeEvent
 
         // Stored as readable text ("power_or_restart") to match how SessionState and
         // ShiftStatus are persisted — these rows get read by eye during an audit.
+        // Switch expressions cannot appear in a HasConversion lambda - EF Core needs an
+        // expression tree here, and CS8514 rules those out. Nested ternaries do the same job.
         builder.Property(e => e.Kind).HasMaxLength(30).IsRequired()
             .HasConversion(
-                v => v == DowntimeKind.PowerOrRestart ? "power_or_restart" : "internet_offline",
-                v => v == "internet_offline" ? DowntimeKind.InternetOffline : DowntimeKind.PowerOrRestart);
+                v => v == DowntimeKind.PowerOrRestart ? "power_or_restart"
+                   : v == DowntimeKind.AppFault ? "app_fault"
+                   : "internet_offline",
+                v => v == "power_or_restart" ? DowntimeKind.PowerOrRestart
+                   : v == "app_fault" ? DowntimeKind.AppFault
+                   : DowntimeKind.InternetOffline);
 
         builder.Property(e => e.StartedAt).IsRequired();
         builder.Property(e => e.EndedAt).IsRequired();

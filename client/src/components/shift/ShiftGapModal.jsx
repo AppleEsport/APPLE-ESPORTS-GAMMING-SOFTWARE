@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { AlertTriangle, Loader2, Store, Zap, WifiOff } from 'lucide-react';
+import { AlertTriangle, Loader2, Store, Zap, WifiOff, Bug } from 'lucide-react';
 import api from '../../config/api';
 
 /**
@@ -38,6 +38,13 @@ const REASONS = [
     detail: 'The shop kept working, but nothing reached head office.',
     icon: WifiOff,
     tone: 'text-neon-orange border-neon-orange/40 bg-neon-orange/5',
+  },
+  {
+    value: 3,
+    label: 'The app had a problem',
+    detail: 'Not your power or internet - the software itself was stuck, showed an error, or needed a restart.',
+    icon: Bug,
+    tone: 'text-neon-purple border-neon-purple/40 bg-neon-purple/5',
   },
 ];
 
