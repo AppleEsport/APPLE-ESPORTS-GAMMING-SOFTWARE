@@ -20,6 +20,18 @@ public sealed class MainForm : Form
     private readonly Button _retryButton = new();
     private readonly Button _settingsButton = new();
 
+    /// <summary>Size of the small floating widget shown while a customer PC has an active session — see ApplyOverlayLayout.</summary>
+    private const int BubbleSize = 88;
+    private const int PanelWidth = 380;
+    private const int PanelHeight = 620;
+    private const int FloatMargin = 24;
+
+    /// <summary>Whether this window is currently the small floating widget (bubble or panel) rather than full screen — only true while "overlay-drag" messages should move it.</summary>
+    private bool _floatDraggable;
+
+    /// <summary>The last "overlay-layout" mode applied, so repeated identical messages are a no-op instead of re-snapping the window on every silent refetch.</summary>
+    private string? _overlayMode;
+
     private bool _isFullScreen;
     private FormBorderStyle _borderBeforeFullScreen;
     private FormWindowState _stateBeforeFullScreen;
@@ -150,26 +162,23 @@ public sealed class MainForm : Form
 
         if (_config.IsUserPc)
         {
-            // The customer overlay is a fixed 380px right-hand panel meant to sit beside the
-            // customer's own desktop, not a whole-screen page — see UserOverlayApp.jsx's own
-            // w-[380px]. This window matches that exactly instead of covering the whole
-            // screen the way an operator's dashboard does: a customer PC that filled the
-            // screen with this browser left nothing for a customer to actually play on,
-            // since there is no real desktop showing through a full-screen page — that
-            // architecture only works when this window is native and only as wide as its
-            // own content, which is what this is.
+            // This window used to be a permanently-docked 380px right-hand panel, full screen
+            // height, whether or not anyone was actually playing — which left a customer with
+            // no real desktop to play on even while a session was live, and an opaque strip
+            // blocking the screen even on the walk-in/member gate before any session existed.
             //
-            // TopMost keeps the panel above whatever the customer brings to the front —
-            // "the panel minimises, it does not dismiss" (see PHASE3_PLAN.md §5). Minimising
-            // to the small bubble UserOverlayApp.jsx already renders when isMinimized is set
-            // is how a customer gets it out of the way; nothing here needs to resize the
-            // window for that, since the bubble fits the same 380px column just as well.
-            const int PanelWidth = 380;
+            // The actual size now tracks what the page itself is showing, driven live by the
+            // "overlay-layout" bridge message (see WebMessageReceived / ApplyOverlayLayout):
+            // full screen for the walk-in/member gate and the locked "session ended" screen —
+            // both render themselves fixed inset-0, so they need the window to actually be the
+            // screen — and just enough to cover the small floating widget once a session is
+            // live, freeing the rest of the screen for the customer to actually use. Full
+            // screen here is only the safe starting point before that first message arrives.
             var screen = Screen.PrimaryScreen?.Bounds ?? new Rectangle(0, 0, 1920, 1080);
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.Manual;
-            Bounds = new Rectangle(screen.Right - PanelWidth, screen.Top, PanelWidth, screen.Height);
-            MinimumSize = new Size(PanelWidth, screen.Height);
+            Bounds = screen;
+            MinimumSize = new Size(BubbleSize, BubbleSize);
             TopMost = true;
         }
         else
@@ -448,11 +457,18 @@ public sealed class MainForm : Form
                 return;
             }
 
-            if (!string.Equals(message, "check-for-updates", StringComparison.Ordinal)) return;
+            if (string.Equals(message, "check-for-updates", StringComparison.Ordinal))
+            {
+                // Wakes the loop rather than starting a second check, so pressing the button
+                // twice cannot have two downloads writing the same file.
+                try { _checkNow.Cancel(); } catch { /* already awake */ }
+                return;
+            }
 
-            // Wakes the loop rather than starting a second check, so pressing the button twice
-            // cannot have two downloads writing the same file.
-            try { _checkNow.Cancel(); } catch { /* already awake */ }
+            // Everything else is the JSON overlay-layout/overlay-drag bridge UserOverlayApp.jsx
+            // posts on every mode change and every drag movement — only meaningful, and only
+            // handled, on a customer gaming PC.
+            if (_config.IsUserPc) HandleOverlayLayoutMessage(message);
         };
 
         _retryTimer.Tick += (_, _) =>
@@ -993,6 +1009,92 @@ public sealed class MainForm : Form
             // A failed cleanup must never take the kiosk down - the next customer gets a
             // messier desktop, not a broken PC.
         }
+    }
+
+    /// <summary>
+    /// Parses the JSON layout/drag messages the overlay page posts on every mode change and
+    /// every drag movement (see UserOverlayApp.jsx's postToHost / useDragToMoveHost) and
+    /// applies them to this window. Anything that isn't one of the two known message shapes —
+    /// a stale page, a future addition — is silently ignored rather than treated as an error;
+    /// this bridge must never be able to crash the host it is running inside of.
+    /// </summary>
+    private void HandleOverlayLayoutMessage(string json)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("type", out var typeEl)) return;
+
+            switch (typeEl.GetString())
+            {
+                case "overlay-layout" when root.TryGetProperty("mode", out var modeEl):
+                    ApplyOverlayLayout(modeEl.GetString() ?? "full");
+                    break;
+
+                case "overlay-drag" when root.TryGetProperty("dx", out var dxEl) && root.TryGetProperty("dy", out var dyEl):
+                    DragFloatingWindow((int)Math.Round(dxEl.GetDouble()), (int)Math.Round(dyEl.GetDouble()));
+                    break;
+            }
+        }
+        catch
+        {
+            // Not a message this bridge understands — nothing to apply.
+        }
+    }
+
+    /// <summary>
+    /// Resizes and repositions this window to match what the overlay page is currently
+    /// showing. "full" covers the whole screen, for the walk-in/member gate and the locked
+    /// "session ended" screen — both render themselves fixed inset-0 and need the window to
+    /// actually be the screen for that to mean anything. "bubble" and "panel" are both just
+    /// the small floating widget at two different sizes; switching between them keeps
+    /// whatever corner the customer last dragged it to rather than jumping back to a default,
+    /// clamped back on screen if the new size would otherwise push it past an edge.
+    /// </summary>
+    private void ApplyOverlayLayout(string mode)
+    {
+        if (mode == _overlayMode) return;
+        _overlayMode = mode;
+
+        var screen = Screen.PrimaryScreen?.Bounds ?? new Rectangle(0, 0, 1920, 1080);
+
+        if (mode != "bubble" && mode != "panel")
+        {
+            _floatDraggable = false;
+            Bounds = screen;
+            return;
+        }
+
+        var size = mode == "bubble" ? new Size(BubbleSize, BubbleSize) : new Size(PanelWidth, PanelHeight);
+
+        var origin = _floatDraggable
+            ? Location
+            : new Point(screen.Right - size.Width - FloatMargin, screen.Bottom - size.Height - FloatMargin);
+
+        origin.X = Math.Clamp(origin.X, screen.Left, Math.Max(screen.Left, screen.Right - size.Width));
+        origin.Y = Math.Clamp(origin.Y, screen.Top, Math.Max(screen.Top, screen.Bottom - size.Height));
+
+        Bounds = new Rectangle(origin, size);
+        _floatDraggable = true;
+    }
+
+    /// <summary>
+    /// Moves the floating widget by a mouse delta reported from inside the page (see
+    /// useDragToMoveHost in UserOverlayApp.jsx). Has to be driven this way rather than the
+    /// usual WM_NCHITTEST/HTCAPTION "drag anywhere on a borderless window" trick: WebView2's
+    /// own content is a separate child window, so a hit test played by this Form never sees
+    /// mouse activity that happens over it. Clamped so a fast drag can't throw the widget
+    /// somewhere off screen the customer can no longer reach.
+    /// </summary>
+    private void DragFloatingWindow(int dx, int dy)
+    {
+        if (!_floatDraggable) return;
+
+        var screen = Screen.PrimaryScreen?.Bounds ?? new Rectangle(0, 0, 1920, 1080);
+        var x = Math.Clamp(Location.X + dx, screen.Left - Width + 40, screen.Right - 40);
+        var y = Math.Clamp(Location.Y + dy, screen.Top, screen.Bottom - 40);
+        Location = new Point(x, y);
     }
 
     // Blocks the window's own close path (task switcher, taskbar right-click, a script
