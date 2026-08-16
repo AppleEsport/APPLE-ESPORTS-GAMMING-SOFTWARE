@@ -292,9 +292,15 @@ public sealed class MainForm : Form
         // Caught in the page itself instead - the same postMessage bridge WebMessageReceived
         // below already trusts for "check-for-updates" - and run on every document, since the
         // dashboard is a client-side router that never reloads the outer page as it navigates.
+        // e.code, not e.key: Ctrl+Alt is the AltGr modifier on plenty of real keyboard
+        // layouts (anything but plain US English), and when that fires the browser can
+        // report e.key as some other character entirely, or a dead-key marker, even though
+        // the physical Q key was the one pressed - confirmed live, the shortcut did nothing
+        // on exactly this. e.code reports the physical key position and ignores what
+        // character the current layout says it produces, so it is unaffected either way.
         await core.AddScriptToExecuteOnDocumentCreatedAsync(
             "window.addEventListener('keydown', function(e) {" +
-            "  if (e.ctrlKey && e.altKey && !e.shiftKey && (e.key === 'q' || e.key === 'Q')) {" +
+            "  if (e.ctrlKey && e.altKey && !e.shiftKey && !e.repeat && e.code === 'KeyQ') {" +
             "    e.preventDefault();" +
             "    window.chrome.webview.postMessage('close-app');" +
             "  }" +
