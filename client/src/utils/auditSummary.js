@@ -43,6 +43,7 @@ const SUMMARIES = {
   bill_complete: (d) => `completed bill ${d?.BillNumber ?? ''}`.trim(),
   payment_process: (d) => `took a payment — ${d?.PaymentType ?? 'payment'}, ${money(d?.Total)}`,
   discount_apply: (d) => `applied a ${d?.DiscountType === 'Percentage' ? `${d?.Value}%` : money(d?.Value)} discount${d?.Reason ? ` (${d.Reason})` : ''}`,
+  credit_clear: (d) => `cleared ${d?.CustomerName ?? 'a'}'s credit — ${money(d?.Amount)}${d?.PaymentType ? ` (${d.PaymentType})` : ''}`,
 
   food_order_place: (d) => `placed food order ${d?.OrderNumber ?? ''} — ${d?.ItemCount ?? '?'} item(s), ${money(d?.Total)}`.trim(),
   food_order_status_change: (d) => `marked a food order ${(d?.Status ?? 'updated').toLowerCase()}${d?.Reason ? ` (${d.Reason})` : ''}`,

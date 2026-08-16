@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
+using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Common;
 using AppleEsportsErp.Application.DTOs.Credits;
 using AppleEsportsErp.Application.Exceptions;
@@ -15,10 +16,12 @@ namespace AppleEsportsErp.Infrastructure.Services;
 public class CreditService : ICreditService
 {
     private readonly IUnitOfWork _unitOfWork;
+    private readonly IAuditService _auditService;
 
-    public CreditService(IUnitOfWork unitOfWork)
+    public CreditService(IUnitOfWork unitOfWork, IAuditService auditService)
     {
         _unitOfWork = unitOfWork;
+        _auditService = auditService;
     }
 
     public async Task<PaginatedResult<CreditDto>> GetCreditsAsync(Guid branchId, string status = "pending", int page = 1, int pageSize = 50)
@@ -148,6 +151,27 @@ public class CreditService : ICreditService
             credit.ClearedAt = DateTimeOffset.UtcNow;
             credit.ClearedByOperatorId = operatorId;
             _unitOfWork.Repository<CustomerCredit>().Update(credit);
+
+            // The one action this whole trail exists to answer for, previously missing from it
+            // entirely - see AuditActions.CreditClear.
+            await _auditService.LogAsync(new AuditEntry
+            {
+                OperatorId = operatorId,
+                UserRole = "Operator",
+                UserName = "System",
+                Action = AuditActions.CreditClear,
+                BranchId = branchId,
+                TargetType = "customer_credit",
+                TargetId = credit.Id,
+                Details = new
+                {
+                    CustomerName = credit.CustomerName,
+                    Amount = credit.CreditAmount,
+                    PaymentType = dto.PaymentType.ToString(),
+                    Cash = cashAmountToApply,
+                    Online = dto.OnlineAmount,
+                },
+            });
 
             await _unitOfWork.CommitTransactionAsync();
 

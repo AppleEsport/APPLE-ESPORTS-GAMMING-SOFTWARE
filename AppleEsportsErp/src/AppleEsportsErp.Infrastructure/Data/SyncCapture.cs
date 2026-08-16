@@ -61,6 +61,15 @@ public static class SyncCapture
         [typeof(CashTransaction)] = "cash_transaction",
         [typeof(CustomerCredit)] = "customer_credit",
 
+        // The cash/online/wallet breakdown behind every completed bill. Watched here for the
+        // same reason the four above are: "bill.paid" and "payment.recorded" exist as handlers
+        // at Head Office's receiving end, but nothing anywhere in this codebase ever emits
+        // either one - a payment recorded by clearing a credit, in particular, never travelled
+        // by any path at all. EodService reads Payment directly for its Cash/Online/Wallet
+        // columns, so without this those columns were never anything other than zero at Head
+        // Office, no matter how much a branch had actually taken.
+        [typeof(Payment)] = "payment",
+
         // Bills, because a bill only reached Head Office when somebody paid it.
         //
         // The bill.paid event creates the bill as a side effect of recording a payment, which

@@ -9,6 +9,9 @@ const TEXT_MUTED = [110, 110, 120];
 // Light status-tint backgrounds for conditional row highlighting (e.g. credit status).
 export const ROW_TINT_RED = [253, 226, 226];
 export const ROW_TINT_GREEN = [220, 245, 230];
+// Neutral tint for a section-header row (e.g. one shift's heading inside a table grouped by
+// shift) - deliberately not red or green, since a header row is not a status.
+export const ROW_TINT_NEUTRAL = [228, 232, 240];
 
 function pageWidth(doc) {
   return doc.internal.pageSize.getWidth();

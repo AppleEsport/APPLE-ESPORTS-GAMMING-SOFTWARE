@@ -400,6 +400,11 @@ builder.Services.AddHostedService<AppleEsportsErp.Api.Services.SessionActivityCl
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.SessionHeartbeatService>();
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.SyncCourierService>();
 
+// Re-attempts anything still sitting unapplied in the sync inbox - a shift that synced late
+// otherwise leaves its cash register stuck forever, since the branch was already told
+// "delivered" and never resends. Head Office only; see the class remarks.
+builder.Services.AddHostedService<AppleEsportsErp.Api.Services.SyncInboxRetryService>();
+
 // Tells Head Office which version this branch is running. Without it the Updates page cannot
 // say what any branch is on, so an update could be pushed to four shops with no way of knowing
 // whether any of them took it. Does nothing at Head Office, which has nobody to report to.
