@@ -12,7 +12,7 @@
 ; ============================================================================
 
 #define AppName        "Apple Esports"
-#define AppVersion     "2.4.21"
+#define AppVersion     "2.4.22"
 #define AppPublisher   "Apple Esports"
 #define Staging        "branch\staging"
 
@@ -292,9 +292,38 @@ end;
   Safe to call when they are already running - sc.exe simply reports so and changes nothing. }
 procedure EnsureServicesRunning();
 var
-  ResultCode: Integer;
+  ResultCode, Port, Waited: Integer;
+  PortFile, PortStr, PgIsReady: String;
 begin
-  Exec('sc.exe', 'start AppleEsportsDb',  '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec('sc.exe', 'start AppleEsportsDb', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  { "sc start" returns the moment Windows reports the service running - not once Postgres has
+    actually finished its own recovery and is accepting connections. Starting the API right
+    behind it left a real gap: a request landing in that window got a database refusing the
+    connection, surfaced to whoever was standing at the counter as a bare "Internal server
+    error" with no way to know it would resolve itself in a few seconds. setup-database.ps1
+    already solved this correctly for a fresh install with a pg_isready poll; this is the same
+    fix for every update and repair after that, which never had it. }
+  Port := 5433;
+  PortFile := ExpandConstant('{commonappdata}\Apple Esports\db.port');
+  if FileExists(PortFile) and LoadStringFromFile(PortFile, PortStr) then
+    Port := StrToIntDef(Trim(PortStr), Port);
+
+  PgIsReady := ExpandConstant('{app}\pgsql\bin\pg_isready.exe');
+  if FileExists(PgIsReady) then
+  begin
+    Waited := 0;
+    while (Waited < 30) do
+    begin
+      Exec(PgIsReady, '-h localhost -p ' + IntToStr(Port) + ' -q', '', SW_HIDE,
+           ewWaitUntilTerminated, ResultCode);
+      if ResultCode = 0 then
+        Break;
+      Sleep(1000);
+      Waited := Waited + 1;
+    end;
+  end;
+
   Exec('sc.exe', 'start AppleEsportsApi', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
