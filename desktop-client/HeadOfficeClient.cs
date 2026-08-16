@@ -94,27 +94,62 @@ public sealed class HeadOfficeClient : IDisposable
     /// A "user" (gaming PC) role has no branch id of its own to send with a provisioning
     /// claim - only the counter PC across the LAN knows that, from its own adoption. This asks
     /// it, the same way the setup wizard already does for the counter PC itself.
+    ///
+    /// The reason is always returned, even on success, because "could not confirm the branch"
+    /// used to mean three completely different things - unreachable, reachable but not
+    /// adopted as one branch, reachable but with an empty branch list - and collapsed them
+    /// into one generic message. Staff standing at a PC with a warning dialog and no way to
+    /// tell those apart cannot fix anything; they can only try things at random.
     /// </summary>
-    public async Task<(bool Adopted, Guid? BranchId, string? BranchName)> GetIdentityAsync()
+    public async Task<(bool Adopted, Guid? BranchId, string? BranchName, string Reason)> GetIdentityAsync()
     {
+        string json;
         try
         {
-            var json = await _http.GetStringAsync($"{_baseUrl}/api/provisioning/identity");
-            using var doc = JsonDocument.Parse(json);
-            var data = doc.RootElement.GetProperty("data");
+            json = await _http.GetStringAsync($"{_baseUrl}/api/provisioning/identity");
+        }
+        catch (TaskCanceledException)
+        {
+            return (false, null, null, "The server did not answer in time.");
+        }
+        catch (HttpRequestException ex)
+        {
+            return (false, null, null, $"Could not reach the server. {ex.Message}");
+        }
+
+        JsonDocument doc;
+        try
+        {
+            doc = JsonDocument.Parse(json);
+        }
+        catch (JsonException)
+        {
+            return (false, null, null, "The server's reply did not look like Apple Esports.");
+        }
+
+        using (doc)
+        {
+            if (!doc.RootElement.TryGetProperty("data", out var data))
+                return (false, null, null, "The server's reply had no data in it.");
 
             var adopted = data.TryGetProperty("adopted", out var a) && a.GetBoolean();
-            if (!adopted) return (false, null, null);
+            if (!adopted)
+            {
+                var count = data.TryGetProperty("branches", out var b0) ? b0.GetArrayLength() : -1;
+                return (false, null, null, count switch
+                {
+                    -1 => "The reply had no branch list at all.",
+                    0 => "That address answered, but knows about no branches yet.",
+                    _ => $"That address still holds {count} branches - it has never been set up as one specific branch (run its own setup wizard first).",
+                });
+            }
 
             var branches = data.GetProperty("branches");
-            if (branches.GetArrayLength() == 0) return (false, null, null);
+            if (branches.GetArrayLength() == 0)
+                return (false, null, null, "Reported adopted, but the branch list was empty.");
 
             var first = branches[0];
-            return (true, first.GetProperty("id").GetGuid(), first.GetProperty("name").GetString());
-        }
-        catch
-        {
-            return (false, null, null);
+            return (true, first.GetProperty("id").GetGuid(), first.GetProperty("name").GetString(), "OK");
         }
     }
 

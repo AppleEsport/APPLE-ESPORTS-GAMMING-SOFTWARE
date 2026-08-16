@@ -847,13 +847,11 @@ public sealed class MainForm : Form
 
             // A gaming PC has no branch id of its own - only the counter PC across the LAN
             // knows what branch it is, from its own adoption.
-            var (adopted, branchId, _) = await client.GetIdentityAsync();
+            var (adopted, branchId, _, reason) = await client.GetIdentityAsync();
             if (!adopted || branchId is null)
             {
                 MessageBox.Show(this,
-                    $"Could not confirm which branch this is from {HostLabel()}.\n\n" +
-                    "A customer gaming PC needs to reach the counter PC's branch across the shop " +
-                    "network first — check the server address above.",
+                    $"Could not confirm which branch this is from {HostLabel()}.\n\n{reason}",
                     "Apple Esports", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
