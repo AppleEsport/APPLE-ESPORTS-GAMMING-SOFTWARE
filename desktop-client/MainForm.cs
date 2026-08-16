@@ -122,9 +122,6 @@ public sealed class MainForm : Form
         // a bare title and gave them nothing to go on.
         Text = $"Apple Esports ERP  —  {HostLabel()}";
         BackColor = Backdrop;
-        MinimumSize = new Size(1024, 640);
-        StartPosition = FormStartPosition.CenterScreen;
-        Size = new Size(1440, 900);
 
         // Use the icon baked into this executable, so the window, taskbar and
         // Alt-Tab entry all show the same Apple Esports logo as the file itself.
@@ -138,24 +135,51 @@ public sealed class MainForm : Form
             // Cosmetic only — a missing icon must not stop the app.
         }
 
-        // Both kinds of PC now run with no title bar and no close button - an operator
-        // clicking the corner X mid-shift was closing the whole counter by accident, which is
-        // exactly the "goes some where else" this replaces. The one real difference between
-        // the two roles is what it costs to get out: Ctrl+Alt+Q always works (see
-        // ProcessCmdKey), asking for the admin PIN only when one has actually been configured
-        // - the same rule that already applied to this shortcut, now the only door on either
-        // kind of machine instead of one of several. Deliberate day-to-day exit is End Shift,
-        // inside the dashboard itself; this shortcut is for actually quitting the program.
-        //
-        // Still shown in the taskbar and still lets F11 toggle a border back on, unlike a
-        // customer PC - staff need to Alt-Tab to a print dialog or the clock now and then, the
-        // public never should.
+        // Both kinds of PC run with no title bar and no close button - an operator clicking
+        // the corner X mid-shift was closing the whole counter by accident, which is exactly
+        // the "goes some where else" this replaces. The one real difference between the two
+        // roles is what it costs to get out: Ctrl+Alt+Q always works (see ProcessCmdKey),
+        // asking for the admin PIN only when one has actually been configured - the same rule
+        // that already applied to this shortcut, now the only door on either kind of machine
+        // instead of one of several. Deliberate day-to-day exit is End Shift, inside the
+        // dashboard itself; this shortcut is for actually quitting the program.
         FormBorderStyle = FormBorderStyle.None;
         ControlBox = false;
         MinimizeBox = false;
         MaximizeBox = false;
-        ShowInTaskbar = !_config.IsUserPc;
-        WindowState = FormWindowState.Maximized;
+
+        if (_config.IsUserPc)
+        {
+            // The customer overlay is a fixed 380px right-hand panel meant to sit beside the
+            // customer's own desktop, not a whole-screen page — see UserOverlayApp.jsx's own
+            // w-[380px]. This window matches that exactly instead of covering the whole
+            // screen the way an operator's dashboard does: a customer PC that filled the
+            // screen with this browser left nothing for a customer to actually play on,
+            // since there is no real desktop showing through a full-screen page — that
+            // architecture only works when this window is native and only as wide as its
+            // own content, which is what this is.
+            //
+            // TopMost keeps the panel above whatever the customer brings to the front —
+            // "the panel minimises, it does not dismiss" (see PHASE3_PLAN.md §5). Minimising
+            // to the small bubble UserOverlayApp.jsx already renders when isMinimized is set
+            // is how a customer gets it out of the way; nothing here needs to resize the
+            // window for that, since the bubble fits the same 380px column just as well.
+            const int PanelWidth = 380;
+            var screen = Screen.PrimaryScreen?.Bounds ?? new Rectangle(0, 0, 1920, 1080);
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.Manual;
+            Bounds = new Rectangle(screen.Right - PanelWidth, screen.Top, PanelWidth, screen.Height);
+            MinimumSize = new Size(PanelWidth, screen.Height);
+            TopMost = true;
+        }
+        else
+        {
+            MinimumSize = new Size(1024, 640);
+            StartPosition = FormStartPosition.CenterScreen;
+            Size = new Size(1440, 900);
+            ShowInTaskbar = true;
+            WindowState = FormWindowState.Maximized;
+        }
 
         BuildOverlay();
 
