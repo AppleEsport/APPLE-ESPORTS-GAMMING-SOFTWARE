@@ -668,11 +668,17 @@ export default function EodDashboardPage() {
                   </thead>
                   <tbody>
                     {downtime.map((d) => {
-                      const isPowerCut = d.kind !== 'Internet offline';
+                      // Three kinds now share this table: a real power cut (sessions genuinely
+                      // credited time back), a lost link to Head Office (nobody's play was
+                      // touched), and an app problem the operator reported themselves (neither
+                      // claim is true of it, so it gets its own middle badge rather than being
+                      // folded into "everything that isn't internet" as a power cut).
+                      const isPowerCut = d.kind === 'Power cut / restart';
+                      const isAppFault = d.kind === 'App problem';
                       return (
                         <tr key={d.id} className="border-b border-border/50 hover:bg-bg-3/50">
                           <td className="py-2.5 px-4">
-                            <span className={`badge ${isPowerCut ? 'badge-offline' : 'badge-awaiting'}`}>
+                            <span className={`badge ${isPowerCut ? 'badge-offline' : isAppFault ? 'badge-reserved' : 'badge-awaiting'}`}>
                               {d.kind}
                             </span>
                           </td>

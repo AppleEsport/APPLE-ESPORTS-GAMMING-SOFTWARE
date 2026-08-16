@@ -242,9 +242,12 @@ public class EodController : ControllerBase
         var downtimeRows = downtime.Select(d => new
         {
             d.Id,
-            Kind = d.Kind == AppleEsportsErp.Domain.Enums.DowntimeKind.PowerOrRestart
-                ? "Power cut / restart"
-                : "Internet offline",
+            Kind = d.Kind switch
+            {
+                AppleEsportsErp.Domain.Enums.DowntimeKind.PowerOrRestart => "Power cut / restart",
+                AppleEsportsErp.Domain.Enums.DowntimeKind.AppFault => "App problem",
+                _ => "Internet offline",
+            },
             // Formatted in IST here rather than left to the browser, because this is also
             // what goes onto the printed report.
             From = IndiaTime.FormatTime(d.StartedAt),
@@ -252,11 +255,18 @@ public class EodController : ControllerBase
             Minutes = Math.Round(d.DurationSeconds / 60.0, 0),
             d.SessionsAffected,
             // A power cut stops play and customers get their time back; losing the link to
-            // Head Office does not interrupt anybody's game. Saying so on the report stops
-            // the two being read as the same event.
-            Impact = d.Kind == AppleEsportsErp.Domain.Enums.DowntimeKind.PowerOrRestart
-                ? "Play stopped — affected sessions had their time credited back"
-                : "Play unaffected — only the link to Head Office was down",
+            // Head Office does not interrupt anybody's game. An app problem is neither claim -
+            // it is whatever the operator could not do while it was stuck, not a verified outage
+            // of play or of the sync link, so it gets its own honest, unassuming wording rather
+            // than borrowing either existing claim.
+            Impact = d.Kind switch
+            {
+                AppleEsportsErp.Domain.Enums.DowntimeKind.PowerOrRestart =>
+                    "Play stopped — affected sessions had their time credited back",
+                AppleEsportsErp.Domain.Enums.DowntimeKind.AppFault =>
+                    "Reported by the operator as a software problem — not a power cut or lost internet",
+                _ => "Play unaffected — only the link to Head Office was down",
+            },
             d.Notes,
         }).ToList();
 

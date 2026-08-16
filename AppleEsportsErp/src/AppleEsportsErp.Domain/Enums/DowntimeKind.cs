@@ -18,5 +18,14 @@ public enum DowntimeKind
     /// sync courier failing to deliver. Nobody's game was interrupted and no time is credited —
     /// it is recorded so the owner knows why figures arrived late.
     /// </summary>
-    InternetOffline
+    InternetOffline,
+
+    /// <summary>
+    /// The app itself was broken or stuck, reported by an operator explaining a shift gap - not
+    /// the branch's power, not their internet. Kept separate from <see cref="PowerOrRestart"/>
+    /// deliberately: that kind's own report line claims sessions had their time credited back,
+    /// which is only true for a genuine power cut. Filing a software bug under it would put a
+    /// false claim on the owner's report on top of the false blame this exists to correct.
+    /// </summary>
+    AppFault
 }

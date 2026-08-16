@@ -96,9 +96,12 @@ public class ShiftGapController : ControllerBase
 
         // A real interruption. Recorded against the day it started, so an overnight cut lands
         // on the night it disrupted rather than the morning it was noticed.
-        var kind = dto.Reason == GapReason.InternetWentDown
-            ? DowntimeKind.InternetOffline
-            : DowntimeKind.PowerOrRestart;
+        var kind = dto.Reason switch
+        {
+            GapReason.InternetWentDown => DowntimeKind.InternetOffline,
+            GapReason.AppHadAProblem => DowntimeKind.AppFault,
+            _ => DowntimeKind.PowerOrRestart,
+        };
 
         _db.DowntimeEvents.Add(new DowntimeEvent
         {
@@ -131,7 +134,12 @@ public class ShiftGapController : ControllerBase
             Details = new { unattendedMinutes = dto.UnattendedMinutes, reason = dto.Reason.ToString(), note = dto.Note },
         });
 
-        var what = dto.Reason == GapReason.InternetWentDown ? "lost its internet" : "lost power";
+        var what = dto.Reason switch
+        {
+            GapReason.InternetWentDown => "lost its internet",
+            GapReason.AppHadAProblem => "had a problem with the app itself",
+            _ => "lost power",
+        };
 
         await _notifier.NotifyAsync(
             $"{branchName} {what} for about {howLong}",
@@ -145,7 +153,12 @@ public class ShiftGapController : ControllerBase
                     ("Branch", branchName),
                     ("Reported by", operatorName),
                     ("", ""),
-                    ("What happened", dto.Reason == GapReason.InternetWentDown ? "The internet went down" : "The power went off"),
+                    ("What happened", dto.Reason switch
+                    {
+                        GapReason.InternetWentDown => "The internet went down",
+                        GapReason.AppHadAProblem => "The app itself had a problem - not the branch's power or internet",
+                        _ => "The power went off",
+                    }),
                     ("Roughly from", IndiaTime.Format(gapStart)),
                     ("Back at", IndiaTime.Format(gapEnd)),
                     ("For about", howLong),
@@ -174,6 +187,15 @@ public class ShiftGapController : ControllerBase
 
         /// <summary>The internet went down. The shop kept working; only reporting stopped.</summary>
         InternetWentDown = 2,
+
+        /// <summary>
+        /// The app itself was broken or stuck - a bug, a crash, an update that did not come back
+        /// cleanly. Not the branch's fault and not their power or internet, which is exactly why
+        /// this cannot share either of those options: an operator with no honest reason to pick
+        /// picks the nearest dishonest one, and the owner ends up told their wifi is unreliable
+        /// when the real cause was software this team shipped.
+        /// </summary>
+        AppHadAProblem = 3,
     }
 
     public class ExplainGapDto
