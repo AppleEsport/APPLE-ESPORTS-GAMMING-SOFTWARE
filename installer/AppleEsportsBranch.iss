@@ -63,6 +63,12 @@ Name: "agent";  Description: "Gaming PC screen lock";        Types: gaming
 ; -- Always --
 Source: "..\desktop-client\publish\AppleEsports.exe"; DestDir: "{app}"; Components: core; Flags: ignoreversion
 Source: "..\SHORTCUT_KEYS.md";                        DestDir: "{app}"; Components: core; Flags: ignoreversion
+
+; Run by MainForm on every "session-ended" message from the overlay page - closes whatever
+; a customer opened during their session. Shipped on both roles (harmless, just never
+; triggered on an operator PC) rather than gated to the gaming component alone, since a
+; machine can change role after install via Ctrl+Shift+P without a reinstall.
+Source: "branch\end-session-cleanup.ps1"; DestDir: "{app}"; Components: core; Flags: ignoreversion
 ; NOTE: AppleEsports.config.json is deliberately NOT shipped. It is written by
 ; WriteClientConfig below, per machine, because what belongs in it depends on which kind
 ; of PC this is. The version in the repo is a developer's, pointed at a public server and

@@ -442,6 +442,12 @@ public sealed class MainForm : Form
                 return;
             }
 
+            if (string.Equals(message, "session-ended", StringComparison.Ordinal))
+            {
+                if (_config.IsUserPc) RunEndSessionCleanup();
+                return;
+            }
+
             if (!string.Equals(message, "check-for-updates", StringComparison.Ordinal)) return;
 
             // Wakes the loop rather than starting a second check, so pressing the button twice
@@ -953,6 +959,40 @@ public sealed class MainForm : Form
     {
         _allowClose = true;
         Application.Exit();
+    }
+
+    /// <summary>
+    /// Closes whatever a customer opened during their session, the moment it actually ends -
+    /// triggered by the overlay page posting "session-ended" on SessionStopped (see
+    /// OverlaySocketContext.jsx), not the later SessionEnded, since play is over the instant
+    /// the time runs out whether or not billing has been settled yet.
+    ///
+    /// The work itself lives in end-session-cleanup.ps1 rather than here, so it can be
+    /// re-tuned - a spared process added, the "visible window" rule replaced with real PID
+    /// tracking later - without a rebuild. Run hidden: a console flashing on a locked kiosk
+    /// screen is not something a customer should ever see.
+    /// </summary>
+    private void RunEndSessionCleanup()
+    {
+        try
+        {
+            var exeDir = Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
+            var script = Path.Combine(exeDir, "end-session-cleanup.ps1");
+            if (!File.Exists(script)) return;   // not installed on this build - nothing to run
+
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("pwsh.exe")
+            {
+                ArgumentList = { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script },
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden,
+            });
+        }
+        catch
+        {
+            // A failed cleanup must never take the kiosk down - the next customer gets a
+            // messier desktop, not a broken PC.
+        }
     }
 
     // Blocks the window's own close path (task switcher, taskbar right-click, a script
