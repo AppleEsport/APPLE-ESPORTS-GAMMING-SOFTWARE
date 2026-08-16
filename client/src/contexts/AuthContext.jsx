@@ -99,6 +99,19 @@ export function AuthProvider({ children }) {
         sessionStorage.removeItem('pendingShiftGap');
       }
 
+      // A resumed shift never actually closed - the drawer is still open and inventory was
+      // already checked when the shift genuinely started. Mark the shift-start checklist done
+      // right away so it doesn't reappear. Without this, an app restart mid-shift (a crash, a
+      // power cut, or now an auto-update) wipes the sessionStorage flag the checklist normally
+      // relies on, and the operator who logs back in gets asked to "open" a drawer they never
+      // closed. A genuinely new shift (resumedShift false) still gets the checklist as normal.
+      const shiftStartKey = `shift_start_done_${userData?.id || userData?.username}`;
+      if (resumedShift) {
+        sessionStorage.setItem(shiftStartKey, 'true');
+      } else {
+        sessionStorage.removeItem(shiftStartKey);
+      }
+
       localStorage.setItem('user', JSON.stringify(userData));
       setUser(userData);
       return { ...userData, resumedShift, unattendedMinutes, needsGapExplanation, pendingTakeover };
