@@ -17,7 +17,10 @@ param(
     # Where this branch reports to. The shop does not need it to trade - it is used only by
     # the background courier, so Head Office can see what happened here. Overridable so the
     # move to the owner's own server is a parameter, not a rebuild.
-    [string]$HeadOfficeUrl = 'http://140.245.195.222:8081'
+    [string]$HeadOfficeUrl = 'http://140.245.195.222:8081',
+
+    # Must match setup-api.ps1's own default - see the App:BaseUrl comment below for why.
+    [int]   $ApiPort = 5016
 )
 
 $ErrorActionPreference = 'Stop'
@@ -251,6 +254,36 @@ try {
     if (-not $jwtSecret)  { $jwtSecret  = New-Secret; Write-Step 'Generated a signing key for this branch.' }
     if (-not $jwtRefresh) { $jwtRefresh = New-Secret }
 
+    # -- Work out this machine's own LAN address, for App:BaseUrl below ---------
+    # A customer's own phone has to be able to open a link this branch emails them (a
+    # password reset, the "welcome, set your password" sent on a member's first top-up) -
+    # "localhost" only ever means "this exact PC" to whoever receives it, and every branch
+    # runs its own separate local database, so pointing these links at Head Office instead
+    # would not work either: the reset token these emails carry only exists here.
+    #
+    # The gaming PCs already reach this same machine over the shop's own network on
+    # whatever real LAN address it has, so this asks Windows for that same address rather
+    # than inventing a second way to find it. Get-NetIPConfiguration (unlike the more
+    # obvious Get-NetIPAddress) only returns interfaces that actually have a default
+    # gateway, which is what keeps this from picking a Docker/Hyper-V/VPN virtual adapter
+    # instead of the real shop network - the same trap a VM's NAT adapter has already been
+    # seen to fall into elsewhere in this project. A machine with no LAN connection at all
+    # legitimately has no answer here; App:BaseUrl is simply left unset, and
+    # AppUrlProvider's own fallback chain already handles that safely.
+    $lanAddress = $null
+    try {
+        $lanAddress = Get-NetIPConfiguration -ErrorAction Stop |
+            Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' } |
+            Select-Object -First 1 -ExpandProperty IPv4Address |
+            Select-Object -First 1 -ExpandProperty IPAddress
+    } catch { }
+
+    if ($lanAddress) {
+        Write-Step "This branch is reachable on the shop LAN at $lanAddress - email links will use it."
+    } else {
+        Write-Step 'Could not determine a LAN address for this machine - email links will fall back to whatever address the request itself arrived on.'
+    }
+
     # Per machine, never shipped. A key baked into the installer would be identical at all
     # four branches, so a token minted at one would be accepted by the others.
     $apiConfigJson = @{
@@ -275,7 +308,13 @@ try {
             MaxRetryAttempts    = 5
             BatchSize           = 100
         }
-    } | ConvertTo-Json -Depth 5 | Out-String
+    }
+
+    if ($lanAddress) {
+        $apiConfigJson['App'] = @{ BaseUrl = "http://${lanAddress}:$ApiPort" }
+    }
+
+    $apiConfigJson = $apiConfigJson | ConvertTo-Json -Depth 5 | Out-String
 
     # An install from an older build left this file readable to Administrators and
     # nothing more, so setup could not overwrite what it had itself written. Put the
