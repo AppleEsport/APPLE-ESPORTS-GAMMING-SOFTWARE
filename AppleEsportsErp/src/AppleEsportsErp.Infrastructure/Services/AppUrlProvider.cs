@@ -96,9 +96,31 @@ public class AppUrlProvider : IAppUrlProvider
             || uri.Host == "[::1]";
     }
 
+    /// <summary>
+    /// Where a person should be sent to set a password.
+    ///
+    /// Head Office when this is a branch and it knows one, because a reset link is read on a
+    /// phone, in an inbox, wherever that person happens to be - and a branch's own address is
+    /// the shop LAN, which means nothing anywhere else. Pointing these at the branch was a
+    /// deliberate earlier fix and it was right about the problem it solved (localhost:5173 was
+    /// worse) and wrong about the answer: it swapped a link that worked nowhere for one that
+    /// works only while standing in the shop.
+    ///
+    /// Falls back to this deployment's own address when there is no Head Office to send them to
+    /// - which is the case at Head Office itself, where its own address is exactly right.
+    /// </summary>
+    private string ResetLinkBaseUrl()
+    {
+        var headOffice = _configuration["Sync:HeadOfficeUrl"];
+        if (!string.IsNullOrWhiteSpace(headOffice) && !IsLoopback(headOffice))
+            return headOffice.Trim().TrimEnd('/');
+
+        return GetFrontendBaseUrl();
+    }
+
     public string BuildResetPasswordLink(string email, string token)
     {
-        var baseUrl = GetFrontendBaseUrl();
+        var baseUrl = ResetLinkBaseUrl();
         return $"{baseUrl}/reset-password?email={Uri.EscapeDataString(email)}&token={Uri.EscapeDataString(token)}";
     }
 }

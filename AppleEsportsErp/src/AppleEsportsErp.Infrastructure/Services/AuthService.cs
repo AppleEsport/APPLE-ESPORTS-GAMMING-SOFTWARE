@@ -10,6 +10,7 @@ using AppleEsportsErp.Application.Interfaces;
 using AppleEsportsErp.Application.Services;
 using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
+using AppleEsportsErp.Infrastructure.Configuration;
 using AppleEsportsErp.Infrastructure.Data;
 using AppleEsportsErp.Infrastructure.Identity;
 using BCryptNet = BCrypt.Net.BCrypt;
@@ -31,6 +32,43 @@ public class AuthService : IAuthService
     private readonly ITokenRevocationService _tokenRevocation;
     private readonly IEmailService _emailService;
     private readonly IConfiguration _configuration;
+    private readonly IOutboxService _outbox;
+
+    /// <summary>
+    /// Sends a member's freshly minted reset token up to Head Office.
+    ///
+    /// The link in their email now points at Head Office, because that is the only address that
+    /// means anything in an inbox - see AppUrlProvider.ResetLinkBaseUrl. Head Office therefore
+    /// has to be able to recognise the token when they arrive, and it cannot: the branch minted
+    /// it into its own local database, and Member updates were never part of sync at all. Without
+    /// this the link opens and is refused as invalid, which is a worse failure than the shop-LAN
+    /// link it replaced, because it looks like it should have worked.
+    ///
+    /// Only the token and its expiry travel. Head Office already has the member itself from
+    /// member.created; this is the one field it is missing, and it is spent the moment it is used.
+    /// </summary>
+    private async Task ShareMemberResetTokenAsync(Member member, string token, DateTimeOffset expiry)
+    {
+        if (member.HomeBranchId is not { } branchId) return;
+
+        try
+        {
+            await _outbox.RecordEventAsync(branchId, "Member", member.Id, "member.reset_requested", new
+            {
+                memberId = member.Id,
+                email = member.Email,
+                resetToken = token,
+                resetTokenExpiry = expiry,
+            });
+        }
+        catch (Exception ex)
+        {
+            // Never let this take down a password reset. The customer still gets their mail; the
+            // link fails at Head Office instead, which is visible and recoverable - unlike an
+            // exception surfacing out of a login endpoint as a 500.
+            _logger.LogError(ex, "Could not queue the reset token for member {MemberId} to Head Office.", member.Id);
+        }
+    }
     private readonly IAppUrlProvider _appUrls;
     private const int SALT_ROUNDS = 12;
 
@@ -43,7 +81,7 @@ public class AuthService : IAuthService
     private readonly IAdminNotifier _adminNotifier;
     private readonly IShiftTakeoverService _takeover;
 
-    public AuthService(AppDbContext db, JwtTokenService jwt, IAuditService audit, ILogger<AuthService> logger, ITokenRevocationService tokenRevocation, IEmailService emailService, IConfiguration configuration, IAppUrlProvider appUrls, IAdminNotifier adminNotifier, IShiftTakeoverService takeover)
+    public AuthService(AppDbContext db, JwtTokenService jwt, IAuditService audit, ILogger<AuthService> logger, ITokenRevocationService tokenRevocation, IEmailService emailService, IConfiguration configuration, IAppUrlProvider appUrls, IAdminNotifier adminNotifier, IShiftTakeoverService takeover, IOutboxService outbox)
     {
         _adminNotifier = adminNotifier;
         _takeover = takeover;
@@ -54,6 +92,7 @@ public class AuthService : IAuthService
         _tokenRevocation = tokenRevocation;
         _emailService = emailService;
         _configuration = configuration;
+        _outbox = outbox;
         _appUrls = appUrls;
     }
 
@@ -551,6 +590,7 @@ public class AuthService : IAuthService
                 member.ResetToken = resetToken;
                 member.ResetTokenExpiry = DateTimeOffset.UtcNow.AddHours(1);
                 await _db.SaveChangesAsync();
+                await ShareMemberResetTokenAsync(member, resetToken, member.ResetTokenExpiry.Value);
                 await SendPasswordResetEmailAsync(member.Email, member.FullName, resetToken, isLockout: true);
                 await _audit.LogAsync(new AuditEntry
                 {
@@ -1334,6 +1374,8 @@ public class AuthService : IAuthService
 
         await _db.SaveChangesAsync();
 
+        if (member != null) await ShareMemberResetTokenAsync(member, token, expiry);
+
         await SendPasswordResetEmailAsync(email, targetName, token);
     }
 
@@ -1588,6 +1630,40 @@ public class AuthService : IAuthService
             member.ResetTokenExpiry = null;
             member.UpdatedAt = DateTimeOffset.UtcNow;
         }
+
+        // A member's password set at Head Office has to reach the branch, or it has changed
+        // nothing that matters. The copy a gaming PC checks when somebody logs in at the counter
+        // is the branch's own, in the branch's own database on a machine in another city - so a
+        // reset that only lands here leaves the member holding a password that works nowhere
+        // they would actually use it.
+        //
+        // Queued as a command rather than written into the branch's rows, for the reason
+        // RemoteBranchControl exists: Head Office writing to its synced copy looks right for
+        // about three seconds and does nothing. This rides down on the branch's next heartbeat,
+        // a few seconds away, and the branch stores it locally - which is also what keeps that
+        // member able to log in with the shop's internet down.
+        //
+        // Only Head Office queues it. At a branch the member is right here and has just been
+        // updated directly; a row written there would be collected by nobody, because a branch
+        // polls Head Office and never itself.
+        if (member is { HomeBranchId: { } homeBranchId } && _configuration.IsHeadOffice())
+        {
+            _db.Add(new BranchCommand
+            {
+                Id = Guid.NewGuid(),
+                BranchId = homeBranchId,
+                CommandType = "set_member_password",
+                Payload = JsonSerializer.Serialize(new
+                {
+                    memberId = member.Id,
+                    passwordHash = newHash,
+                }),
+                Status = BranchCommandStatus.Pending,
+                RequestedByUserId = Guid.Empty,   // the member themselves, not a Head Office user
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+        }
+
         await _db.SaveChangesAsync();
 
         if (user != null)

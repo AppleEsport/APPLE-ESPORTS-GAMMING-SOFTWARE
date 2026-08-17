@@ -398,6 +398,9 @@ public class BranchHeartbeatService : BackgroundService
             case BranchCommands.DeleteInventoryItem:
                 return await RunDeleteInventoryItemAsync(scoped, command.Payload, ct);
 
+            case BranchCommands.SetMemberPassword:
+                return await RunSetMemberPasswordAsync(scoped, command.Payload, ct);
+
             default:
                 return (false, $"This branch does not know the command '{command.CommandType}' yet.");
         }
@@ -637,6 +640,68 @@ public class BranchHeartbeatService : BackgroundService
     /// mean anything. Same hard-delete-or-deactivate fallback InventoryController.Delete uses
     /// locally, so a branch cannot end up more or less deletable than Head Office is.
     /// </summary>
+    /// <summary>
+    /// Stores the password a member just set from the link in their email.
+    ///
+    /// Head Office did the hashing, because Head Office is where the link led - see
+    /// BranchCommands.SetMemberPassword for why it has to lead there. This end only writes the
+    /// result into the branch's own copy of the member, which is the copy the gaming PCs check,
+    /// and is what lets that member log in at the counter afterwards with the internet down.
+    ///
+    /// The reset token is cleared here as well. Head Office has already spent it, and a token
+    /// left sitting valid in a second database is a second chance to use it.
+    /// </summary>
+    private static async Task<(bool, string)> RunSetMemberPasswordAsync(
+        IServiceProvider scoped, string payload, CancellationToken ct)
+    {
+        Guid memberId;
+        string passwordHash;
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            memberId = doc.RootElement.GetProperty("memberId").GetGuid();
+            passwordHash = doc.RootElement.GetProperty("passwordHash").GetString() ?? "";
+        }
+        catch
+        {
+            return (false, "The password command arrived without a readable member id and hash.");
+        }
+
+        // Never store an empty hash. BCrypt.Verify against "" throws rather than returning
+        // false, so a blank arriving here would not open the account - it would break logging
+        // into it at all, and only for that one member, which is the kind of fault nobody
+        // connects back to a release.
+        if (string.IsNullOrWhiteSpace(passwordHash))
+            return (false, "The password command carried no hash.");
+
+        var db = scoped.GetRequiredService<AppDbContext>();
+        var member = await db.Set<Member>().FirstOrDefaultAsync(m => m.Id == memberId, ct);
+
+        // Not a failure. A member created at another branch, or one this branch has never seen,
+        // simply has nothing here to update - and reporting that as an error would have Head
+        // Office retrying a command that can never apply.
+        if (member is null) return (true, "This member does not exist at this branch.");
+
+        member.PasswordHash = passwordHash;
+        member.ResetToken = null;
+        member.ResetTokenExpiry = null;
+        await db.SaveChangesAsync(ct);
+
+        var audit = scoped.GetRequiredService<IAuditService>();
+        await audit.LogAsync(new AuditEntry
+        {
+            Action = AuditActions.PasswordReset,
+            UserRole = Roles.Admin,
+            UserName = "Head Office",
+            TargetType = "member",
+            TargetId = memberId,
+            BranchId = member.HomeBranchId ?? Guid.Empty,
+            Details = new { memberNumber = member.MemberNumber, viaRemoteCommand = true },
+        });
+
+        return (true, "Password updated at this branch.");
+    }
+
     private static async Task<(bool, string)> RunDeleteInventoryItemAsync(
         IServiceProvider scoped, string payload, CancellationToken ct)
     {
