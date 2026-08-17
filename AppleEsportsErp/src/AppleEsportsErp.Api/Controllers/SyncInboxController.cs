@@ -102,7 +102,16 @@ public class SyncInboxController : ControllerBase
 
             var appliedCount = 0;
 
-            foreach (var entry in stored.Concat(awaitingRetry))
+            // Applied in dependency order, not arrival order. A branch captures a shift and its
+            // cash register as two independent outbox entries, and within one batch nothing
+            // guaranteed the shift landed first - CashRegister.ShiftId is a required column, so
+            // when the register was processed first it hit FK_cash_register_shifts_ShiftId and
+            // failed outright. Confirmed live: a register open, its own verification, and its
+            // close all failed this way, every one landing seconds before the shift it named.
+            // UpsertRowAsync already drops a *nullable* foreign key that has not arrived yet
+            // (see its own remarks) - this is that same idea one level up, for the required ones
+            // it cannot silently null out. Ties keep arrival order; OrderBy is a stable sort.
+            foreach (var entry in stored.Concat(awaitingRetry).OrderBy(e => SyncApplyPriority(e.EventType)))
             {
                 try
                 {
@@ -165,6 +174,84 @@ public class SyncInboxController : ControllerBase
     }
 
     /// <summary>
+    /// Re-attempts every currently unapplied entry, from any branch, regardless of when it
+    /// arrived.
+    ///
+    /// <see cref="ReceiveSyncBatch"/> only retries an entry when its own branch resends the
+    /// exact same batch id, which happens on a dropped response - not on a genuine dependency
+    /// gap. A shift that was captured late leaves its cash register stuck for good otherwise:
+    /// the branch already got its 200 OK for that entry and has no reason to ever send it
+    /// again. Called on a timer by <c>SyncInboxRetryService</c>, independent of anything a
+    /// branch does next.
+    /// </summary>
+    public async Task<int> RetryUnappliedEntriesAsync(CancellationToken ct)
+    {
+        var pending = await _db.SyncInboxEntries.Where(e => !e.Applied).ToListAsync(ct);
+        var appliedCount = 0;
+
+        foreach (var entry in pending.OrderBy(e => SyncApplyPriority(e.EventType)).ThenBy(e => e.OccurredAt))
+        {
+            try
+            {
+                await ApplyToHeadOfficeRecordsAsync(entry);
+                entry.Applied = true;
+                entry.ApplyError = null;
+                await _db.SaveChangesAsync(ct);
+                appliedCount++;
+            }
+            catch (Exception ex)
+            {
+                DiscardPendingChanges();
+                entry.ApplyError = ex.GetBaseException().Message;
+                try { await _db.SaveChangesAsync(ct); }
+                catch (Exception saveEx)
+                {
+                    _logger.LogError(saveEx, "Could not even record why entry {EntryId} failed on retry.", entry.Id);
+                }
+            }
+        }
+
+        return appliedCount;
+    }
+
+    /// <summary>
+    /// Where an event type sits in the dependency chain - lower applies first.
+    ///
+    /// Only the relationships that have actually caused a stuck foreign key are encoded here;
+    /// everything else defaults to the last tier rather than everyone guessing at a total order
+    /// this codebase does not otherwise need. member.created and shift.changed lead because nearly
+    /// everything else can name one. cash_transaction, bill.paid and wallet events follow their
+    /// own row (cash_register, bill, member) rather than preceding it.
+    /// </summary>
+    private static int SyncApplyPriority(string eventType) => eventType.ToLowerInvariant() switch
+    {
+        "member.created" => 0,
+        "shift.changed" => 0,
+
+        "bill.changed" => 1,
+        "reservation.changed" => 1,
+        "session.started" => 1,
+
+        "cash_register.changed" => 2,
+        "customer_credit.changed" => 2,
+        "session.stopped" => 2,
+        "session.ended" => 2,
+        "payment.changed" => 2,   // depends on bill.changed (tier 1)
+
+        "cash_transaction.changed" => 3,
+        "bill.paid" => 3,
+        "payment.recorded" => 3,
+        "wallet.topped_up" => 3,
+        "member.wallet_toppedup" => 3,
+        "wallet.deducted" => 3,
+        "food_order.placed" => 3,
+
+        "food_order.status_changed" => 4,
+
+        _ => 5,   // inventory_item.changed, audit_log.changed, email.send_requested - independent
+    };
+
+    /// <summary>
     /// Folds a stored event into Head Office's own records so it appears on the dashboard.
     ///
     /// Throwing here is safe and expected: the payload is already committed, so a failure
@@ -225,6 +312,13 @@ public class SyncInboxController : ControllerBase
 
             case "customer_credit.changed":
                 await UpsertRowAsync<CustomerCredit>(held, root);
+                break;
+
+            // The cash/online/wallet breakdown a bill was actually settled with. See
+            // SyncCapture.Watched for why this exists - "bill.paid" and "payment.recorded"
+            // below are the dead handlers this replaces.
+            case "payment.changed":
+                await UpsertRowAsync<Payment>(held, root);
                 break;
 
             // Bookings. Head Office's reservations screen queried an empty table until now -

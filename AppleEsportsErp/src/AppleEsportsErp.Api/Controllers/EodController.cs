@@ -270,6 +270,25 @@ public class EodController : ControllerBase
             d.Notes,
         }).ToList();
 
+        // Every shift that touched this window, so the billing log below can be read shift by
+        // shift instead of as one undifferentiated list for the whole trading day. A shift still
+        // open at the moment this report runs has no LogoutTime yet - reported as "still on
+        // shift" rather than left blank, so a row from the current shift has somewhere to land.
+        var shiftsInRange = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.Shift>()
+            .Query()
+            .Include(s => s.Operator)
+            .Where(s => s.BranchId == targetBranchId && s.LoginTime <= endUtc &&
+                        (s.LogoutTime == null || s.LogoutTime >= startUtc))
+            .OrderBy(s => s.LoginTime)
+            .Select(s => new
+            {
+                s.Id,
+                OperatorName = s.Operator != null ? s.Operator.FullName : "Unknown",
+                LoginTime = s.LoginTime,
+                LogoutTime = s.LogoutTime,
+            })
+            .ToListAsync();
+
         return Ok(ApiResponse<object>.Ok(new {
             Daily = dailyReport,
             Monthly = monthlyReport,
@@ -278,6 +297,7 @@ public class EodController : ControllerBase
             AllCredits = allCredits,
             Downtime = downtimeRows,
             DowntimeTotalMinutes = Math.Round(downtime.Sum(d => d.DurationSeconds) / 60.0, 0),
+            Shifts = shiftsInRange,
         }));
     }
 
