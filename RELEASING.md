@@ -213,6 +213,29 @@ plus nginx / postgres / redis / certbot / db-backup which are not rebuilt for a 
 
 **This affects the live shared server — confirm before running it.**
 
+```bash
+sudo docker compose build api client
+sudo docker compose up -d api client
+sudo docker restart appleesports-v2-nginx     # do not skip - see below
+```
+
+> **Restart nginx after `up -d`, every time.** `up -d` *recreates* the api and client
+> containers, which gives them new IPs on the docker network. nginx resolves `api` and
+> `client` once when it loads its config and then caches those IPs for ever - there is no
+> `resolver` directive in `conf.d/default.conf` - so it keeps proxying to containers that no
+> longer exist and answers **502 Bad Gateway** to everything. Head Office was down for about
+> four minutes on 17 August for exactly this, after a deploy that was otherwise completely
+> clean.
+>
+> It is a confusing failure to debug, because from inside the nginx container
+> `wget -qO- http://api:8080/api/releases/latest` succeeds - wget does its own DNS lookup and
+> gets the new IP. Only nginx itself is holding the stale one. So "the API is fine, nginx can
+> reach it, and the public URL still 502s" is the expected shape of this bug, not a
+> contradiction. Restarting nginx is the whole fix.
+>
+> Note the API listens on **8080** inside the container, not 5000. Probing 5000 gives
+> `Connection refused`, which looks like a crashed API and is not one.
+
 ---
 
 ## 8. Prove it
