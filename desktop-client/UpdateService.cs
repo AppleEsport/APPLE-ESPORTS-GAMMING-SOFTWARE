@@ -96,6 +96,25 @@ public sealed class UpdateService : IDisposable
         Directory.CreateDirectory(folder);
         var target = Path.Combine(folder, $"AppleEsports-Setup-{update.Version}.exe");
 
+        // Already here and provably the right file? Then this costs nothing.
+        //
+        // Without this the branch re-downloaded 164 MB on every single pass. The update loop
+        // comes round every thirty seconds and an update that cannot be installed yet - a
+        // customer is playing - was downloaded, verified, and then thrown away, over and over.
+        // Citylight did that continuously from the moment 3.0.8 was published: gigabytes over a
+        // shop broadband line, which also slowed down the very dashboard the operator was
+        // working in, and hammered Head Office's egress for nothing.
+        //
+        // The comment in MainForm's session guard already told the reader "the download is
+        // verified and cached" as the reason waiting was free. It was not cached. It is now, and
+        // the hash is what decides - a half-written file from an interrupted run fails the check
+        // and gets replaced, so caching cannot turn into installing something corrupt.
+        if (File.Exists(target) && await MatchesHashAsync(target, update.Sha256, token))
+        {
+            progress?.Report(100);
+            return target;
+        }
+
         try
         {
             using (var response = await _http.GetAsync(
@@ -118,13 +137,7 @@ public sealed class UpdateService : IDisposable
                 }
             }
 
-            string actual;
-            await using (var stream = File.OpenRead(target))
-            {
-                actual = Convert.ToHexString(await SHA256.HashDataAsync(stream, token)).ToLowerInvariant();
-            }
-
-            if (!actual.Equals(update.Sha256, StringComparison.OrdinalIgnoreCase))
+            if (!await MatchesHashAsync(target, update.Sha256, token))
             {
                 // Corrupted in transit, or tampered with. Either way it does not run.
                 TryDelete(target);
@@ -137,6 +150,28 @@ public sealed class UpdateService : IDisposable
         {
             TryDelete(target);
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Whether the file on disk is byte-for-byte the release Head Office published.
+    ///
+    /// The single gate that decides both whether a fresh download is usable and whether a file
+    /// already on disk can be reused, so the two can never disagree about what "verified" means.
+    /// A file that cannot be read at all counts as not matching rather than throwing: the caller's
+    /// answer to both questions is the same - download it again.
+    /// </summary>
+    private static async Task<bool> MatchesHashAsync(string path, string expectedSha256, CancellationToken token)
+    {
+        try
+        {
+            await using var stream = File.OpenRead(path);
+            var actual = Convert.ToHexString(await SHA256.HashDataAsync(stream, token)).ToLowerInvariant();
+            return actual.Equals(expectedSha256, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
         }
     }
 

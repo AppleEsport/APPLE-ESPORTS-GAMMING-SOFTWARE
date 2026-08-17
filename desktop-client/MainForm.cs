@@ -595,22 +595,59 @@ public sealed class MainForm : Form
         var available = await updates.CheckAsync();
         if (available is null) return;
 
-        var installer = await updates.DownloadAndVerifyAsync(available);
-        if (installer is null) return;   // failed or, more importantly, failed verification
-
         // An update must never interrupt a customer mid-session, and that is not only true of
         // the seat they are sitting at. Upgrading a counter PC stops PostgreSQL and the branch
         // API to replace them, so the shop cannot bill, seat anyone or end a session until it
         // finishes - and this guard used to be gated on IsUserPc, so a counter took itself down
-        // mid-trade whenever a release happened to land, which is what every release so far has
+        // mid-trade whenever a release happened to land, which is what every release so far had
         // done to all four branches with no warning to whoever was at the till.
         //
-        // Both roles now wait. Nothing is wasted by waiting: the download is verified and
-        // cached, the check comes round every thirty seconds, and a café is idle between
-        // customers often enough that an update lands within minutes rather than being put off
-        // for ever. It stays visible on the Updates page the whole time, so a branch that
-        // somehow never goes idle is something an operator can see rather than a silence.
-        if (await IsSessionRunningAsync()) return;
+        // Asked BEFORE the download, which is the whole point of where this line sits. It used
+        // to be asked after, so a branch with a customer playing downloaded the entire 164 MB
+        // installer, verified it, then dropped it - and did that again thirty seconds later, for
+        // as long as the shop stayed busy. Citylight ran that loop continuously from the moment
+        // 3.0.8 was published: gigabytes over a shop broadband line, slowing down the dashboard
+        // the operator was trying to work in. Nothing was gained by having downloaded it.
+        if (await IsSessionRunningAsync())
+        {
+            await ReportUpdateProgressAsync(
+                "waiting", 0,
+                $"Version {available.Version} is ready to install. Waiting for the branch to be " +
+                "free - an update is never installed while anyone is playing.");
+            return;
+        }
+
+        await ReportUpdateProgressAsync("downloading", 0, $"Downloading version {available.Version}.");
+
+        var installer = await updates.DownloadAndVerifyAsync(available, DownloadProgressReporter());
+        if (installer is null)
+        {
+            // Two different failures, deliberately reported as one message. Whichever it was, the
+            // branch stays on the version it is running and tries again on the next pass; what
+            // matters to whoever is reading the Updates page is that it did not silently stop.
+            await ReportUpdateProgressAsync(
+                "failed", 0,
+                $"Could not download version {available.Version}, or the downloaded file did not " +
+                "match what Head Office published. Nothing was installed. It will try again.");
+            return;
+        }
+
+        // Asked a second time, because the first answer is now minutes old. A 164 MB download over
+        // a shop line is long enough for somebody to have walked in and been seated, and installing
+        // on top of them is the exact thing this guard exists to prevent. Cheap to ask, and the
+        // download is genuinely cached now, so waiting here costs nothing on the next pass.
+        if (await IsSessionRunningAsync())
+        {
+            await ReportUpdateProgressAsync(
+                "waiting", 100,
+                $"Version {available.Version} is downloaded, checked, and ready. Waiting for the " +
+                "branch to be free - it installs by itself as soon as nobody is playing.");
+            return;
+        }
+
+        await ReportUpdateProgressAsync(
+            "installing", 100,
+            $"Installing version {available.Version}. The branch is offline for about a minute.");
 
         BeginInvoke(() =>
         {
@@ -630,11 +667,88 @@ public sealed class MainForm : Form
                 // about an update that is not happening.
                 ClearUpdateMarker();
                 _allowClose = false;
+
+                // Reported because this is the one failure a person has to act on, and the only
+                // one invisible from Head Office: the branch is healthy, it is online, it is
+                // reporting its version perfectly, and it will go on refusing this update on
+                // every pass for ever until somebody stands at that PC and approves the prompt.
+                // Silence here looks identical to "not idle yet", which is the wrong conclusion.
+                _ = ReportUpdateProgressAsync(
+                    "failed", 100,
+                    $"Version {available.Version} is downloaded and ready, but Windows refused to " +
+                    "run the installer - the administrator prompt was declined, or policy blocked " +
+                    "it. Somebody needs to approve it on this PC.");
                 return;
             }
 
             Application.Exit();
         });
+    }
+
+    /// <summary>
+    /// The percent figure the Updates page's progress bar draws, throttled hard.
+    ///
+    /// A 164 MB download raises progress thousands of times. Forwarding each one would put
+    /// thousands of HTTP calls behind a single update and make the reporting cost more than the
+    /// download. Five-percent steps are as much resolution as a progress bar can show anyway.
+    /// </summary>
+    private IProgress<int> DownloadProgressReporter()
+    {
+        var lastReported = -1;
+
+        return new Progress<int>(percent =>
+        {
+            if (percent < lastReported + 5 && percent < 100) return;
+            lastReported = percent;
+            _ = ReportUpdateProgressAsync("downloading", percent, null);
+        });
+    }
+
+    /// <summary>
+    /// Tells whoever is watching the Updates page what this branch is doing about an update.
+    ///
+    /// This existed on paper and nowhere else. The database columns, the API endpoint, the DTO
+    /// and the whole Updates page - progress bar, stage badge, message, even a "this has not
+    /// moved, it may have stopped" warning - were all built and shipped, and nothing ever wrote
+    /// to them. VersionController's own comment said so plainly: "Nothing calls this yet." So a
+    /// Super Admin asking why a branch had not updated got a blank cell, and the honest answer -
+    /// "it is waiting for two customers to finish playing" - was only discoverable by reading
+    /// that branch's database directly. The guard in CheckForUpdateOnceAsync even promised this
+    /// visibility in its own comment as the reason waiting was acceptable.
+    ///
+    /// Sent to this branch's OWN API rather than straight to Head Office, for two reasons. The
+    /// branch API is the only thing here that knows Head Office's address (Sync:HeadOfficeUrl);
+    /// the desktop client has never been told it and adding it to config.json would leave every
+    /// already-installed branch unable to report until somebody re-ran setup. And writing locally
+    /// first means the branch's own Updates page is right with no internet at all, which is the
+    /// same reason BranchVersionReporterService writes locally before it reports upward.
+    ///
+    /// Never throws and never blocks anything real. A branch that cannot say what it is doing
+    /// must still do it - failing to report an install is not a reason to skip the install.
+    /// </summary>
+    private async Task ReportUpdateProgressAsync(string stage, int percent, string? message)
+    {
+        if (string.IsNullOrWhiteSpace(_config.BranchId)) return;   // not adopted yet
+
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
+
+            var payload = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                stage,
+                progressPercent = percent,
+                message,
+            });
+
+            await http.PostAsync(
+                $"{_config.NormalisedUrl()}/api/versions/branch/{_config.BranchId}/progress",
+                new StringContent(payload, System.Text.Encoding.UTF8, "application/json"));
+        }
+        catch
+        {
+            // Reporting is not the job. The update is.
+        }
     }
 
     /// <summary>

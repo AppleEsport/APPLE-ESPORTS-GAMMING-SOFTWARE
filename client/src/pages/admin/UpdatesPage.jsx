@@ -59,6 +59,12 @@ function compareVersions(a, b) {
 
 /** The stages a branch can report, and what to actually say to a human about each. */
 const STAGES = {
+  // Deliberately not moving, and the only stage that is fine to sit in for hours. An update is
+  // never installed while somebody is playing - a counter PC's own upgrade stops the database and
+  // API the whole shop bills through - so a busy branch holds here until it is free. It is marked
+  // `parked` so it is never mistaken for progress that has stalled: it is not stuck, it is
+  // waiting, and the two need to look different or every busy evening reads as a fault.
+  waiting:     { label: 'Waiting for the branch to be free', tone: 'wait', done: false, parked: true },
   downloading: { label: 'Downloading the update', tone: 'accent', done: false },
   installing:  { label: 'Installing it',          tone: 'accent', done: false },
   restarting:  { label: 'Restarting',             tone: 'accent', done: false },
@@ -135,15 +141,23 @@ export default function UpdatesPage() {
 
   // While an update is actually running somewhere, refresh often enough that the bar moves.
   // Polling all the time would be pointless traffic — most of the time nothing is happening.
+  //
+  // A branch parked waiting for its customers does not count as running. It can hold that way
+  // for a whole busy evening, and five-second polling for hours - on every Super Admin screen
+  // that happens to be open - is a lot of traffic to watch a bar that is deliberately still.
+  // It still refreshes, just at the slower pace, so the moment it starts downloading the page
+  // picks that up and speeds itself back up.
   const somethingRunning = branches.some(
-    (b) => b.updateStage && !STAGES[b.updateStage]?.done
+    (b) => b.updateStage && !STAGES[b.updateStage]?.done && !STAGES[b.updateStage]?.parked
   );
 
+  const somethingWaiting = branches.some((b) => STAGES[b.updateStage]?.parked);
+
   useEffect(() => {
-    if (!somethingRunning) return;
-    const id = setInterval(load, 5000);
+    if (!somethingRunning && !somethingWaiting) return;
+    const id = setInterval(load, somethingRunning ? 5000 : 30000);
     return () => clearInterval(id);
-  }, [somethingRunning, load]);
+  }, [somethingRunning, somethingWaiting, load]);
 
   const approve = async (versionInfoId) => {
     setBusy('approve');
@@ -797,10 +811,21 @@ function UpdateProgress({ branch, latest }) {
   const pct = failed ? 100 : Math.max(2, branch.updateProgressPercent || 0);
 
   const changedAt = branch.updateStageChangedAt ? new Date(branch.updateStageChangedAt) : null;
-  const stuck = !meta.done && changedAt &&
+
+  // `parked` is excluded on purpose. A branch waiting for its last customer to finish has not
+  // moved for twenty minutes and is perfectly healthy - on a busy evening it could hold for
+  // hours. Warning about that would cry wolf every night and teach the owner to ignore the one
+  // warning that matters.
+  const stuck = !meta.done && !meta.parked && changedAt &&
     (Date.now() - changedAt.getTime()) > STUCK_AFTER_MINUTES * 60 * 1000;
 
-  const barColour = failed ? 'bg-neon-red' : meta.tone === 'green' ? 'bg-neon-green' : 'bg-accent';
+  const barColour = failed
+    ? 'bg-neon-red'
+    : meta.tone === 'green'
+      ? 'bg-neon-green'
+      : meta.tone === 'wait'
+        ? 'bg-neon-orange'
+        : 'bg-accent';
 
   return (
     <div className="space-y-2">
@@ -810,7 +835,12 @@ function UpdateProgress({ branch, latest }) {
             ? <XCircle className="w-4 h-4 text-neon-red" />
             : meta.done
               ? <CheckCircle2 className="w-4 h-4 text-neon-green" />
-              : <RefreshCw className="w-4 h-4 text-accent animate-spin" />}
+              : meta.parked
+                // A clock, not a spinner. A spinning icon says "working on it, any moment now";
+                // this branch is doing nothing and will keep doing nothing until its customers
+                // leave, which could be hours. The icon has to say waiting, not working.
+                ? <Clock className="w-4 h-4 text-neon-orange" />
+                : <RefreshCw className="w-4 h-4 text-accent animate-spin" />}
           {meta.label}
         </span>
         {!meta.done && (

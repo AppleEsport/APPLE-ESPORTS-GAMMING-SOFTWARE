@@ -333,12 +333,23 @@ public class VersionService : IVersionService
 
         // Only the stage changing counts as a change of stage. Percent moving within a download
         // is not, or the "nothing has happened for twenty minutes" check could never fire.
-        if (status.UpdateStage != normalised)
+        var stageChanged = status.UpdateStage != normalised;
+        if (stageChanged)
             status.UpdateStageChangedAt = DateTime.UtcNow;
 
         status.UpdateStage = normalised;
         status.UpdateProgressPercent = Math.Clamp(progressPercent, 0, 100);
-        status.UpdateMessage = message;
+
+        // No message means "nothing new to say", not "forget what I told you". The branch sends
+        // the explanation once when the stage turns over and then reports bare percentages as the
+        // download moves - a few dozen of them - so assigning null every time would have wiped
+        // "Downloading version 3.0.8" on the very next tick and left the operator a moving bar
+        // with no words next to it. A stage change with no message does clear it, because a
+        // sentence about downloading must not survive into installing.
+        if (message is not null)
+            status.UpdateMessage = message;
+        else if (stageChanged)
+            status.UpdateMessage = null;
 
         if (normalised == "done")
         {
