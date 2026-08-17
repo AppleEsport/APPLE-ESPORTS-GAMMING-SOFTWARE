@@ -153,6 +153,23 @@ public static class BranchCommands
     public const string TransferSession = "transfer_session";
 
     /// <summary>
+    /// A member's new password, after they set it from the link in their email.
+    ///
+    /// This is the leg that makes a reset usable at all. A branch mints the token into its own
+    /// local database, so the link used to have to point at the shop LAN - which is dead in the
+    /// recipient's inbox the moment they are not standing in the shop, and that is where a
+    /// customer reads their mail. Sending them to Head Office instead means the link opens from
+    /// anywhere, but the password is then set in Head Office's copy of the member, and the
+    /// branch's copy is the one the gaming PCs actually check.
+    ///
+    /// So it rides back down here. The hash travels, never the password - Head Office does the
+    /// hashing and the branch stores the result, exactly as it would have if the reset had
+    /// happened locally. Storing it locally is also what keeps member login working with the
+    /// internet down, which pointing every login at Head Office would have quietly broken.
+    /// </summary>
+    public const string SetMemberPassword = "set_member_password";
+
+    /// <summary>
     /// Money collected at Head Office on the customer's behalf, credited to the branch's own
     /// till. The bill lives in both databases, but only the branch's copy is the one its
     /// counter reads and its cash register reconciles against - so paying Head Office's copy

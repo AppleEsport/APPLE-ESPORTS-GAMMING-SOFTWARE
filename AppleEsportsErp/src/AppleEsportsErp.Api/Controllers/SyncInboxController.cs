@@ -228,6 +228,10 @@ public class SyncInboxController : ControllerBase
         "member.created" => 0,
         "shift.changed" => 0,
 
+        // Behind member.created, ahead of everything money-shaped: it needs its member to exist
+        // and nothing else needs it, so it neither blocks a batch nor gets blocked by one.
+        "member.reset_requested" => 1,
+
         "bill.changed" => 1,
         "reservation.changed" => 1,
         "session.started" => 1,
@@ -268,6 +272,10 @@ public class SyncInboxController : ControllerBase
         {
             case "member.created":
                 await UpsertMemberAsync(held, root);
+                break;
+
+            case "member.reset_requested":
+                await ApplyMemberResetTokenAsync(held, root);
                 break;
 
             case "session.started":
@@ -338,7 +346,6 @@ public class SyncInboxController : ControllerBase
             // the last thing Head Office had said, not of what the shop is really selling, so a
             // price changed at the counter never showed up here and every sales report was
             // priced against a menu that branch had abandoned.
-            // CurrentStock and SoldQty excluded on purpose - see UpsertRowAsync's own comment
             // CurrentStock and SoldQty travel normally again as of the Admin-only Add Stock
             // flow. The earlier exclusion here was a symptom-level patch for a problem now
             // closed at its actual source: Head Office no longer independently invents a stock
@@ -556,6 +563,45 @@ public class SyncInboxController : ControllerBase
     /// events, and inferring a balance from a creation event is how a stale batch overwrites a
     /// real one.
     /// </summary>
+    /// <summary>
+    /// Takes a reset token a branch has just minted, so the link in that member's email can be
+    /// honoured here.
+    ///
+    /// The link points at Head Office because that is the only address that means anything in
+    /// somebody's inbox - a branch's own is the shop LAN. The token, though, is created in the
+    /// branch's local database, and Member updates were never part of sync, so Head Office had
+    /// no way to recognise a member arriving with one. This is the field that closes that gap.
+    ///
+    /// Deliberately does not create the member. It rides behind member.created in the same
+    /// dependency ordering the rest of this inbox uses - and a token for a member Head Office
+    /// has never heard of is not something to invent a row for, it is something to wait for.
+    /// </summary>
+    private async Task ApplyMemberResetTokenAsync(SyncInboxEntry held, JsonElement root)
+    {
+        var memberId = held.AggregateId;
+        var member = await _db.Members.FirstOrDefaultAsync(m => m.Id == memberId);
+
+        // Left unapplied on purpose rather than swallowed. SyncInboxRetryService comes back for
+        // it, so a token that arrives before its member - a different batch, a slow first sync -
+        // lands once the member does, instead of being lost with the customer holding a link
+        // that will never work.
+        if (member is null)
+            throw new InvalidOperationException($"Member {memberId} is not known here yet; reset token deferred.");
+
+        var token = ReadString(root, "resetToken");
+        if (string.IsNullOrWhiteSpace(token))
+            throw new InvalidOperationException($"Reset token for member {memberId} arrived empty.");
+
+        member.ResetToken = token;
+        member.ResetTokenExpiry = root.TryGetProperty("resetTokenExpiry", out var exp)
+            && exp.TryGetDateTimeOffset(out var parsed)
+                ? parsed
+                : DateTimeOffset.UtcNow.AddHours(1);
+
+        member.UpdatedAt = DateTimeOffset.UtcNow;
+        await _db.SaveChangesAsync();
+    }
+
     private async Task UpsertMemberAsync(SyncInboxEntry held, JsonElement root)
     {
         var memberId = held.AggregateId;
