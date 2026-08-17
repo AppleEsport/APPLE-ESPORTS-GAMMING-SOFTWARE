@@ -20,14 +20,21 @@ public class VersionController : ControllerBase
     private readonly AppDbContext _db;
     private readonly IRemoteBranchControl _remote;
     private readonly IWebHostEnvironment _env;
+    private readonly IConfiguration _configuration;
+    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly ILogger<VersionController> _logger;
 
     public VersionController(
-        IVersionService versionService, AppDbContext db, IRemoteBranchControl remote, IWebHostEnvironment env)
+        IVersionService versionService, AppDbContext db, IRemoteBranchControl remote, IWebHostEnvironment env,
+        IConfiguration configuration, IHttpClientFactory httpClientFactory, ILogger<VersionController> logger)
     {
         _versionService = versionService;
         _db = db;
         _remote = remote;
         _env = env;
+        _configuration = configuration;
+        _httpClientFactory = httpClientFactory;
+        _logger = logger;
     }
 
     private Guid CurrentUserId() =>
@@ -152,14 +159,66 @@ public class VersionController : ControllerBase
     /// writes only progress text against a branch id — there is nothing here worth forging, and
     /// the version a branch is allowed to install is still governed by approval.
     ///
-    /// Nothing calls this yet. The branch app that will is Phase 2.
+    /// Called by the branch's own desktop app (MainForm.ReportUpdateProgressAsync), which posts
+    /// here rather than to Head Office directly: the desktop client has never been told Head
+    /// Office's address, this API has it as Sync:HeadOfficeUrl, and writing locally first is what
+    /// makes the branch's own Updates page correct with no internet at all.
     /// </summary>
     [HttpPost("branch/{branchId}/progress")]
     [AllowAnonymous]
     public async Task<IActionResult> ReportUpdateProgress(Guid branchId, [FromBody] UpdateProgressDto dto)
     {
         await _versionService.ReportUpdateProgressAsync(branchId, dto.Stage, dto.ProgressPercent, dto.Message);
+        await ForwardProgressToHeadOfficeAsync(branchId, dto);
         return Ok(ApiResponse<object>.Ok("Progress recorded"));
+    }
+
+    /// <summary>
+    /// Passes a branch's update progress up to Head Office, where the Super Admin is watching.
+    ///
+    /// Awaited rather than left to finish in the background, and that is the point of it. The
+    /// most valuable report of the whole sequence is "installing", and the very next thing the
+    /// branch does after sending it is stop its own PostgreSQL and API so they can be replaced.
+    /// A fire-and-forget send would be racing a shutdown it is guaranteed to lose, so the one
+    /// stage that explains a branch going quiet for a minute would be the one that never arrived.
+    /// Eight seconds of timeout against that is worth paying.
+    ///
+    /// Does nothing at Head Office itself, which has no Sync:HeadOfficeUrl and is already the
+    /// destination - the local write above was the whole job there.
+    ///
+    /// Never throws. A branch that cannot reach Head Office still has to be able to update
+    /// itself; its own database already has the truth, and the next report will carry it up.
+    /// </summary>
+    private async Task ForwardProgressToHeadOfficeAsync(Guid branchId, UpdateProgressDto dto)
+    {
+        var headOffice = _configuration["Sync:HeadOfficeUrl"];
+        if (string.IsNullOrWhiteSpace(headOffice)) return;
+
+        try
+        {
+            var client = _httpClientFactory.CreateClient();
+            client.Timeout = TimeSpan.FromSeconds(8);
+
+            var payload = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                stage = dto.Stage,
+                progressPercent = dto.ProgressPercent,
+                message = dto.Message,
+            });
+
+            var response = await client.PostAsync(
+                $"{headOffice.TrimEnd('/')}/api/versions/branch/{branchId}/progress",
+                new StringContent(payload, System.Text.Encoding.UTF8, "application/json"));
+
+            if (!response.IsSuccessStatusCode)
+                _logger.LogWarning(
+                    "Head Office refused this branch's update progress ({Stage}): {Status}.",
+                    dto.Stage, response.StatusCode);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not tell Head Office this branch's update progress.");
+        }
     }
 
     /// <summary>
