@@ -94,8 +94,31 @@ public class PcStatusService : IPcStatusService
                 ConnectionMode = pc.ConnectionMode
             };
 
+            // Whether this PC is holding a customer at all is decided by the PC's own row, never
+            // by a Session row found lying next to it.
+            //
+            // Head Office had a Citylight machine showing a customer for two days. CTL-PC-01's
+            // own row said idle and said so correctly - the branch had closed that session and
+            // the branch is the only place that can know. What Head Office also held was the
+            // Session row from when it started, still marked Active, because a session's close
+            // is a separate sync event and that one never arrived. Sync only ever sends changes,
+            // so a lost close is lost for good: the row sat there claiming to be live, and the
+            // block below trusted it over the PC row and overwrote a correct idle with Active.
+            //
+            // It was not only a wrong colour on a tile. The live charge is accrued from
+            // StartTime to now, so a phantom bills onward at the hourly rate for as long as it
+            // is believed - that one was showing about 2,100 rupees of revenue that never existed,
+            // inside the branch's headline "live accrued" figure.
+            //
+            // The two rows cannot disagree at a branch: StartSessionAsync and StopSessionAsync
+            // write the Session and the Pc in one unit of work, so requiring them to agree
+            // changes nothing there. At Head Office they can disagree, and when they do the PC
+            // row is the one to believe - the heartbeat rewrites it every three seconds, while a
+            // Session row is only touched when the session itself changes. The fresher row wins.
+            var pcIsHoldingSession = pc.State is PcState.Active or PcState.AwaitingBilling;
+
             Session? session = null;
-            if (activeSessions.TryGetValue(pc.Id, out session))
+            if (pcIsHoldingSession && activeSessions.TryGetValue(pc.Id, out session))
             {
                 dto.State = session.State == SessionState.Active
                     ? PcState.Active
