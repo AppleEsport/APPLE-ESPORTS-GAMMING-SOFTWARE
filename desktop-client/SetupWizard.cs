@@ -439,13 +439,28 @@ public sealed class SetupWizard : Form
 
         if (response.IsSuccessStatusCode) return null;
 
+        // "error" is the field ApiResponse.Fail actually writes. This looked for "message",
+        // which nothing on the other end has ever produced, so every refusal was thrown away
+        // and replaced with a bare status code. What was being discarded was not a detail: a
+        // second PC adopting a branch that is already live is answered with the reason, the
+        // machine currently running it, and what to do about it - and the operator was shown
+        // "Head Office link failed (400)" instead, which names no cause and suggests no fix.
+        // "message" is still accepted in case something upstream ever sends one.
         try
         {
-            using var doc = JsonDocument.Parse(text);
-            if (doc.RootElement.TryGetProperty("message", out var message))
-                return message.GetString();
+            var root = JsonDocument.Parse(text).RootElement;
+
+            foreach (var field in new[] { "error", "message" })
+            {
+                if (root.TryGetProperty(field, out var value) &&
+                    value.ValueKind == JsonValueKind.String &&
+                    !string.IsNullOrWhiteSpace(value.GetString()))
+                {
+                    return value.GetString();
+                }
+            }
         }
-        catch { /* fall through to the raw body */ }
+        catch { /* not JSON - fall through to the status code, which is all we have */ }
 
         return $"Head Office link failed ({(int)response.StatusCode}).";
     }
