@@ -17,6 +17,7 @@ import ShiftTakeoverModal from '../shift/ShiftTakeoverModal';
 import GlobalFoodOrderListener from './GlobalFoodOrderListener';
 import GlobalNotificationListener from './GlobalNotificationListener';
 import BranchConflictBanner from './BranchConflictBanner';
+import BranchBusySignal from './BranchBusySignal';
 
 const SIDEBAR_WIDTH_KEY = 'sidebar_width';
 const SIDEBAR_COLLAPSED_KEY = 'sidebar_collapsed';
@@ -229,6 +230,7 @@ export default function AppShell() {
         <>
           <GlobalFoodOrderListener />
           <GlobalNotificationListener />
+          <BranchBusySignal />
         </>
       )}
     </div>

@@ -598,10 +598,19 @@ public sealed class MainForm : Form
         var installer = await updates.DownloadAndVerifyAsync(available);
         if (installer is null) return;   // failed or, more importantly, failed verification
 
-        // An update must never interrupt a customer mid-session. On a locked gaming PC that
-        // means waiting: the next check comes round in four hours, and the verified download
-        // is already cached, so nothing is wasted by deferring.
-        if (_config.IsUserPc && await IsSessionRunningAsync()) return;
+        // An update must never interrupt a customer mid-session, and that is not only true of
+        // the seat they are sitting at. Upgrading a counter PC stops PostgreSQL and the branch
+        // API to replace them, so the shop cannot bill, seat anyone or end a session until it
+        // finishes - and this guard used to be gated on IsUserPc, so a counter took itself down
+        // mid-trade whenever a release happened to land, which is what every release so far has
+        // done to all four branches with no warning to whoever was at the till.
+        //
+        // Both roles now wait. Nothing is wasted by waiting: the download is verified and
+        // cached, the check comes round every thirty seconds, and a café is idle between
+        // customers often enough that an update lands within minutes rather than being put off
+        // for ever. It stays visible on the Updates page the whole time, so a branch that
+        // somehow never goes idle is something an operator can see rather than a silence.
+        if (await IsSessionRunningAsync()) return;
 
         BeginInvoke(() =>
         {
@@ -629,16 +638,23 @@ public sealed class MainForm : Form
     }
 
     /// <summary>
-    /// Whether someone is currently playing at this PC. Asked of the dashboard itself rather
-    /// than guessed, and a failed answer counts as "yes" — interrupting a paying customer is
-    /// far worse than postponing an update by four hours.
+    /// Whether anyone is playing right now, from the point of view of whatever this machine is.
+    /// Asked of the page itself rather than guessed, and a failed answer counts as "yes" —
+    /// interrupting a paying customer is far worse than postponing an update by half a minute.
+    ///
+    /// Two attributes, because the two roles have different questions. A gaming PC asks about
+    /// its own seat (data-session-active, set by UserOverlayApp); a counter PC asks about the
+    /// whole branch (data-sessions-active, set by BranchBusySignal in the dashboard's AppShell),
+    /// since its own upgrade stops the database and API every seat depends on. Either one being
+    /// present means wait.
     /// </summary>
     private async Task<bool> IsSessionRunningAsync()
     {
         try
         {
             var result = await _web.CoreWebView2!.ExecuteScriptAsync(
-                "(function(){try{return !!document.querySelector('[data-session-active=\"true\"]');}catch(e){return true;}})()");
+                "(function(){try{return !!document.querySelector(" +
+                "'[data-session-active=\"true\"],[data-sessions-active=\"true\"]');}catch(e){return true;}})()");
             return result?.Trim() != "false";
         }
         catch
