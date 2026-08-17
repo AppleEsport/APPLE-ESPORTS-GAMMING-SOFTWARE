@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Clock, Search, CheckCircle2, User, Wallet, AlertCircle, Phone, X, Smartphone, Banknote, ArrowLeftRight } from 'lucide-react';
+import { Clock, Search, CheckCircle2, User, Wallet, AlertCircle, Phone, X, Smartphone, Banknote, ArrowLeftRight, CalendarDays } from 'lucide-react';
 import api from '../../config/api';
 import PageHeader from '../../components/layout/PageHeader';
 import { useToast } from '../../components/ui/Toast';
@@ -10,6 +10,27 @@ import { formatMoney } from '../../utils/money';
 // No Rs 1000 or Rs 2000: neither note is in circulation in India any more.
 const DENOMINATIONS = [10, 20, 50, 100, 200, 500];
 
+// Local calendar day, not UTC. toISOString() would shift a credit taken late in the evening
+// onto the following day for anyone east of Greenwich - which is every branch - so a shop
+// searching the date they actually traded would not find their own row.
+function toDateInputValue(value) {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function formatDay(value) {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function formatTime(value) {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+}
+
 export default function CreditsPage() {
   const { isSuperAdmin, user } = useAuth();
   const { activeBranch } = useBranch();
@@ -19,6 +40,7 @@ export default function CreditsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [filter, setFilter] = useState('pending'); // 'pending' | 'cleared' | 'all'
   const [searchQuery, setSearchQuery] = useState('');
+  const [dateFilter, setDateFilter] = useState(''); // '' = every date
   
   const [selectedCredit, setSelectedCredit] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -108,8 +130,19 @@ export default function CreditsPage() {
     );
   }
 
-  const filteredCredits = credits.filter(c => 
-    !searchQuery || (c.customerName || 'Walk-in').toLowerCase().includes(searchQuery.toLowerCase())
+  // A credit is dated by when it was taken. A cleared one is matched on either day - the day
+  // it was given or the day the money finally came in - because both are days somebody would
+  // reasonably look it up under, and being told "no credits found" for a date you know you
+  // settled on is worse than showing the row twice across two searches.
+  const matchesDate = (c) => {
+    if (!dateFilter) return true;
+    const onDay = (value) => value && toDateInputValue(value) === dateFilter;
+    return onDay(c.createdAt) || onDay(c.clearedAt);
+  };
+
+  const filteredCredits = credits.filter(c =>
+    (!searchQuery || (c.customerName || 'Walk-in').toLowerCase().includes(searchQuery.toLowerCase()))
+    && matchesDate(c)
   );
 
   const creditDue = Number(selectedCredit?.creditAmount) || 0;
@@ -149,15 +182,42 @@ export default function CreditsPage() {
             Cleared Credits
           </button>
         </div>
-        <div className="relative">
-          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-text-3" />
-          <input
-            type="text"
-            placeholder="Search customer name..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-9 pr-4 py-1.5 text-sm bg-bg-3 border border-border rounded-lg text-text focus:outline-none focus:border-accent w-64 transition-colors"
-          />
+        <div className="flex items-center gap-2">
+          {/* Native date input rather than a custom picker: it brings its own calendar, its own
+              keyboard handling and the operator's own locale, and it is the one control on this
+              page nobody has to be taught. */}
+          <div className="relative">
+            <CalendarDays className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-text-3 pointer-events-none" />
+            <input
+              type="date"
+              value={dateFilter}
+              onChange={(e) => setDateFilter(e.target.value)}
+              className="pl-9 pr-3 py-1.5 text-sm bg-bg-3 border border-border rounded-lg text-text focus:outline-none focus:border-accent transition-colors [color-scheme:dark]"
+              title="Show only credits from this date"
+            />
+          </div>
+
+          {/* Only offered once a date is set, so the row does not carry a dead control all day. */}
+          {dateFilter && (
+            <button
+              onClick={() => setDateFilter('')}
+              className="px-3 py-1.5 text-xs font-bold uppercase tracking-wider text-text-3 hover:text-accent hover:bg-accent/10 border border-border rounded-lg transition-colors"
+              title="Show every date again"
+            >
+              All dates
+            </button>
+          )}
+
+          <div className="relative">
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-text-3" />
+            <input
+              type="text"
+              placeholder="Search customer name..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9 pr-4 py-1.5 text-sm bg-bg-3 border border-border rounded-lg text-text focus:outline-none focus:border-accent w-64 transition-colors"
+            />
+          </div>
         </div>
       </div>
 
@@ -177,6 +237,7 @@ export default function CreditsPage() {
             <table className="w-full text-left border-collapse whitespace-nowrap">
               <thead>
                 <tr className="bg-bg-3/50 border-b border-border text-[10px] text-text-3 font-bold uppercase tracking-wider">
+                  <th className="p-4 font-semibold">Date</th>
                   <th className="p-4 font-semibold">Customer</th>
                   <th className="p-4 font-semibold">PC</th>
                   <th className="p-4 font-semibold">Total Bill</th>
@@ -189,6 +250,21 @@ export default function CreditsPage() {
               <tbody className="divide-y divide-border/50">
                 {filteredCredits.map(credit => (
                   <tr key={credit.id} className="hover:bg-bg-3/30 transition-colors group">
+                    {/* When the credit was taken, with the time underneath - two credits for the
+                        same customer on one day are otherwise indistinguishable. A cleared one
+                        also says when the money actually came in, which is the question anybody
+                        looking at a settled credit is really asking. */}
+                    <td className="p-4 align-top">
+                      <div className="flex flex-col">
+                        <span className="text-sm font-mono text-text-2">{formatDay(credit.createdAt)}</span>
+                        <span className="text-[10px] text-text-3 font-mono mt-1">{formatTime(credit.createdAt)}</span>
+                        {credit.clearedAt && (
+                          <span className="text-[10px] text-neon-blue font-mono mt-1">
+                            cleared {formatDay(credit.clearedAt)}
+                          </span>
+                        )}
+                      </div>
+                    </td>
                     <td className="p-4">
                       <div className="flex flex-col">
                         <span className="font-heading font-bold text-text text-sm flex items-center gap-1.5">
