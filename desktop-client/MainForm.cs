@@ -20,11 +20,29 @@ public sealed class MainForm : Form
     private readonly Button _retryButton = new();
     private readonly Button _settingsButton = new();
 
-    /// <summary>Size of the small floating widget shown while a customer PC has an active session — see ApplyOverlayLayout.</summary>
-    private const int BubbleSize = 88;
+    /// <summary>
+    /// Fallback sizes for the small floating widget shown while a customer PC has an active
+    /// session, in the CSS pixels the page is laid out in. The page normally sends its own —
+    /// see ApplyOverlayLayout — and these are only used for a branch still serving a dashboard
+    /// older than this shell. Keep them in step with OVERLAY_SIZES in UserOverlayApp.jsx.
+    /// </summary>
+    private const int BubbleSize = 60;
     private const int PanelWidth = 380;
     private const int PanelHeight = 620;
     private const int FloatMargin = 24;
+
+    /// <summary>Corner radius the page draws on the expanded panel (Tailwind's rounded-2xl), matched by the window's own shape.</summary>
+    private const int PanelCornerRadius = 16;
+
+    /// <summary>
+    /// CSS pixels to device pixels for the page currently loaded, as last reported by it.
+    /// Everything sized to match that page — the widget, its margin, its corner radius, the
+    /// drag handle — goes through this rather than the window's DPI, which is a different
+    /// number: see the layoutMode effect in UserOverlayApp.jsx.
+    /// </summary>
+    private double _overlayScale = 1;
+
+    private int Scaled(int design) => (int)Math.Round(design * _overlayScale);
 
     /// <summary>Whether this window is currently the small floating widget (bubble or panel) rather than full screen — only true while "overlay-drag" messages should move it.</summary>
     private bool _floatDraggable;
@@ -178,8 +196,23 @@ public sealed class MainForm : Form
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.Manual;
             Bounds = screen;
-            MinimumSize = new Size(BubbleSize, BubbleSize);
-            TopMost = true;
+
+            // Always-on-top is deliberately NOT set here. It is earned by the page, in
+            // ApplyOverlayLayout, the moment it first says what size it wants to be.
+            //
+            // Setting it up front assumed the page would always answer. A branch whose dashboard
+            // is older than this shell does not send that message at all - the bridge does not
+            // exist in it - so this window kept the full-screen bounds above and pinned them
+            // over everything, permanently, with no way past it. That is a locked-up PC, and it
+            // is a worse failure than the one it came from: the older shell never set TopMost,
+            // so its full-screen window could at least be alt-tabbed past. A mismatch between
+            // the two halves of a release has to degrade into something a shop can still work
+            // around, never into a machine nobody can use.
+
+            // Deliberately no MinimumSize. ApplyOverlayLayout is the only thing that sizes this
+            // window, it works in the page's pixels rather than this form's, and WinForms scales
+            // a MinimumSize set here by the window's DPI - a third unit in a place that already
+            // has two. A floor expressed in the wrong one can only ever fight the widget.
         }
         else
         {
@@ -732,12 +765,33 @@ public sealed class MainForm : Form
         _ => $"Couldn't load the dashboard from {HostLabel()}.\n\n({status})",
     };
 
-    // ── Settings ──────────────────────────────────────────────────────────
+    // ── Dialogs ───────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Shows a dialog owned by this window, in whichever z-order band this window is in.
+    ///
+    /// A customer gaming PC runs this window full screen and always-on-top (WS_EX_TOPMOST).
+    /// Windows keeps an owned window above its owner only *within* a band, and a WinForms
+    /// Form does not inherit its owner's topmost flag - so a dialog opened from the kiosk
+    /// window was created underneath it while still taking the keyboard focus. On screen that
+    /// is exactly what Ctrl+Shift+P did: the setup dialog painted for a moment, the kiosk
+    /// window covered it, and the PC then looked frozen because a modal loop was running that
+    /// nobody could see or reach. Setup was simply impossible to complete on a gaming PC.
+    ///
+    /// Win32's own MessageBox does inherit the flag from its owner - measured, not assumed -
+    /// so the message boxes on either side of these dialogs were never affected and need
+    /// nothing. This is only about Form.ShowDialog.
+    /// </summary>
+    private DialogResult ShowOwnedDialog(Form dialog)
+    {
+        dialog.TopMost = TopMost;
+        return dialog.ShowDialog(this);
+    }
 
     private void OpenSettings()
     {
         using var dialog = new SettingsDialog(_config);
-        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+        if (ShowOwnedDialog(dialog) != DialogResult.OK) return;
 
         _config.ServerUrl = dialog.ServerUrl;
         _config.GateUsername = dialog.GateUsername;
@@ -845,7 +899,7 @@ public sealed class MainForm : Form
         }
 
         using var prompt = new PinPromptDialog(action);
-        if (prompt.ShowDialog(this) != DialogResult.OK) return false;
+        if (ShowOwnedDialog(prompt) != DialogResult.OK) return false;
 
         if (prompt.Pin == _config.AdminPin) return true;
 
@@ -865,7 +919,7 @@ public sealed class MainForm : Form
     private async void ChangePcSetup()
     {
         using var dialog = new PcSetupDialog(_config);
-        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+        if (ShowOwnedDialog(dialog) != DialogResult.OK) return;
 
         var pcNumber = dialog.PcNumber;
         var role = dialog.Role;
@@ -1029,7 +1083,11 @@ public sealed class MainForm : Form
             switch (typeEl.GetString())
             {
                 case "overlay-layout" when root.TryGetProperty("mode", out var modeEl):
-                    ApplyOverlayLayout(modeEl.GetString() ?? "full");
+                    ApplyOverlayLayout(
+                        modeEl.GetString() ?? "full",
+                        Number(root, "width"),
+                        Number(root, "height"),
+                        Number(root, "dpr"));
                     break;
 
                 case "overlay-drag" when root.TryGetProperty("dx", out var dxEl) && root.TryGetProperty("dy", out var dyEl):
@@ -1043,6 +1101,12 @@ public sealed class MainForm : Form
         }
     }
 
+    /// <summary>Reads an optional number from a bridge message, ignoring anything that isn't one.</summary>
+    private static double? Number(System.Text.Json.JsonElement root, string name) =>
+        root.TryGetProperty(name, out var el) && el.ValueKind == System.Text.Json.JsonValueKind.Number
+            ? el.GetDouble()
+            : null;
+
     /// <summary>
     /// Resizes and repositions this window to match what the overlay page is currently
     /// showing. "full" covers the whole screen, for the walk-in/member gate and the locked
@@ -1051,32 +1115,107 @@ public sealed class MainForm : Form
     /// the small floating widget at two different sizes; switching between them keeps
     /// whatever corner the customer last dragged it to rather than jumping back to a default,
     /// clamped back on screen if the new size would otherwise push it past an edge.
+    ///
+    /// The widget's size comes from the page in its own CSS pixels, with the scale to turn
+    /// them into real ones — the host has no way to derive either for itself.
     /// </summary>
-    private void ApplyOverlayLayout(string mode)
+    private void ApplyOverlayLayout(string mode, double? cssWidth, double? cssHeight, double? dpr)
     {
+        // The page has spoken, so this really is a customer overlay that knows how to drive the
+        // window - see the constructor for why that is the condition for pinning it on top.
+        if (!TopMost) TopMost = true;
+
         if (mode == _overlayMode) return;
         _overlayMode = mode;
-
-        var screen = Screen.PrimaryScreen?.Bounds ?? new Rectangle(0, 0, 1920, 1080);
 
         if (mode != "bubble" && mode != "panel")
         {
             _floatDraggable = false;
-            Bounds = screen;
+            SetFloatingShape(null, Size.Empty);
+            Bounds = Screen.PrimaryScreen?.Bounds ?? new Rectangle(0, 0, 1920, 1080);
             return;
         }
 
-        var size = mode == "bubble" ? new Size(BubbleSize, BubbleSize) : new Size(PanelWidth, PanelHeight);
+        // The working area rather than the whole screen. The widget has to stay clear of the
+        // taskbar: expanding used to clamp the panel hard against the bottom-right corner of
+        // the full screen rectangle, which put its nav bar - Info, Food, Extend, Call, Bill -
+        // underneath the taskbar, where a customer could see it and not press it.
+        var area = Screen.FromControl(this).WorkingArea;
+
+        // The page's own CSS-pixel scale when it sends one, this window's DPI when it does not.
+        // The fallback only matters for a branch still serving a dashboard older than this
+        // shell; it is the wrong number often enough that it is a fallback and not the rule.
+        _overlayScale = dpr is > 0 ? dpr.Value : DeviceDpi / 96.0;
+        var margin = Scaled(FloatMargin);
+
+        var design = mode == "bubble"
+            ? new SizeF((float)(cssWidth ?? BubbleSize), (float)(cssHeight ?? BubbleSize))
+            : new SizeF((float)(cssWidth ?? PanelWidth), (float)(cssHeight ?? PanelHeight));
+
+        // Never larger than the screen it has to sit on. A high devicePixelRatio - a 4K panel,
+        // or Windows' own text scaling on top of display scaling - can ask for a window taller
+        // than the desktop, and a widget that runs off the bottom takes its nav bar with it.
+        var size = new Size(
+            Math.Min((int)Math.Round(design.Width * _overlayScale), area.Width - margin * 2),
+            Math.Min((int)Math.Round(design.Height * _overlayScale), area.Height - margin * 2));
 
         var origin = _floatDraggable
             ? Location
-            : new Point(screen.Right - size.Width - FloatMargin, screen.Bottom - size.Height - FloatMargin);
+            : new Point(area.Right - size.Width - margin, area.Bottom - size.Height - margin);
 
-        origin.X = Math.Clamp(origin.X, screen.Left, Math.Max(screen.Left, screen.Right - size.Width));
-        origin.Y = Math.Clamp(origin.Y, screen.Top, Math.Max(screen.Top, screen.Bottom - size.Height));
+        // Keep the margin on every edge, not just the one it started on, so switching between
+        // bubble and panel never tucks part of the widget off the usable screen.
+        origin.X = Math.Clamp(origin.X, area.Left + margin, Math.Max(area.Left + margin, area.Right - size.Width - margin));
+        origin.Y = Math.Clamp(origin.Y, area.Top + margin, Math.Max(area.Top + margin, area.Bottom - size.Height - margin));
 
         Bounds = new Rectangle(origin, size);
+        SetFloatingShape(mode, size);
         _floatDraggable = true;
+    }
+
+    /// <summary>
+    /// Clips the window to the shape the page actually draws inside it.
+    ///
+    /// This window is an opaque rectangle and the page's widget is not: the bubble is a circle
+    /// and the panel has rounded corners, so the difference between them was showing as bare
+    /// dark window. At bubble size that is nearly all of what a customer sees - a small black
+    /// square sitting on their desktop with a button in the middle of it, which is exactly how
+    /// it was described. Clipping the window itself is what makes it read as a floating button
+    /// instead. Applied to the top-level window, so it clips the WebView2 child with it.
+    ///
+    /// Null mode clears the shape, which the full-screen lock screen needs - a stale rounded
+    /// region would otherwise carve the corners out of a screen that is meant to cover
+    /// everything.
+    /// </summary>
+    private void SetFloatingShape(string? mode, Size size)
+    {
+        var previous = Region;
+
+        if (mode is null)
+        {
+            Region = null;
+            previous?.Dispose();
+            return;
+        }
+
+        using var path = new System.Drawing.Drawing2D.GraphicsPath();
+
+        if (mode == "bubble")
+        {
+            path.AddEllipse(0, 0, size.Width - 1, size.Height - 1);
+        }
+        else
+        {
+            var d = Scaled(PanelCornerRadius) * 2;
+            path.AddArc(0, 0, d, d, 180, 90);
+            path.AddArc(size.Width - d - 1, 0, d, d, 270, 90);
+            path.AddArc(size.Width - d - 1, size.Height - d - 1, d, d, 0, 90);
+            path.AddArc(0, size.Height - d - 1, d, d, 90, 90);
+            path.CloseFigure();
+        }
+
+        Region = new Region(path);
+        previous?.Dispose();
     }
 
     /// <summary>
@@ -1091,9 +1230,12 @@ public sealed class MainForm : Form
     {
         if (!_floatDraggable) return;
 
-        var screen = Screen.PrimaryScreen?.Bounds ?? new Rectangle(0, 0, 1920, 1080);
-        var x = Math.Clamp(Location.X + dx, screen.Left - Width + 40, screen.Right - 40);
-        var y = Math.Clamp(Location.Y + dy, screen.Top, screen.Bottom - 40);
+        // Working area and a scaled handle, for the same reasons as ApplyOverlayLayout: a
+        // widget dragged under the taskbar is a widget the customer cannot get back.
+        var area = Screen.FromControl(this).WorkingArea;
+        var handle = Scaled(40);
+        var x = Math.Clamp(Location.X + dx, area.Left - Width + handle, area.Right - handle);
+        var y = Math.Clamp(Location.Y + dy, area.Top, area.Bottom - handle);
         Location = new Point(x, y);
     }
 

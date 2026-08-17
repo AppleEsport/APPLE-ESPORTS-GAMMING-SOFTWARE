@@ -27,7 +27,12 @@ public sealed class PinPromptDialog : Form
         MaximizeBox = false;
         MinimizeBox = false;
         ClientSize = new Size(420, 190);
-        TopMost = true;
+
+        // No TopMost here any more. This dialog used to set it for itself, which is why the
+        // PIN prompt was the one thing on a locked gaming PC that did appear - and why the
+        // setup dialog behind it did not. MainForm.ShowOwnedDialog now applies the same rule
+        // to every dialog it opens, from the owner's own band, so a dialog added later cannot
+        // quietly inherit the old bug.
 
         try
         {

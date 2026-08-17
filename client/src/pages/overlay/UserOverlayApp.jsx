@@ -21,6 +21,15 @@ function postToHost(payload) {
   try { window.chrome?.webview?.postMessage(JSON.stringify(payload)); } catch { /* not hosted */ }
 }
 
+// How big each floating mode needs its window to be, in the CSS pixels this page is laid out
+// in: the bubble is the w-14 button plus room for its border and glow, the panel is the size
+// the quick-panel below is designed around. Kept here rather than in the host because the host
+// cannot work them out - see the layoutMode effect for why it needs telling.
+const OVERLAY_SIZES = {
+  bubble: { width: 60, height: 60 },
+  panel: { width: 380, height: 620 },
+};
+
 // Drag-to-move for the floating widget (bubble or expanded panel). The native window is what
 // actually moves - see MainForm.cs's DragFloatingWindow - because WebView2's own content sits
 // in a separate child window that a plain WM_NCHITTEST/HTCAPTION trick played by the host Form
@@ -29,6 +38,14 @@ function useDragToMoveHost() {
   const drag = useRef({ active: false, moved: false, x: 0, y: 0 });
 
   const onPointerDown = (e) => {
+    // A control inside the drag handle does its own job and is never a drag. Without this the
+    // panel's minimise button did nothing at all: pressing it started a drag on the header
+    // strip around it, which captures the pointer, so the pointerup was delivered to the strip
+    // instead of the button - and a browser only raises click when both halves land on the
+    // same element. The button was never broken; it simply never received a click. Matched by
+    // role rather than by that one button, so anything added to the header later is safe too.
+    if (e.target.closest?.('button, a, input, select, textarea, [role="button"]')) return;
+
     drag.current = { active: true, moved: false, x: e.clientX, y: e.clientY };
     e.currentTarget.setPointerCapture?.(e.pointerId);
   };
@@ -59,15 +76,40 @@ function OverlayContent({ isMinimized, setIsMinimized }) {
   const isSessionEnded = sessionData && sessionData.sessionStatus !== 'active';
   const showLockScreen = !sessionLoading && (!sessionData || isTimeUp || isSessionEnded);
 
-  // Every fresh session starts minimised, so a customer gets the whole screen to actually
-  // play rather than the widget defaulting open over a chunk of it - they can still tap it to
-  // check their time or order food. Keyed on sessionId so it fires exactly once per session
-  // rather than re-minimising every time a silent refetch touches sessionData.
-  const lastMinimizedSessionId = useRef(null);
+  // Tells the native shell that somebody is playing here right now, so it can hold an update
+  // back instead of restarting the machine's app under them - MainForm.IsSessionRunningAsync
+  // looks for exactly this attribute before it installs anything.
+  //
+  // It was looking for it against a page that never set it. querySelector found nothing, which
+  // the host reads as "nobody is playing", so the one guard meant to protect a paying customer
+  // mid-session answered no every single time and an update on a gaming PC would go in on top
+  // of live play. Set on <body> rather than inside any one screen, so it stays true across
+  // every state an active session passes through - bubble, panel and anything added later.
   useEffect(() => {
-    if (sessionData?.sessionStatus === 'active' && sessionData.sessionId !== lastMinimizedSessionId.current) {
-      lastMinimizedSessionId.current = sessionData.sessionId;
-      setIsMinimized(true);
+    if (sessionData?.sessionStatus !== 'active') {
+      document.body.removeAttribute('data-session-active');
+      return undefined;
+    }
+    document.body.setAttribute('data-session-active', 'true');
+    return () => document.body.removeAttribute('data-session-active');
+  }, [sessionData?.sessionStatus]);
+
+  // A fresh session opens the panel, so the customer is actually shown what they have just
+  // been given - time remaining, rate, what they are being billed - instead of a bubble they
+  // have to know to press. They can minimise it to that bubble the moment they want the
+  // screen, and it never covers more than its own corner either way.
+  //
+  // This deliberately replaces the opposite rule. Starting minimised was meant to hand over
+  // the whole screen at once, but it made the start of a session look like nothing had
+  // happened: the gate disappeared and all that was left was a small circle in the corner.
+  // Keyed on sessionId so it fires exactly once per session rather than re-opening the panel
+  // every time a silent refetch touches sessionData - which would yank the panel back open
+  // under a customer who had just closed it.
+  const lastOpenedSessionId = useRef(null);
+  useEffect(() => {
+    if (sessionData?.sessionStatus === 'active' && sessionData.sessionId !== lastOpenedSessionId.current) {
+      lastOpenedSessionId.current = sessionData.sessionId;
+      setIsMinimized(false);
     }
   }, [sessionData?.sessionId, sessionData?.sessionStatus, setIsMinimized]);
 
@@ -75,8 +117,24 @@ function OverlayContent({ isMinimized, setIsMinimized }) {
   // and the locked "session ended" screen (both render themselves fixed inset-0 and need the
   // window to actually be the screen for that to mean anything), otherwise just enough to
   // cover the small floating widget - see the IsUserPc branch of MainForm's constructor.
+  //
+  // The size goes across in CSS pixels together with this page's own devicePixelRatio, and the
+  // host multiplies the two. It cannot work that out for itself: a native window is sized in
+  // device pixels, and the ratio between those and the CSS pixels this widget is laid out in is
+  // not the window's DPI. Measured on a 1920x1200 screen at 150%, the window reported 144 dpi
+  // while this page was rendering at devicePixelRatio 2.01 - so a window sized off the DPI gave
+  // the quick-panel a 284x463 viewport for a layout that needs 380x620, and its header and nav
+  // bar filled the window with the session content left nowhere to go. Only the page can
+  // measure this ratio, so the page is what reports it.
   const layoutMode = showLockScreen ? 'full' : isMinimized ? 'bubble' : 'panel';
-  useEffect(() => { postToHost({ type: 'overlay-layout', mode: layoutMode }); }, [layoutMode]);
+  useEffect(() => {
+    const size = OVERLAY_SIZES[layoutMode];
+    postToHost({
+      type: 'overlay-layout',
+      mode: layoutMode,
+      ...(size && { width: size.width, height: size.height, dpr: window.devicePixelRatio || 1 }),
+    });
+  }, [layoutMode]);
 
   if (showLockScreen) {
     return (
