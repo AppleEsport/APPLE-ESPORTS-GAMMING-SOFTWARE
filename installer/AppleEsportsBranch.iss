@@ -69,6 +69,9 @@ Source: "..\SHORTCUT_KEYS.md";                        DestDir: "{app}"; Componen
 ; triggered on an operator PC) rather than gated to the gaming component alone, since a
 ; machine can change role after install via Ctrl+Shift+P without a reinstall.
 Source: "branch\end-session-cleanup.ps1"; DestDir: "{app}"; Components: core; Flags: ignoreversion
+; The kiosk watchdog. Ships to every role because the app decides at runtime whether to
+; register the scheduled task - only a customer gaming PC does. See KioskGuard.EnsureRegistered.
+Source: "branch\kiosk-guard.ps1"; DestDir: "{app}"; Components: core; Flags: ignoreversion
 ; NOTE: AppleEsports.config.json is deliberately NOT shipped. It is written by
 ; WriteClientConfig below, per machine, because what belongs in it depends on which kind
 ; of PC this is. The version in the repo is a developer's, pointed at a public server and
@@ -92,9 +95,23 @@ Source: "..\AppleEsportsErp\src\AppleEsportsErp.ClientAgent\publish\AppleEsports
 ; Created up front so the setup scripts are never the first thing to touch them.
 Name: "{app}\backups"; Components: server
 
+[Registry]
+; Starts the app when Windows starts, which nothing did before this. A gaming PC that lost
+; power came back to the Windows desktop with no lock screen, no member login and no billing
+; - free to use. The old installer's opt-in start-with-Windows checkbox, which people
+; remember, lives in AppleEsports.iss and was never carried into the installer we ship.
+;
+; HKCU, so the app can repair this entry on an ordinary launch without needing to run as
+; administrator - see KioskGuard.EnsureStartsOnBoot. uninsdeletevalue so uninstalling really
+; does stop it coming back.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "AppleEsports"; ValueData: """{app}\AppleEsports.exe"""; Flags: uninsdeletevalue
+
 [Icons]
 Name: "{group}\{#AppName}";              Filename: "{app}\AppleEsports.exe"
 Name: "{group}\Keyboard shortcuts";      Filename: "{app}\SHORTCUT_KEYS.md"
+; Puts kiosk protection back after somebody used Ctrl+Alt+Q to step out to Windows. Needed
+; because once the app is closed there is no screen of ours left to offer the option on.
+Name: "{group}\Return to Kiosk Mode"; Filename: "powershell.exe"; Parameters: "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File """{app}\kiosk-guard.ps1""" -Resume"; Components: core
 Name: "{group}\Uninstall {#AppName}";    Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}";        Filename: "{app}\AppleEsports.exe"
 
@@ -112,6 +129,9 @@ Filename: "sc.exe"; Parameters: "stop AppleEsportsApi";   Flags: runhidden; RunO
 Filename: "sc.exe"; Parameters: "delete AppleEsportsApi"; Flags: runhidden; RunOnceId: "DelApi"
 Filename: "sc.exe"; Parameters: "stop AppleEsportsDb";    Flags: runhidden; RunOnceId: "StopDb"
 Filename: "sc.exe"; Parameters: "delete AppleEsportsDb";  Flags: runhidden; RunOnceId: "DelDb"
+; The kiosk watchdog, for the same reason as the services above: left behind, it would keep
+; trying to launch an executable that has just been deleted, every two minutes, for ever.
+Filename: "schtasks.exe"; Parameters: "/Delete /F /TN ""AppleEsports Kiosk Guard"""; Flags: runhidden; RunOnceId: "DelKioskGuard"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{localappdata}\AppleEsports"

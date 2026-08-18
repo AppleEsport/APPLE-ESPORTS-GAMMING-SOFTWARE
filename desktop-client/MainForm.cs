@@ -512,9 +512,20 @@ public sealed class MainForm : Form
 
         Connect();
 
+        // Clear a stale "kiosk off" flag before anything reads it. Staff stepping out of kiosk
+        // mode lasts until the machine restarts and no longer, and this is the restart.
+        KioskGuard.ClearStaleFlag();
+
         // Fire and forget. An update check must never delay the dashboard appearing — the
         // shop opens whether or not Head Office is reachable.
         _ = Task.Run(UpdateLoopAsync);
+
+        // Same reasoning, and off the UI thread for the same reason: registering the startup
+        // entry and the watchdog task shells out to schtasks, and none of it is worth making the
+        // shop wait behind. Done on every launch rather than only at install time so it repairs
+        // itself - a Run key removed by a customer, by cleanup software, or by somebody tidying
+        // msconfig would otherwise leave the PC silently unprotected until it was reinstalled.
+        _ = Task.Run(() => KioskGuard.EnsureRegistered(_config.IsUserPc));
     }
 
     /// <summary>
@@ -986,8 +997,17 @@ public sealed class MainForm : Form
                 if (Unlocked("un-configure this machine")) Unconfigure();
                 return true;
 
+            // Ctrl+Alt+Q is "Exit Kiosk Mode / Switch to Windows" on a gaming PC: staff have
+            // asked, with a PIN, for this machine to be an ordinary Windows PC for a while. The
+            // watchdog is told to stand down first, or it would simply put the app back within
+            // two minutes and the option would appear not to work. It lasts until the next
+            // restart, and no longer - see KioskGuard.DisableUntilRestart.
             case Keys.Control | Keys.Alt | Keys.Q:
-                if (Unlocked("close Apple Esports")) ForceExit();
+                if (Unlocked("close Apple Esports"))
+                {
+                    if (_config.IsUserPc) KioskGuard.DisableUntilRestart();
+                    ForceExit();
+                }
                 return true;
 
             // Swallowed on both roles now that neither has a close button - Alt+F4 must not
@@ -1251,9 +1271,24 @@ public sealed class MainForm : Form
     /// </summary>
     private void ApplyOverlayLayout(string mode, double? cssWidth, double? cssHeight, double? dpr)
     {
-        // The page has spoken, so this really is a customer overlay that knows how to drive the
-        // window - see the constructor for why that is the condition for pinning it on top.
-        if (!TopMost) TopMost = true;
+        // Pinned above everything only while it IS the gate, and never once it has shrunk to the
+        // little floating widget.
+        //
+        // "full" is the walk-in/member screen and the locked "session ended" screen. Those have to
+        // win against anything on the desktop: a game drawn over the gate would be a customer
+        // playing without a session, which is the whole thing the lock screen prevents.
+        //
+        // The widget is the opposite case and used to inherit the same TopMost, which put it over
+        // the top of whatever the customer was playing - a small panel sitting above a full-screen
+        // game, in the corner, unavoidable. Nobody wants our minimise button floating over their
+        // match. It sits in the normal window order now, so a game covers it like any other
+        // window, and the customer brings it back the ordinary way when they want it. It still
+        // parks bottom-right by default, out of the way (see the origin below).
+        //
+        // The page having spoken is still what gates this - see the constructor for why an older
+        // dashboard that cannot drive the window must never be pinned on top.
+        var wantTopMost = mode is not ("bubble" or "panel");
+        if (TopMost != wantTopMost) TopMost = wantTopMost;
 
         if (mode == _overlayMode) return;
         _overlayMode = mode;

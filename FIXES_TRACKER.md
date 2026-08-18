@@ -55,6 +55,22 @@ How to use this file:
 - Priority: Normal
 - Notes from investigation: `SessionActivityLog.jsx:58` sets `scrollTop = scrollHeight` in an effect that runs on every new entry, unconditionally, so it fights the user's own scrolling. Fix is the usual stick-to-bottom pattern: only auto-scroll when the view was already at (or near) the bottom before the new entry arrived.
 
+### Issue #28 — Logout does not work on the member's own screen
+- Where: Gaming PC, member session overlay (the member's own screen during a session).
+- What I did: Tapped Logout on my own session screen.
+- What happened: Nothing completes. The button changes to "Paying…" and stays there, disabled, so it cannot even be tried again. The member cannot log out of their own session.
+- What should happen instead: Tapping Logout ends the session immediately and returns to the login screen, every time.
+- Priority: Urgent
+- Notes from investigation: The confusing part is that the session really did end. `memberCheckout` posts to `/public/sessions/{id}/member-checkout` and the server bills and closes the session properly. The client then did nothing further, on the assumption that the PC flipping to Idle over SignalR would unmount the screen. When that message did not arrive — socket dropped, wifi blip, PC state update lost on the way — nothing else ever finished the job, and `setCheckoutLoading(false)` was never called on the success path, so the button was stuck for good. Also, the member's token was left in localStorage: on a shared machine that hands their wallet to whoever sits down next. `handleWalletEmptyLogout` already cleared storage and navigated correctly; the normal path, used far more often, did not.
+
+### Issue #29 — The floating widget sits on top of games
+- Where: Gaming PC (user role), during a session.
+- What I did: Started a game full screen while a session was running.
+- What happened: The small overlay widget with the minimise button stays above the game, in the corner, over the top of whatever is being played.
+- What should happen instead: It should sit behind, in the normal window order, out of the way at the bottom. A game covers it like any other window.
+- Priority: Normal
+- Notes from investigation: The widget inherited `TopMost` from the full-screen gate. That pin is right for the gate — the walk-in/member screen and the locked "session ended" screen must beat anything on the desktop, or a game drawn over the top of them is a customer playing with no session — but it was being kept once the overlay shrank to the widget. Now only the full-screen modes are pinned; bubble and panel are ordinary windows. It already defaults to the bottom-right corner.
+
 ## Fixed (history log)
 
 ### Issue #23 — Member "Forgot Password" was silently resetting the wrong account (2026-08-11)

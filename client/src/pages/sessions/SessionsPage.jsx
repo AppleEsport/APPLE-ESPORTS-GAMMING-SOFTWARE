@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { MonitorPlay, MonitorOff, IndianRupee, Clock, ShieldAlert, Banknote, Minus, Plus } from 'lucide-react';
+import { MonitorPlay, MonitorOff, IndianRupee, Clock, ShieldAlert, Banknote, Minus, Plus, Power } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useBranch } from '../../contexts/BranchContext';
 import { useSocket } from '../../contexts/SocketContext';
@@ -24,7 +24,7 @@ import InterruptedSessionsBanner from '../../components/sessions/InterruptedSess
 export default function SessionsPage() {
   const { isSuperAdmin, user } = useAuth();
   const { activeBranch } = useBranch();
-  const { subscribe, connected, SIGNALR_HUBS } = useSocket();
+  const { subscribe, connected, emit, SIGNALR_HUBS } = useSocket();
   const toast = useToast();
   const navigate = useNavigate();
 
@@ -334,6 +334,55 @@ export default function SessionsPage() {
   }, []);
 
   // ── Stats computed from PC list ──
+  /**
+   * Whether this person may switch machines off.
+   *
+   * Operators, and Admins standing at the branch having used Quick-Switch. Head Office is
+   * excluded on purpose: switching off a PC is a physical act, and somebody in Surat cannot see
+   * whether a customer is sitting at that machine. The server enforces exactly the same rule in
+   * PcStatusHub.RequireShutdownPermission - this only decides whether to draw the button, and
+   * hiding a control is not security on its own.
+   */
+  const canShutDownPcs = !isSuperAdmin && (user?.role === 'operator' || user?.role === 'admin');
+
+  const shutDownPc = useCallback(async (pc) => {
+    if (!pc?.id) return;
+    if (!window.confirm(`Shut down ${pc.name}? It locks the screen and switches off after 10 seconds.`)) return;
+
+    try {
+      await emit(SIGNALR_HUBS.PC_STATUS, 'SendShutdownCommand', String(pc.id));
+      toast.success(`${pc.name} is shutting down.`);
+      logActivity(`${pc.name}: Shutdown sent from the counter.`, 'warn');
+    } catch (err) {
+      toast.error(err?.message || `Could not shut down ${pc.name}.`);
+    }
+  }, [emit, SIGNALR_HUBS.PC_STATUS, toast]);
+
+  const shutDownAllPcs = useCallback(async () => {
+    if (!window.confirm(
+      'Shut down every free PC at this branch?\n\n' +
+      'Any PC with someone still playing is left alone.'
+    )) return;
+
+    try {
+      const result = await emit(SIGNALR_HUBS.PC_STATUS, 'SendShutdownAllCommand');
+      const sent = result?.sent ?? 0;
+      const skipped = result?.skippedBusy ?? 0;
+
+      // The skipped count is the whole point of saying anything at all: "12 shutting down" alone
+      // would read as "the room is empty now", and walking away on that would leave customers
+      // sitting at machines nobody has closed.
+      toast.success(
+        skipped > 0
+          ? `${sent} PCs shutting down. ${skipped} left on - still in use.`
+          : `${sent} PCs shutting down.`
+      );
+      logActivity(`Shutdown sent to ${sent} PCs; ${skipped} still in use and left on.`, 'warn');
+    } catch (err) {
+      toast.error(err?.message || 'Could not shut the PCs down.');
+    }
+  }, [emit, SIGNALR_HUBS.PC_STATUS, toast]);
+
   const stats = useMemo(() => {
     const activeSessions = pcs.filter(p => p.state === 'Active').length;
     const idleStations = pcs.filter(p => p.state === 'Idle').length;
@@ -400,6 +449,19 @@ export default function SessionsPage() {
         />
       </div>
 
+      {/* Closing time. Only shown to whoever can actually see the room - see canShutDownPcs. */}
+      {canShutDownPcs && (
+        <div className="flex justify-end">
+          <button
+            onClick={shutDownAllPcs}
+            title="Shut down every free PC at this branch"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-neon-red/40 bg-neon-red/10 text-neon-red hover:bg-neon-red/20 transition-colors text-[10px] font-bold uppercase tracking-wider"
+          >
+            <Power className="w-3.5 h-3.5" /> Shut Down All PCs
+          </button>
+        </div>
+      )}
+
       {/* ── Sessions held after a power cut ──
           Above everything else: these have stopped clocks and unused paid time, and only
           someone at the counter can say whether the customer is still in the building. */}
@@ -458,6 +520,7 @@ export default function SessionsPage() {
             onDeclineWalkin={handleDeclineWalkin}
             onFlagMaintenance={handleFlagMaintenance}
             onCreditClick={handleCreditClick}
+            onShutdown={canShutDownPcs ? shutDownPc : undefined}
           />
         </div>
         <div className="flex-1 min-w-0 w-full">

@@ -390,10 +390,62 @@ public class BillingService : IBillingService
             {
                 if (bill.MemberId == null)
                     throw new AppException("Cannot pay via Wallet for a walk-in customer. Member registration required.");
-                    
+
+                var walletMember = await _unitOfWork.Repository<Member>().GetByIdAsync(bill.MemberId.Value)
+                    ?? throw new NotFoundException("Member not found.");
+
+                // What the member can actually pay from their wallets, before anything is split.
+                //
+                // A member with 20 rupees of food credit ordering a 120 rupee drink could not be
+                // served at all: the wallet leg was refused outright, and refusing the wallet
+                // refused the whole payment, so the sale simply could not be completed. Nothing
+                // ever went negative - it just would not sell.
+                decimal walletAvailable = walletMember.GamingBalance + walletMember.FoodBalance;
+
+                if (dto.WalletAmount > walletAvailable)
+                    throw new AppException(
+                        $"This member's wallets hold {walletAvailable:0.00} in total, so " +
+                        $"{dto.WalletAmount:0.00} cannot be taken from them. Put {walletAvailable:0.00} " +
+                        $"in as the wallet amount and collect the remaining " +
+                        $"{(bill.TotalAmount - walletAvailable - dto.CreditAmount):0.00} as cash, UPI, or a " +
+                        "split of the two.");
+
                 decimal totalBill = bill.Subtotal > 0 ? bill.Subtotal : 1;
-                decimal gamingDeduction = dto.WalletAmount * (bill.GamingAmount / totalBill);
-                decimal foodDeduction = dto.WalletAmount * (bill.FoodAmount / totalBill);
+
+                // Apportioned by what the bill is actually for, then capped at what each wallet
+                // really holds, with either wallet covering what the other could not.
+                //
+                // The bare proportional split was the second half of the same fault. On a mixed
+                // bill it charged each wallet its share of the total whether that wallet had the
+                // money or not, so a member with plenty of food credit and an empty gaming wallet
+                // was refused over the gaming share - while holding more than enough between the
+                // two. It is one person's money; which pocket it sits in is our bookkeeping, not
+                // a reason to decline them.
+                decimal gamingDeduction = Math.Round(dto.WalletAmount * (bill.GamingAmount / totalBill), 2);
+                decimal foodDeduction = dto.WalletAmount - gamingDeduction;
+
+                gamingDeduction = Math.Min(gamingDeduction, walletMember.GamingBalance);
+                foodDeduction = Math.Min(foodDeduction, walletMember.FoodBalance);
+
+                decimal uncovered = dto.WalletAmount - gamingDeduction - foodDeduction;
+                if (uncovered > 0)
+                {
+                    var extraGaming = Math.Min(uncovered, walletMember.GamingBalance - gamingDeduction);
+                    gamingDeduction += extraGaming;
+                    uncovered -= extraGaming;
+
+                    var extraFood = Math.Min(uncovered, walletMember.FoodBalance - foodDeduction);
+                    foodDeduction += extraFood;
+                    uncovered -= extraFood;
+                }
+
+                // Cannot happen - the total was checked against both balances above - but if the
+                // arithmetic ever disagreed with itself, saying so beats quietly collecting less
+                // than the bill and calling it settled.
+                if (uncovered > 0.001m)
+                    throw new AppException(
+                        $"Could not take {dto.WalletAmount:0.00} from this member's wallets; " +
+                        $"{uncovered:0.00} of it is not covered. Nothing has been charged.");
 
                 if (gamingDeduction > 0)
                 {
