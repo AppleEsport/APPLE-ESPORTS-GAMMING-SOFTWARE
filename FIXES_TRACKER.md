@@ -23,7 +23,37 @@ How to use this file:
 
 ## New Issues (not fixed yet)
 
-(none currently)
+### Issue #24 — Nothing starts itself after a boot or power cut (gaming PCs and counter PC)
+- Where: Every branch. Gaming PCs (user role) and the counter PC (operator role).
+- What I did: Switched a PC on / recovered from a power cut.
+- What happened: Nothing starts. On a gaming PC that means the Windows desktop with no lock screen, no member login, no session gate and no billing — the customer can just use the machine. On the counter PC the operator has to open the app by hand every morning.
+- What should happen instead: Work like PanCafe Pro. Gaming PCs start the app automatically after every boot or power cut, and relaunch it automatically if it crashes, so a customer cannot get past the lock screen. An Operator, Admin or Super Admin who deliberately picks "Exit Kiosk Mode / Switch to Windows" closes it normally and it stays closed, so the PC can be used without our app. A "Return to Kiosk Mode" option puts the protection back, and any reboot returns to kiosk mode by itself.
+- Priority: Urgent
+- Notes from investigation: The shipped installer (`installer/AppleEsportsBranch.iss`) creates only a Start Menu and Desktop shortcut — no startup folder entry, no registry Run entry. `AppleEsportsAgent.exe` is not a Windows service either; only `AppleEsportsApi` is, which is why the API is the one thing that does come back. The auto-start checkbox people remember is in `installer/AppleEsports.iss`, the old installer we no longer ship. After an *update* the app does restart itself, which is why this only shows up on a normal boot or power cut. The deliberate-exit flag has to be cleared on boot, otherwise "Exit Kiosk Mode" would survive a restart and leave the PC unprotected for good.
+
+### Issue #25 — Operator cannot shut down a gaming PC, or all of them
+- Where: Counter PC (operator dashboard), and Admin via Quick-Switch at the branch.
+- What I did: Looked for a way to shut a gaming PC down at closing time.
+- What happened: There is no button anywhere, so it cannot be done at all.
+- What should happen instead: The Operator can shut down one gaming PC, or all of them at once. An Admin who has come to the branch and used Quick-Switch can do the same. Head Office cannot shut PCs down — it does not need to.
+- Priority: Urgent (for the security hole below; the feature itself is Normal)
+- Notes from investigation: The shutdown itself already works end to end — `Hubs.cs:183 SendShutdownCommand` tells the PC, the agent locks the screen and runs `shutdown /s /t 10`. Two things are missing and one is a hole. `SendShutdownCommand` has NO role restriction; it inherits only the class-level `[Authorize]` on `BranchAwareHub`, so any authenticated account can call it — including a gaming PC's own `user_panel` account, which means a customer seat's token could shut machines down today. Other sensitive PC actions in `PcManagementController` are properly restricted and this one was missed. There is also no bulk "all PCs" version, and no UI calls it at all. Branch scoping already exists to build on: the hub reads a `branchId` claim and Operators/Admins join `branch:{branchId}`.
+
+### Issue #26 — A member cannot pay a wallet shortfall in cash or UPI
+- Where: Billing Counter / food ordering, any branch.
+- What I did: Member has ₹20 in their food wallet and orders a ₹120 Red Bull.
+- What happened: The order is refused outright with "Insufficient Food wallet balance". The sale simply cannot be made.
+- What should happen instead: Take the ₹20 that is there, let the sale go through, and show the remaining ₹100 as still due so the counter can collect it in cash, UPI, or a split of both.
+- Priority: Normal
+- Notes from investigation: `WalletService.DeductWalletAsync` (WalletService.cs:228) hard-blocks any deduction larger than the balance, so nothing ever goes negative — it just refuses. `BillingService.ProcessPaymentAsync` already supports splitting a bill across cash / online / wallet / credit, but the parts must add up to the total exactly and the wallet part still cannot exceed the real balance, so the shortfall has to be worked out and typed by hand and the payment fails if it is entered wrong. There is no shortfall or settle-up flow anywhere. This is a new feature rather than a regression, and it is money code, so it gets proved on a real machine rather than by compiling.
+
+### Issue #27 — Activity Log will not stay scrolled up
+- Where: Sessions page, the Activity Log strip along the bottom.
+- What I did: Scrolled up in the Activity Log to read an earlier line.
+- What happened: As soon as the next activity arrives it jumps back to the bottom, so older entries cannot be read. It feels like scrolling is broken.
+- What should happen instead: If I have scrolled up to read something, leave me there. Only follow along automatically when I am already at the bottom.
+- Priority: Normal
+- Notes from investigation: `SessionActivityLog.jsx:58` sets `scrollTop = scrollHeight` in an effect that runs on every new entry, unconditionally, so it fights the user's own scrolling. Fix is the usual stick-to-bottom pattern: only auto-scroll when the view was already at (or near) the bottom before the new entry arrived.
 
 ## Fixed (history log)
 

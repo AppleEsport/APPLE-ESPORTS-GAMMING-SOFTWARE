@@ -1,7 +1,9 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
 using AppleEsportsErp.Application.Constants;
+using AppleEsportsErp.Infrastructure.Data;
 
 namespace AppleEsportsErp.Api.Hubs;
 
@@ -103,7 +105,10 @@ public class ReservationHub : BranchAwareHub
 /// <summary>SOP §17: PC state sync — /hubs/pc-status — Enhanced for Client Agent dual-connection</summary>
 public class PcStatusHub : BranchAwareHub
 {
-    public PcStatusHub(ILogger<PcStatusHub> logger) : base(logger) { }
+    private readonly IServiceScopeFactory _scopeFactory;
+
+    public PcStatusHub(ILogger<PcStatusHub> logger, IServiceScopeFactory scopeFactory) : base(logger)
+        => _scopeFactory = scopeFactory;
 
     /// <summary>Called by the Gaming PC Agent when it connects</summary>
     public async Task AgentConnected(string pcId, string connectionMode)
@@ -179,15 +184,119 @@ public class PcStatusHub : BranchAwareHub
         Logger.LogInformation("Lock command sent to PC {PcId}", pcId);
     }
 
-    /// <summary>Called by Admin to force shutdown a Gaming PC</summary>
+    /// <summary>
+    /// Shuts one gaming PC down, at the request of the branch that owns it.
+    ///
+    /// The comment here used to read "Called by Admin" and that was the only thing enforcing it -
+    /// there was no role check at all, just the class-level [Authorize] on BranchAwareHub, which
+    /// asks whether you are logged in and nothing else. So every authenticated account in the
+    /// system could shut machines down, including a gaming PC's own user_panel token: a customer
+    /// seat could have switched off the row. Every other sensitive PC action goes through
+    /// PcManagementController with an explicit role policy; this one was reachable directly over
+    /// the socket and was missed.
+    ///
+    /// It also took a pcId and sent to agent:{pcId} without ever asking whose PC that was, so an
+    /// operator at one branch could shut down another branch's machine by id.
+    /// </summary>
     public async Task SendShutdownCommand(string pcId)
     {
+        var branchId = RequireShutdownPermission();
+
+        if (!await PcBelongsToBranchAsync(pcId, branchId))
+            throw new HubException("That PC does not belong to this branch.");
+
         await Clients.Group($"agent:{pcId}").SendAsync("ForceShutdown", new
         {
             Timestamp = DateTimeOffset.UtcNow
         });
 
-        Logger.LogWarning("Shutdown command sent to PC {PcId}", pcId);
+        Logger.LogWarning(
+            "Shutdown command sent to PC {PcId} by {Role} {User} of branch {BranchId}",
+            pcId, Context.User?.FindFirstValue(ClaimTypes.Role),
+            Context.User?.FindFirstValue(ClaimTypes.Name), branchId);
+    }
+
+    /// <summary>
+    /// Shuts down every gaming PC at this branch - the closing-time action.
+    ///
+    /// Deliberately takes no list of PCs from the caller. The branch is read from the caller's own
+    /// token and the machines are looked up here, so this cannot be aimed at another shop however
+    /// it is called, and an operator cannot be tricked into sending ids they did not choose.
+    ///
+    /// A PC with somebody still playing on it is skipped rather than switched off underneath them,
+    /// and the count of those is reported back so whoever pressed it knows the room is not empty
+    /// yet. Closing up is not a reason to cut a paying customer off mid-session; if that is really
+    /// wanted, the session gets stopped and billed first and then this does the rest.
+    /// </summary>
+    public async Task<object> SendShutdownAllCommand()
+    {
+        var branchId = RequireShutdownPermission();
+
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        var pcs = await db.Pcs.AsNoTracking()
+            .Where(p => p.BranchId == branchId && !p.IsDeleted && p.IsActive)
+            .Select(p => new { p.Id, p.State })
+            .ToListAsync();
+
+        var busy = pcs.Where(p =>
+            p.State == Domain.Enums.PcState.Active ||
+            p.State == Domain.Enums.PcState.AwaitingBilling).ToList();
+
+        var targets = pcs.Except(busy).ToList();
+
+        foreach (var pc in targets)
+        {
+            await Clients.Group($"agent:{pc.Id}").SendAsync("ForceShutdown", new
+            {
+                Timestamp = DateTimeOffset.UtcNow
+            });
+        }
+
+        Logger.LogWarning(
+            "Shut down all PCs at branch {BranchId}: {Sent} sent, {Skipped} skipped as busy, by {Role} {User}",
+            branchId, targets.Count, busy.Count,
+            Context.User?.FindFirstValue(ClaimTypes.Role),
+            Context.User?.FindFirstValue(ClaimTypes.Name));
+
+        return new { sent = targets.Count, skippedBusy = busy.Count };
+    }
+
+    /// <summary>
+    /// Who is allowed to switch a machine off, and which branch's machines they get.
+    ///
+    /// Operators, and Admins standing at a branch having used Quick-Switch. Both are people who
+    /// can see the room; switching off a PC is a physical act and the person doing it should be
+    /// able to look at the screen first. Head Office is deliberately excluded - it has no way of
+    /// knowing whether somebody is sitting at that machine, and no reason to need this.
+    ///
+    /// The branch comes from the caller's own token, never from anything they send, which is what
+    /// keeps one shop out of another's machines.
+    /// </summary>
+    private Guid RequireShutdownPermission()
+    {
+        var role = Context.User?.FindFirstValue(ClaimTypes.Role);
+
+        if (role != Roles.Operator && role != Roles.Admin)
+            throw new HubException("Only an operator or an admin at the branch can shut a PC down.");
+
+        var branchClaim = Context.User?.FindFirstValue("branchId");
+        if (!Guid.TryParse(branchClaim, out var branchId))
+            throw new HubException("No branch on this account, so there are no PCs to shut down.");
+
+        return branchId;
+    }
+
+    private async Task<bool> PcBelongsToBranchAsync(string pcId, Guid branchId)
+    {
+        if (!Guid.TryParse(pcId, out var id)) return false;
+
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        return await db.Pcs.AsNoTracking()
+            .AnyAsync(p => p.Id == id && p.BranchId == branchId && !p.IsDeleted);
     }
 
     /// <summary>Heartbeat from agent to keep connection alive</summary>
