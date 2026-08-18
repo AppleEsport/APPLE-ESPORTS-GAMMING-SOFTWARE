@@ -60,12 +60,29 @@ internal static class KioskGuard
     {
         if (Environment.ProcessPath is not { } exe) return;
 
-        // HKCU rather than HKLM on purpose: it needs no elevation, so it can be repaired on an
-        // ordinary launch instead of only during an install that ran as administrator.
+        var wanted = $"\"{exe}\"";
+
+        // The installer's machine-wide entry is the real one - it starts the app for whoever logs
+        // in, which is what a shared machine needs. If it is there and correct, leave it alone.
+        //
+        // Checked before writing anything rather than writing regardless, because there is no
+        // single-instance lock stopping two Run entries from opening two copies of a kiosk overlay
+        // at once - and two full-screen lock screens fighting over the same seat is its own bug.
+        // Program.cs now holds a mutex as the backstop, but not creating the duplicate is better
+        // than surviving it.
+        try
+        {
+            using var machine = Registry.LocalMachine.OpenSubKey(RunKey, writable: false);
+            if (machine?.GetValue(RunValueName) as string == wanted) return;
+        }
+        catch { /* unreadable HKLM - fall through and register per-user */ }
+
+        // Per-user fallback, for a machine whose HKLM entry was removed or never written. Needs no
+        // elevation, so an ordinary launch can repair it; correct here because this process is
+        // running as the person actually logged in, which is exactly what the installer was not.
         using var key = Registry.CurrentUser.OpenSubKey(RunKey, writable: true);
         if (key is null) return;
 
-        var wanted = $"\"{exe}\"";
         if (key.GetValue(RunValueName) as string == wanted) return;
 
         key.SetValue(RunValueName, wanted, RegistryValueKind.String);

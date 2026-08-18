@@ -21,6 +21,20 @@ internal static class Program
 
         if (!WebViewRuntimeIsPresent()) return;
 
+        // One copy per machine.
+        //
+        // There was nothing stopping a second one, and there are now three separate things that
+        // can start this app: the machine-wide Run entry, the per-user fallback, and the kiosk
+        // watchdog every two minutes. The watchdog checks for a running process first, but two
+        // registry entries firing at logon do not check anything - and two full-screen lock
+        // screens over the same seat, each with its own overlay socket, is a worse state than
+        // either bug they came from. Whoever got here first keeps the machine.
+        //
+        // Global\ so it holds across sessions: a gaming PC left with a disconnected session still
+        // has this process running as that user, and a second login must not start another.
+        using var single = new Mutex(initiallyOwned: true, @"Global\AppleEsportsDesktopSingleInstance", out var isFirst);
+        if (!isFirst) return;
+
         try
         {
             var config = AppConfig.Load();

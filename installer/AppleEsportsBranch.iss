@@ -101,17 +101,23 @@ Name: "{app}\backups"; Components: server
 ; - free to use. The old installer's opt-in start-with-Windows checkbox, which people
 ; remember, lives in AppleEsports.iss and was never carried into the installer we ship.
 ;
-; HKCU, so the app can repair this entry on an ordinary launch without needing to run as
-; administrator - see KioskGuard.EnsureStartsOnBoot. uninsdeletevalue so uninstalling really
+; HKLM rather than HKCU, and that distinction is the whole fix working or not. This installer
+; runs elevated, so HKCU during setup is the ADMINISTRATOR's hive - not the account the
+; operator or the customer actually logs in as. The entry would have been written to a user
+; who never signs in at that machine, and the PC would have carried on booting to a bare
+; desktop with the registry looking correct. Inno warns about exactly this
+; (UsedUserAreasWarning) and it is right to. HKLM starts the app for whoever logs in, which
+; is what a shared kiosk machine wants anyway.
+; See KioskGuard.EnsureStartsOnBoot for the per-user fallback. uninsdeletevalue so uninstalling really
 ; does stop it coming back.
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "AppleEsports"; ValueData: """{app}\AppleEsports.exe"""; Flags: uninsdeletevalue
+Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "AppleEsports"; ValueData: """{app}\AppleEsports.exe"""; Flags: uninsdeletevalue
 
 [Icons]
 Name: "{group}\{#AppName}";              Filename: "{app}\AppleEsports.exe"
 Name: "{group}\Keyboard shortcuts";      Filename: "{app}\SHORTCUT_KEYS.md"
 ; Puts kiosk protection back after somebody used Ctrl+Alt+Q to step out to Windows. Needed
 ; because once the app is closed there is no screen of ours left to offer the option on.
-Name: "{group}\Return to Kiosk Mode"; Filename: "powershell.exe"; Parameters: "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File """{app}\kiosk-guard.ps1""" -Resume"; Components: core
+Name: "{group}\Return to Kiosk Mode"; Filename: "powershell.exe"; Parameters: "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{app}\kiosk-guard.ps1"" -Resume"; Components: core
 Name: "{group}\Uninstall {#AppName}";    Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}";        Filename: "{app}\AppleEsports.exe"
 
