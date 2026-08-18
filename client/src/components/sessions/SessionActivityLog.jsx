@@ -1,6 +1,15 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { ScrollText, GripHorizontal, Loader2 } from 'lucide-react';
 import { SESSION_LOG_EVENT } from '../../utils/sessionLog';
+
+/**
+ * A few pixels of tolerance, because "at the bottom" is rarely exact. Fractional scroll positions
+ * from display scaling, a partially visible last row, and the browser's own rounding all mean
+ * scrollTop + clientHeight lands just short of scrollHeight while looking flush to the eye.
+ * Demanding equality would read as "scrolled up" at the bottom of the list, and the log would stop
+ * following for no visible reason.
+ */
+const AT_BOTTOM_TOLERANCE_PX = 32;
 import { useActivityLog } from '../../contexts/ActivityLogContext';
 import { getRecentActivities } from '../../api/sessions.api';
 
@@ -69,20 +78,63 @@ export default function SessionActivityLog({ height, onHeightChange }) {
   const followNewEntries = useRef(true);
 
   /**
-   * A few pixels of tolerance, because "at the bottom" is rarely exact. Fractional scroll
-   * positions from display scaling, a partially visible last row, and the browser's own rounding
-   * all mean scrollTop + clientHeight lands just short of scrollHeight while looking flush to
-   * the eye. Demanding equality would read as "scrolled up" at the bottom of the list and the
-   * log would stop following for no visible reason.
+   * True while an animation we started is still running.
+   *
+   * Needed because a smooth scroll is not one jump - the browser fires a scroll event at every
+   * intermediate position on the way down, and at all of those the view is genuinely NOT at the
+   * bottom yet. Reading those positions the same way as a real gesture would decide the reader
+   * had scrolled up, halfway through an animation the reader did not ask for, and following would
+   * switch itself off after the first new entry. The instant jump this replaced never had that
+   * problem because there were no intermediate positions to misread.
    */
-  const AT_BOTTOM_TOLERANCE_PX = 32;
+  const autoScrolling = useRef(false);
+
+  /**
+   * Whether anything has been scrolled yet, so the very first one can be instant.
+   *
+   * On opening, the strip loads up to a hundred past entries and belongs at the newest. Animating
+   * through all of it would be a long slide down the whole history before the log settles, every
+   * time the page is opened. The animation is worth having for a line that arrives while somebody
+   * is watching, and only for that.
+   */
+  const hasPositioned = useRef(false);
+
+  const isAtBottom = useCallback((el) =>
+    el.scrollTop + el.clientHeight >= el.scrollHeight - AT_BOTTOM_TOLERANCE_PX, []);
+
+  const recomputeFollow = useCallback(() => {
+    const el = scrollRef.current;
+    if (el) followNewEntries.current = isAtBottom(el);
+  }, [isAtBottom]);
+
+  /**
+   * A real gesture from the reader - wheel, touch drag, or an arrow/page key.
+   *
+   * Handled separately from the scroll event so that scrolling up DURING one of our animations is
+   * respected instead of fought. Without this the reader would have to wait for the slide to
+   * finish before the log would let them go anywhere, which is the same complaint as before in a
+   * politer form.
+   */
+  const handleUserScrollIntent = useCallback(() => {
+    autoScrolling.current = false;
+    recomputeFollow();
+  }, [recomputeFollow]);
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    followNewEntries.current =
-      el.scrollTop + el.clientHeight >= el.scrollHeight - AT_BOTTOM_TOLERANCE_PX;
-  }, []);
+
+    if (autoScrolling.current) {
+      // Mid-animation: the only thing worth knowing is whether it has arrived.
+      if (isAtBottom(el)) {
+        autoScrolling.current = false;
+        followNewEntries.current = true;
+      }
+      return;
+    }
+
+    recomputeFollow();
+  }, [isAtBottom, recomputeFollow]);
 
   // Follow the newest line, unless the reader has deliberately scrolled up.
   //
@@ -92,9 +144,25 @@ export default function SessionActivityLog({ height, onHeightChange }) {
   // broken", and reporting it that way was correct: scrolling worked, it was just being undone.
   useEffect(() => {
     if (!followNewEntries.current) return;
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+
+    const el = scrollRef.current;
+    if (!el) return;
+
+    // Instant on the way in, animated afterwards - see hasPositioned. Also instant for anyone
+    // who has asked their system for less motion; a strip that slides on its own every few
+    // seconds is exactly what that setting is about.
+    const smooth = hasPositioned.current &&
+      !window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+
+    hasPositioned.current = true;
+
+    if (!smooth) {
+      el.scrollTop = el.scrollHeight;
+      return;
     }
+
+    autoScrolling.current = true;
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
   }, [entries]);
 
   const handlePointerDown = useCallback((e) => {
@@ -147,7 +215,14 @@ export default function SessionActivityLog({ height, onHeightChange }) {
         Activity Log
       </div>
 
-      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-3 py-1.5 font-mono text-[11px] leading-5">
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        onWheel={handleUserScrollIntent}
+        onTouchMove={handleUserScrollIntent}
+        onKeyDown={handleUserScrollIntent}
+        tabIndex={0}
+        className="flex-1 overflow-y-auto px-3 py-1.5 font-mono text-[11px] leading-5">
         {loading ? (
           <div className="flex items-center gap-2 text-text-3">
             <Loader2 className="w-3 h-3 animate-spin" />

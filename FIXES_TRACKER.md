@@ -53,7 +53,7 @@ How to use this file:
 - What happened: As soon as the next activity arrives it jumps back to the bottom, so older entries cannot be read. It feels like scrolling is broken.
 - What should happen instead: If I have scrolled up to read something, leave me there. Only follow along automatically when I am already at the bottom.
 - Priority: Normal
-- Notes from investigation: `SessionActivityLog.jsx:58` sets `scrollTop = scrollHeight` in an effect that runs on every new entry, unconditionally, so it fights the user's own scrolling. Fix is the usual stick-to-bottom pattern: only auto-scroll when the view was already at (or near) the bottom before the new entry arrived.
+- Notes from investigation: `SessionActivityLog.jsx:58` sets `scrollTop = scrollHeight` in an effect that runs on every new entry, unconditionally, so it fights the user's own scrolling. Fix is the usual stick-to-bottom pattern: only auto-scroll when the view was already at (or near) the bottom before the new entry arrived. Follows smoothly rather than snapping, so it is possible to see what just arrived; instant on first open, because animating down through a hundred loaded entries every time the page opens is not worth watching, and instant for anyone whose system asks for reduced motion. A gesture during one of those animations cancels it, so scrolling up mid-slide is respected rather than fought.
 
 ### Issue #28 — Logout does not work on the member's own screen
 - Where: Gaming PC, member session overlay (the member's own screen during a session).
