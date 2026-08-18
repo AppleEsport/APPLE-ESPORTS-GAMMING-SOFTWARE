@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Monitor, User, Clock, Wrench, AlertTriangle, Square, RefreshCw, Receipt, Coffee, Gift, Banknote, X } from 'lucide-react';
+import { Monitor, User, Clock, Wrench, AlertTriangle, Square, RefreshCw, Receipt, Coffee, Gift, Banknote, X, Power } from 'lucide-react';
 import api from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
@@ -61,7 +61,7 @@ const PENDING_STYLE = { text: 'text-accent', border: 'border-accent/50', label: 
 export default function PcDetailPanel({
   pc, walkinReq, onClose, onRefresh,
   onStartReservedSession, onOverrideReservation, onApproveWalkin, onDeclineWalkin,
-  onFlagMaintenance, onCreditClick,
+  onFlagMaintenance, onCreditClick, onShutdown,
 }) {
   const { user, canApplyDiscount } = useAuth();
   const navigate = useNavigate();
@@ -422,6 +422,19 @@ export default function PcDetailPanel({
             className="w-full py-1.5 rounded border border-pc-offline/40 bg-pc-offline/10 text-pc-offline hover:bg-pc-offline/20 transition-colors flex items-center justify-center gap-1.5 text-[10px] font-bold uppercase tracking-wider"
           >
             <Wrench className="w-3.5 h-3.5" /> Flag for Maintenance
+          </button>
+        )}
+
+        {/* Offered for a free PC only, deliberately. Cutting the power out from under a paying
+            customer is not a shortcut worth having on a button - stop and bill the session
+            first, then this. The bulk shutdown skips busy machines for the same reason. */}
+        {!walkinReq && canStart && onShutdown && (
+          <button
+            onClick={() => onShutdown(pc)}
+            title="Shut this PC down"
+            className="w-full py-1.5 rounded border border-neon-red/40 bg-neon-red/10 text-neon-red hover:bg-neon-red/20 transition-colors flex items-center justify-center gap-1.5 text-[10px] font-bold uppercase tracking-wider"
+          >
+            <Power className="w-3.5 h-3.5" /> Shut Down PC
           </button>
         )}
 

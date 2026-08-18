@@ -23,12 +23,34 @@ export default function SessionInfoScreen() {
     if (!sessionData?.sessionId || checkoutLoading) return;
     setCheckoutLoading(true);
     setCheckoutError(null);
+
     const res = await memberCheckout(sessionData.sessionId);
+
     if (!res?.success) {
       setCheckoutError(res?.error || 'Failed to log out. Please see the operator.');
       setCheckoutLoading(false);
+      return;
     }
-    // On success the PC flips to Idle via SignalR, which unmounts this screen.
+
+    // Logging out finishes here, rather than waiting to be told it happened.
+    //
+    // This used to end at the request and leave the screen alone, on the assumption that the PC
+    // flipping to Idle over SignalR would unmount it. When that message did not arrive - socket
+    // dropped, shop wifi blipped, PC state update lost on the way - nothing else ever completed
+    // the logout. The button stayed on "Paying..." and stayed disabled, so the member could not
+    // even try again: from where they sat, Logout simply did not work. The session really had
+    // ended and been billed on the server the whole time, which is the confusing part.
+    //
+    // The member's token is cleared as part of it, and that matters beyond tidiness. These are
+    // shared machines; leaving a member logged in on a PC they have walked away from hands their
+    // wallet to whoever sits down next. handleWalletEmptyLogout already did this properly - the
+    // normal, far more common path was the one that did not.
+    localStorage.removeItem('memberToken');
+    localStorage.removeItem('memberProfile');
+    localStorage.removeItem('walletEmptyAlert');
+
+    setCheckoutLoading(false);
+    navigate(`/pc-overlay/${pcId}/login`);
   };
 
   // After the wallet runs dry the member can top up at the counter and come straight back —
