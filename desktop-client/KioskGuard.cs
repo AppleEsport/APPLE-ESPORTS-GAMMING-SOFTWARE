@@ -23,6 +23,7 @@ internal static class KioskGuard
     private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string RunValueName = "AppleEsports";
     private const string TaskName = "AppleEsports Kiosk Guard";
+    private const string AutoUpdateTaskName = "AppleEsports Auto Update";
 
     private static string StateDirectory => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Apple Esports");
@@ -48,12 +49,63 @@ internal static class KioskGuard
     {
         try { EnsureStartsOnBoot(); } catch { /* best effort - see above */ }
 
+        // Registered on every machine, both roles. This is what finally makes updates arrive on
+        // their own - see EnsureAutoUpdateTask.
+        try { EnsureAutoUpdateTask(); } catch { /* best effort */ }
+
         // The relaunch watchdog is for customer machines only. On a counter PC the operator closes
         // the app deliberately, with a PIN, and having it reappear two minutes later would be a
         // fault rather than a feature.
         if (!isGamingPc) return;
 
         try { EnsureWatchdogTask(); } catch { /* best effort */ }
+    }
+
+    /// <summary>
+    /// Whether a SYSTEM task is installing updates for this machine, in which case this app must
+    /// not try to do it itself.
+    ///
+    /// It would only raise a prompt it cannot answer, and on a gaming PC that prompt appears in
+    /// front of a customer - a Windows box asking for an administrator over the top of their game,
+    /// which is worse than the missing update it is trying to fix.
+    /// </summary>
+    public static bool AutoUpdateTaskInstalled() => TaskExists(AutoUpdateTaskName);
+
+    /// <summary>
+    /// The task that actually installs updates, running as SYSTEM.
+    ///
+    /// This is the fix for updates never arriving. The app cannot install one: writing to Program
+    /// Files and stopping services needs elevation, so it asked Windows (Verb=runas) and Windows
+    /// answered with a prompt. Nobody is at a counter PC at 3am, and nobody at a gaming PC is going
+    /// to approve an administrator prompt over their game, so the update simply never happened -
+    /// and because Process.Start only fails when a prompt is REFUSED, an unanswered one looked
+    /// exactly like having nothing to install. Branches sat four releases behind while the Updates
+    /// page said "install updates by themselves" and reported no error at all.
+    ///
+    /// Counter PCs got away with it because the branch API is a Windows service and could install
+    /// on their behalf. Gaming PCs have no service, which is why APPLE144HZ-02 was still on 3.0.6
+    /// two days and four releases later.
+    ///
+    /// /RU SYSTEM is the whole difference: SYSTEM is already privileged and has no desktop to draw a
+    /// prompt on, so there is nothing to click and nothing to ignore. The script does its own
+    /// downloading and hash checking rather than being handed a file by this app - see the security
+    /// note in apply-update.ps1 for why a SYSTEM task must never run a path a user could influence.
+    /// </summary>
+    private static void EnsureAutoUpdateTask()
+    {
+        if (Environment.ProcessPath is not { } exe) return;
+
+        var script = Path.Combine(Path.GetDirectoryName(exe)!, "apply-update.ps1");
+        if (!File.Exists(script)) return;   // older install without the updater shipped
+
+        if (TaskExists(AutoUpdateTaskName)) return;
+
+        // Every 15 minutes. Frequent enough that a release reaches the shop the same day without
+        // anybody thinking about it, and rare enough that thirty-five gaming PCs asking their
+        // counter for the latest version is nothing next to one of them downloading it.
+        Run("schtasks.exe",
+            $"/Create /F /TN \"{AutoUpdateTaskName}\" /SC MINUTE /MO 15 /RU SYSTEM /RL HIGHEST " +
+            $"/TR \"powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \\\"{script}\\\"\"");
     }
 
     private static void EnsureStartsOnBoot()
@@ -95,7 +147,7 @@ internal static class KioskGuard
         var script = Path.Combine(Path.GetDirectoryName(exe)!, "kiosk-guard.ps1");
         if (!File.Exists(script)) return;   // older install without the guard shipped
 
-        if (TaskExists()) return;
+        if (TaskExists(TaskName)) return;
 
         // schtasks rather than a scheduled-task COM reference, to keep this to the framework the
         // rest of the client already uses. /RL HIGHEST so it can start the app after a logon where
@@ -105,12 +157,12 @@ internal static class KioskGuard
             $"/TR \"powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \\\"{script}\\\"\"");
     }
 
-    private static bool TaskExists()
+    private static bool TaskExists(string taskName)
     {
         try
         {
             using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
-                "schtasks.exe", $"/Query /TN \"{TaskName}\"")
+                "schtasks.exe", $"/Query /TN \"{taskName}\"")
             {
                 UseShellExecute = false,
                 CreateNoWindow = true,

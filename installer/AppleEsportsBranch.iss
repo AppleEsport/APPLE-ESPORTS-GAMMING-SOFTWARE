@@ -12,7 +12,7 @@
 ; ============================================================================
 
 #define AppName        "Apple Esports"
-#define AppVersion     "3.1.0"
+#define AppVersion     "3.1.1"
 #define AppPublisher   "Apple Esports"
 #define Staging        "branch\staging"
 
@@ -72,6 +72,9 @@ Source: "branch\end-session-cleanup.ps1"; DestDir: "{app}"; Components: core; Fl
 ; The kiosk watchdog. Ships to every role because the app decides at runtime whether to
 ; register the scheduled task - only a customer gaming PC does. See KioskGuard.EnsureRegistered.
 Source: "branch\kiosk-guard.ps1"; DestDir: "{app}"; Components: core; Flags: ignoreversion
+; The SYSTEM updater. Ships to every role: this is what installs updates with nothing to click,
+; on counter PCs and gaming PCs alike. See KioskGuard.EnsureAutoUpdateTask.
+Source: "branch\apply-update.ps1"; DestDir: "{app}"; Components: core; Flags: ignoreversion
 ; NOTE: AppleEsports.config.json is deliberately NOT shipped. It is written by
 ; WriteClientConfig below, per machine, because what belongs in it depends on which kind
 ; of PC this is. The version in the repo is a developer's, pointed at a public server and
@@ -138,6 +141,7 @@ Filename: "sc.exe"; Parameters: "delete AppleEsportsDb";  Flags: runhidden; RunO
 ; The kiosk watchdog, for the same reason as the services above: left behind, it would keep
 ; trying to launch an executable that has just been deleted, every two minutes, for ever.
 Filename: "schtasks.exe"; Parameters: "/Delete /F /TN ""AppleEsports Kiosk Guard"""; Flags: runhidden; RunOnceId: "DelKioskGuard"
+Filename: "schtasks.exe"; Parameters: "/Delete /F /TN ""AppleEsports Auto Update"""; Flags: runhidden; RunOnceId: "DelAutoUpdate"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{localappdata}\AppleEsports"

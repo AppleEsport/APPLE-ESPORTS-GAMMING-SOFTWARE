@@ -606,6 +606,21 @@ public sealed class MainForm : Form
         var available = await updates.CheckAsync();
         if (available is null) return;
 
+        // Left to the SYSTEM task when there is one, and there is on every 3.1.1 machine onward.
+        //
+        // Not a fallback or a race - this path physically cannot finish the job. Installing needs
+        // elevation, this process does not have it, so Install() asks Windows and Windows puts up a
+        // prompt. On a gaming PC that prompt lands in front of a customer, over their game, asking
+        // for an administrator password they do not have; on a counter PC at 3am nobody sees it at
+        // all. Either way the update does not happen, and Process.Start only reports a failure when
+        // a prompt is actively refused, so an ignored one looks exactly like nothing to install.
+        // That is how gaming PCs sat four releases behind with no error anywhere.
+        //
+        // apply-update.ps1 runs as SYSTEM, which is already privileged and has no desktop to draw a
+        // prompt on, so it just installs. Standing down here also stops a pointless UAC box
+        // appearing over a customer's game every fifteen minutes.
+        if (KioskGuard.AutoUpdateTaskInstalled()) return;
+
         // Installed as soon as it is published, whoever happens to be playing.
         //
         // This reverses the wait that used to sit here, on the owner's explicit and repeated
