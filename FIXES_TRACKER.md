@@ -107,6 +107,15 @@ How to use this file:
   **Then tell the machine to stand down**: a `stand_down` branch command riding the heartbeat response, so a modern branch stops its own sync and says so on screen rather than running on quietly rejected. This half only works for builds that know the command — an older one answers "this branch does not know the command yet" and keeps running locally — so it is the courtesy, not the enforcement. Building it the other way round would be a feature that fails against precisely the machines it is needed for.
   Should record who revoked what and when, per #31.
 
+### Issue #34 — The Dashboard never warns about low stock
+- Where: Head Office and branch Dashboard, the low-stock figure.
+- What I did: Looked at the Dashboard while stock was running down.
+- What happened: It always reads 0. It has never once warned about anything.
+- What should happen instead: It should count the items actually at or below their reorder level, so running out is something the screen tells you before a customer does.
+- Priority: Urgent
+- Notes from investigation: `DashboardService.cs:83` reads `LowStockAlerts = 0, // Mocked for now`. Every other number in that same DTO — revenue, cash, online, wallet, bills, active PCs, operators — is computed from real data; this one field is a literal zero. It has to be counted from the inventory table against each item's reorder level.
+  Same shape as `upToDateCount = 0` behind "0 of 35 gaming PCs up to date" (#30), and worth treating as one class of bug rather than two coincidences: a placeholder put in so a screen would render, which then survives because a hardcoded 0 looks exactly like a real answer. Nothing throws, nothing is blank, so nobody questions it. Anything that cannot be answered yet should say so on screen rather than quietly return zero — that is the difference between "no alerts" and "not being counted", and only one of them is safe to trust.
+
 ## Fixed (history log)
 
 ### Issue #23 — Member "Forgot Password" was silently resetting the wrong account (2026-08-11)
