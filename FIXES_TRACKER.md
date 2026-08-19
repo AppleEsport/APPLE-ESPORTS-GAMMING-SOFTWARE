@@ -134,6 +134,22 @@ How to use this file:
 - Priority: Normal
 - Notes from investigation: Raised after #24 was confirmed working on a real machine. Not yet measured, and that is the first job — where the time actually goes decides the fix. Candidates worth timing separately: the app's own launch and WebView2 startup; the wait before it can reach the branch API, which on a gaming PC means the counter PC's API and database being up first; and the dashboard bundle being fetched over the LAN. The gaming PC also currently has to wait for the counter PC to be ready, which on a shop-wide power cut means every gaming PC is waiting on one machine. Measure before changing anything.
 
+### Issue #37 — The gaming PC agent connects to nothing, and never says so
+- Where: Every gaming PC. Root cause behind #35, the missing red state, and #38.
+- What happened: `AppleEsportsAgent.exe` is running (Windows named it as preventing shutdown), yet Head Office reports 0 agents online, 0 that ever beat, and 0 provisioned across all 35 Citylight PCs.
+- What should happen instead: the agent registers with its branch, stays registered, and complains loudly if it cannot.
+- Priority: Urgent
+- Notes: `DualConnectionService.cs:81` builds the hub URL with `?access_token={_config.MachineToken}`, and the hub inherits `[Authorize]` from `BranchAwareHub`. `ProvisionedAt` is null on every one of those PCs, so there is no machine token, so the connection is rejected as unauthorised - and `TryConnect`'s `catch { return false; }` at line 127 throws the reason away. Nothing is logged, nothing is shown, and the agent sits there apparently fine.
+  This one fault produces three separate reported bugs. Shutdown is sent to the SignalR group `agent:{pcId}` which nothing ever joined, so it vanishes silently (#35). A shut-down PC never turns red, because the agent's heartbeat is the only thing that would report power state - the legend now has a Shut Down colour with nothing able to set it. And PCs cannot appear by themselves (#38), because that needs the same registration.
+  Fixing the swallowed catch is not optional dressing on this: an agent that cannot reach its branch must be visible as broken, or the next person spends a day proving it is running before discovering it was never connected.
+
+### Issue #38 — A gaming PC should claim its own seat when the EXE is installed
+- Where: Setting up a new branch, or adding a PC to an existing one.
+- What happens now: all 35 PCs are created by hand up front, and each machine is then pointed at one of them. Nothing verifies the machine ever attached itself, so a PC can look configured while its agent is connected to nothing (#37).
+- What should happen instead: set up the operator counter PC for the branch first, then install the EXE on each gaming PC one at a time. Each one claims a seat over the LAN, is issued its machine token, registers, and appears on the Sessions dashboard immediately - no pre-created list.
+- Priority: Urgent
+- Notes: The owner's own proposal, and it is the right shape rather than a convenience. Provisioning is what issues the machine token the agent needs to register at all, so making installation do it removes the state where a PC exists in the database, looks set up, and has nothing behind it. `BranchProvisioningController` and `/api/agent/provision` already exist and `HeadOfficeClient.ProvisionAsync` already calls something like this - what is missing is the gaming PC doing it against its own branch on the LAN as part of setup, and the counter's Sessions grid being built from PCs that have actually reported rather than from rows somebody typed.
+
 ## Fixed (history log)
 
 ### Issue #23 — Member "Forgot Password" was silently resetting the wrong account (2026-08-11)
