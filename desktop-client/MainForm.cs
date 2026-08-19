@@ -606,28 +606,29 @@ public sealed class MainForm : Form
         var available = await updates.CheckAsync();
         if (available is null) return;
 
-        // An update must never interrupt a customer mid-session, and that is not only true of
-        // the seat they are sitting at. Upgrading a counter PC stops PostgreSQL and the branch
-        // API to replace them, so the shop cannot bill, seat anyone or end a session until it
-        // finishes - and this guard used to be gated on IsUserPc, so a counter took itself down
-        // mid-trade whenever a release happened to land, which is what every release so far had
-        // done to all four branches with no warning to whoever was at the till.
+        // Installed as soon as it is published, whoever happens to be playing.
         //
-        // Asked BEFORE the download, which is the whole point of where this line sits. It used
-        // to be asked after, so a branch with a customer playing downloaded the entire 164 MB
-        // installer, verified it, then dropped it - and did that again thirty seconds later, for
-        // as long as the shop stayed busy. Citylight ran that loop continuously from the moment
-        // 3.0.8 was published: gigabytes over a shop broadband line, slowing down the dashboard
-        // the operator was trying to work in. Nothing was gained by having downloaded it.
-        if (await IsSessionRunningAsync())
-        {
-            await ReportUpdateProgressAsync(
-                "waiting", 0,
-                $"Version {available.Version} is ready to install. Waiting for the branch to be " +
-                "free - an update is never installed while anyone is playing.");
-            return;
-        }
-
+        // This reverses the wait that used to sit here, on the owner's explicit and repeated
+        // instruction: updates start immediately, nothing held back, on gaming PCs and the counter
+        // alike. Written down because the wait was not arbitrary, and whoever reads this next
+        // should see a decision rather than assume an oversight.
+        //
+        // On a gaming PC it costs almost nothing. The app is replaced and restarted, so the
+        // overlay goes and comes back; the session is a row in the branch database and the
+        // installer never touches it, so the customer's time and money are safe either way.
+        //
+        // On a counter PC it is not free, and this is the part that was traded away. Installing
+        // stops PostgreSQL and the branch API to replace them, so for about a minute the till
+        // cannot bill, cannot seat anyone and cannot end a session - mid-trade, with no warning to
+        // whoever is standing at it. That was the whole reason for waiting, and it is accepted
+        // deliberately now.
+        //
+        // The other half of "no waiting" is not here and cannot be: Install() still launches the
+        // installer with Verb=runas, so Windows can raise an elevation prompt and sit on it for
+        // ever with nobody at the machine to answer. Until that is handed to the branch's own
+        // Windows service - which runs as LocalSystem and has no desktop to prompt on - this is
+        // only truly immediate where the app is already elevated or UAC is off. See
+        // FIXES_TRACKER.md #32.
         await ReportUpdateProgressAsync("downloading", 0, $"Downloading version {available.Version}.");
 
         var installer = await updates.DownloadAndVerifyAsync(available, DownloadProgressReporter());
@@ -640,19 +641,6 @@ public sealed class MainForm : Form
                 "failed", 0,
                 $"Could not download version {available.Version}, or the downloaded file did not " +
                 "match what Head Office published. Nothing was installed. It will try again.");
-            return;
-        }
-
-        // Asked a second time, because the first answer is now minutes old. A 164 MB download over
-        // a shop line is long enough for somebody to have walked in and been seated, and installing
-        // on top of them is the exact thing this guard exists to prevent. Cheap to ask, and the
-        // download is genuinely cached now, so waiting here costs nothing on the next pass.
-        if (await IsSessionRunningAsync())
-        {
-            await ReportUpdateProgressAsync(
-                "waiting", 100,
-                $"Version {available.Version} is downloaded, checked, and ready. Waiting for the " +
-                "branch to be free - it installs by itself as soon as nobody is playing.");
             return;
         }
 
