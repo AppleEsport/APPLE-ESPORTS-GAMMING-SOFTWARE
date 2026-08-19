@@ -396,13 +396,19 @@ begin
       without this call is how a failure here becomes a shop that simply never comes back. }
     EnsureServicesRunning();
 
-    MsgBox(
-      'The branch database could not be set up.' + #13#10#13#10 +
-      'The rest of the software installed, but this PC cannot run the branch until the '
-      + 'database is working.' + #13#10#13#10 +
-      'What went wrong was written to:' + #13#10 +
-      ExpandConstant('{commonappdata}\Apple Esports\logs\setup-database.log'),
-      mbCriticalError, MB_OK);
+    { Guarded for the same reason as the success message below, and it matters more here. A box
+      drawn in session 0 waits for a click that cannot come, so a FAILED silent update would hang
+      for ever and take every future update down with it - Inno will not start a second install
+      while this one is still sitting there. The log is where a silent failure gets reported; a
+      message box is only for somebody who is actually looking at the screen. }
+    if not WizardSilent then
+      MsgBox(
+        'The branch database could not be set up.' + #13#10#13#10 +
+        'The rest of the software installed, but this PC cannot run the branch until the '
+        + 'database is working.' + #13#10#13#10 +
+        'What went wrong was written to:' + #13#10 +
+        ExpandConstant('{commonappdata}\Apple Esports\logs\setup-database.log'),
+        mbCriticalError, MB_OK);
     Exit;
   end;
 
@@ -410,11 +416,12 @@ begin
   begin
     EnsureServicesRunning();
 
-    MsgBox(
-      'The database is ready, but the branch system did not start.' + #13#10#13#10 +
-      'What went wrong was written to:' + #13#10 +
-      ExpandConstant('{commonappdata}\Apple Esports\logs\setup-api.log'),
-      mbCriticalError, MB_OK);
+    if not WizardSilent then
+      MsgBox(
+        'The database is ready, but the branch system did not start.' + #13#10#13#10 +
+        'What went wrong was written to:' + #13#10 +
+        ExpandConstant('{commonappdata}\Apple Esports\logs\setup-api.log'),
+        mbCriticalError, MB_OK);
     Exit;
   end;
 
@@ -422,13 +429,27 @@ begin
     actually being up are not quite the same claim, and this costs nothing to be sure of. }
   EnsureServicesRunning();
 
-  MsgBox(
-    'This PC now runs the branch itself.' + #13#10#13#10 +
-    'The database and dashboard start automatically with Windows, so the shop works ' +
-    'even with no internet at all. The internet is only used to report to Head Office ' +
-    'and to receive updates.' + #13#10#13#10 +
-    'Point the gaming PCs at this machine when you set them up.',
-    mbInformation, MB_OK);
+  { Only when a person is actually there to read it.
+
+    This message stopped a branch updating for an hour. An update launched by the branch's own
+    Windows service runs in session 0, which has no desktop - so this box was drawn where nobody
+    could ever see it, let alone click OK, and Setup sat waiting on it. The install itself had
+    already succeeded; the process simply never exited. Inno refuses to start a second install
+    while one is running, so every later update downloaded, launched, and was turned away, and the
+    command that launched it cheerfully reported "verified and launched".
+
+    The comment further up this file assumed /SUPPRESSMSGBOXES answers these for us. It does not
+    do so reliably for MsgBox called from [Code], and the whole failure rests on that assumption
+    being believed rather than checked. WizardSilent is the actual question - is anybody looking -
+    so ask that instead of trusting a flag to have handled it. }
+  if not WizardSilent then
+    MsgBox(
+      'This PC now runs the branch itself.' + #13#10#13#10 +
+      'The database and dashboard start automatically with Windows, so the shop works ' +
+      'even with no internet at all. The internet is only used to report to Head Office ' +
+      'and to receive updates.' + #13#10#13#10 +
+      'Point the gaming PCs at this machine when you set them up.',
+      mbInformation, MB_OK);
 end;
 
 { The last thing that runs, whatever happened.
