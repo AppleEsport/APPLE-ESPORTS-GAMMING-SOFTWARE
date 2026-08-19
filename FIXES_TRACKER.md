@@ -87,6 +87,15 @@ How to use this file:
 - Priority: Normal
 - Notes from investigation: The 3.1.0 work writes update stage and progress to `BranchVersionStatuses`, which is live status and is overwritten on every report — nothing is kept. `RemoteBranchControl.SendAsync` does audit `remote_command_issued`, which is why "send this branch a specific version" shows up, but the ordinary automatic update path writes no audit entry at any stage. Worth doing together with #30, since both need the update path to record per-PC facts rather than one row per branch that everything overwrites.
 
+### Issue #32 — "Install updates by themselves" cannot actually make an update unattended
+- Where: Any branch. Updates page, the "Install updates by themselves" tick.
+- What I did: Left the tick on and published a new version, expecting the branch to update on its own.
+- What happened: On some machines it does; on others nothing happens and there is no error. Windows is quietly waiting for somebody to approve the installer, and nobody is standing at a counter PC at 3am to do it.
+- What should happen instead: With that tick on, an update installs with nothing to click, on every machine.
+- Priority: Urgent
+- Notes from investigation: The tick and the prompt are two different gates and ours cannot open the other one. `AutoUpdateEnabled` is our setting and means only "do not wait to be told to install". The prompt is Windows' UAC, asking whether a program may change the computer, and no application setting can switch that off — that is the point of it. `UpdateService.Install` launches the installer with `Verb = "runas"`, which asks for elevation, so the app gets a prompt unless it already happens to be elevated or UAC is turned off on that machine. That is exactly why this looks intermittent: the branches where updates have been arriving are the ones where the app runs elevated or UAC is off, and the rest sit there looking stuck. `Process.Start` only reports a failure if the prompt is actively refused, so an unanswered prompt is indistinguishable from nothing happening.
+  The fix already exists in the codebase, on a different path. `install_version` from Head Office is reliable precisely because the branch's Windows **service** runs the installer: a service is already LocalSystem and has no desktop to show a prompt on, so there is nothing to click and nothing to refuse — `BranchHeartbeatService.RunInstallVersionAsync` even notes it deliberately omits `runas` for that reason. The automatic update path should hand the verified installer to that same service instead of launching it from the desktop app. Doing so also removes the "Windows refused the installer" failure state added in 3.0.9, because it would no longer be reachable.
+
 ## Fixed (history log)
 
 ### Issue #23 — Member "Forgot Password" was silently resetting the wrong account (2026-08-11)
