@@ -478,8 +478,9 @@ export default function SessionsPage() {
           <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-pc-idle" /> Idle</div>
           <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-pc-active" /> Active</div>
           <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-pc-reserved" /> Reserved</div>
-          <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-neon-orange" /> Awaiting Bill</div>
-          <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-pc-offline" /> Maintenance</div>
+          <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-pc-awaiting" /> Awaiting Bill</div>
+          <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-pc-maintenance" /> Maintenance</div>
+          <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-pc-offline" /> Shut Down</div>
         </div>
         <div className="flex items-center gap-1 border border-border rounded-lg p-0.5">
           <button

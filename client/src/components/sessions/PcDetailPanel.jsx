@@ -49,7 +49,9 @@ const STATUS_STYLES = {
   Idle:            { text: 'text-pc-idle',     border: 'border-pc-idle/40',     label: 'FREE' },
   Active:          { text: 'text-pc-active',   border: 'border-pc-active/50',   label: 'OCCUPIED' },
   Reserved:        { text: 'text-pc-reserved', border: 'border-pc-reserved/50', label: 'RESERVED' },
-  AwaitingBilling: { text: 'text-neon-orange', border: 'border-neon-orange/50', label: 'BILLING' },
+  // pc-awaiting, matching the tile. Sharing neon-orange with "time finished" made the one state
+  // that owes money look like the one that does not.
+  AwaitingBilling: { text: 'text-pc-awaiting', border: 'border-pc-awaiting/50', label: 'BILLING' },
   UnderMaintenance:{ text: 'text-pc-offline',  border: 'border-pc-offline/30',  label: 'MAINT' },
   Expired:         { text: 'text-text-3',      border: 'border-border',        label: 'EXPIRED' },
 };

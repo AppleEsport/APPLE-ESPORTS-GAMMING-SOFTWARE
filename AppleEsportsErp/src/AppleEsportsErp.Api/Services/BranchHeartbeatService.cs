@@ -1164,6 +1164,34 @@ public class BranchHeartbeatService : BackgroundService
             return (false, $"Could not download or verify the installer: {ex.GetBaseException().Message}");
         }
 
+        // An installer already running is the one thing that guarantees this cannot work, and it is
+        // knowable before anything is launched.
+        //
+        // Inno Setup will not start a second install while one holds its mutex, so launching into
+        // that does nothing at all - and this method used to report "verified and launched" anyway,
+        // because launching a process is all it checked. A stuck installer from an earlier update
+        // sat on a Citylight counter PC for an hour, and every attempt in that hour was downloaded
+        // in full, refused, and reported as a success. The version on screen never moved and no
+        // error existed anywhere to explain it.
+        //
+        // Refusing here, and saying why, is the difference between an hour of guessing and a
+        // sentence that names the problem.
+        var runningInstaller = Process.GetProcesses()
+            .FirstOrDefault(p =>
+            {
+                try { return p.ProcessName.StartsWith("AppleEsports-Branch-Setup", StringComparison.OrdinalIgnoreCase); }
+                catch { return false; }
+            });
+
+        if (runningInstaller is not null)
+        {
+            TryDeleteInstaller(target);
+            return (false,
+                $"An installer is already running on this PC ({runningInstaller.ProcessName}, started " +
+                $"{runningInstaller.StartTime:HH:mm}). Windows will not run two at once, so nothing was " +
+                "installed. If it has been sitting there, end that process and send this again.");
+        }
+
         try
         {
             // /LOG for the same reason the desktop app's own installs write one - without it a
@@ -1177,7 +1205,12 @@ public class BranchHeartbeatService : BackgroundService
             // has no desktop session to show a UAC prompt on even if it asked for one.
             Process.Start(new ProcessStartInfo(target)
             {
-                Arguments = $"/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /RESTARTAPPLICATIONS \"/LOG={log}\"",
+                // /NORESTARTAPPLICATIONS, not /RESTARTAPPLICATIONS. That flag hands the install to
+                // Windows Restart Manager to close and reopen the user's applications - which is
+                // meaningless from a service in session 0, where there is no user session to put
+                // anything back, and is one more thing that can sit waiting on a desktop nobody
+                // can reach. The app is started again by its own autostart entry regardless.
+                Arguments = $"/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NORESTARTAPPLICATIONS \"/LOG={log}\"",
                 UseShellExecute = true,
             });
         }

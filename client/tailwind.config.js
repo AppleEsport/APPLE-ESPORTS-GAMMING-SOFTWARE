@@ -45,12 +45,19 @@ export default {
           'green-dim': 'rgba(34, 211, 166, 0.08)',
         },
         // PC State Colors (SOP §7.1)
+        // Brightened deliberately. These are read from behind the counter, several metres away, at
+        // a glance - the previous shades were picked to sit quietly in a dark theme, which is the
+        // opposite of what this particular grid is for.
+        //
+        // maintenance is its own token now. It used to borrow pc.offline, so a machine taken out of
+        // service for a fortnight looked identical to one that had simply lost power.
         pc: {
-          idle: '#4da6ff', // blue
-          active: '#22d3a6', // green
-          reserved: '#eab308', // yellow
-          awaiting: '#ff8c42', // orange
-          offline: '#dc2626', // red
+          idle: '#00baff',        // bright blue   - free
+          active: '#00e676',      // bright green  - playing
+          reserved: '#5b21b6',    // dark purple   - booked
+          awaiting: '#ffffff',    // white         - waiting to be billed
+          offline: '#ff2d55',     // bright red    - shut down
+          maintenance: '#ffd400', // bright yellow - out of service
         },
         // Text hierarchy
         text: {
