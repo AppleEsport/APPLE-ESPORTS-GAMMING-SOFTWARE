@@ -177,12 +177,25 @@ internal static class KioskGuard
         // WScript.Shell.Run with window style 0 never creates a window in the first place.
         var launcher = Path.Combine(Path.GetDirectoryName(Environment.ProcessPath!)!, "run-hidden.vbs");
 
+        // No /RL HIGHEST, and that omission is the fix rather than a detail.
+        //
+        // Measured on a real machine: a process that is not elevated cannot create a task carrying
+        // /RL HIGHEST - schtasks answers "Access is denied" - while the identical command without it
+        // succeeds and runs as the logged-in user, which is exactly what this task needs.
+        //
+        // So on a gaming PC this task could only ever be created during an install, where the
+        // installer's post-install step happens to launch the app elevated. Every ordinary launch
+        // afterwards was refused, silently, which is why 3.1.4's change to run-hidden.vbs reached no
+        // machine at all and the flicker survived a release that was supposed to end it.
+        //
+        // The watchdog has no need of elevation. Its whole job is starting the app in the user's own
+        // session, and /RL HIGHEST bought nothing while making the task permanently unfixable.
         Run("schtasks.exe",
             File.Exists(launcher)
-                ? $"/Create /F /TN \"{TaskName}\" /SC MINUTE /MO 2 /RL HIGHEST " +
+                ? $"/Create /F /TN \"{TaskName}\" /SC MINUTE /MO 2 " +
                   $"/TR \"wscript.exe //B //Nologo \\\"{launcher}\\\" \\\"{script}\\\"\""
                 // Older install without the launcher: still register, still works, still blinks.
-                : $"/Create /F /TN \"{TaskName}\" /SC MINUTE /MO 2 /RL HIGHEST " +
+                : $"/Create /F /TN \"{TaskName}\" /SC MINUTE /MO 2 " +
                   $"/TR \"powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \\\"{script}\\\"\"");
     }
 
