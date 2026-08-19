@@ -116,6 +116,24 @@ How to use this file:
 - Notes from investigation: `DashboardService.cs:83` reads `LowStockAlerts = 0, // Mocked for now`. Every other number in that same DTO — revenue, cash, online, wallet, bills, active PCs, operators — is computed from real data; this one field is a literal zero. It has to be counted from the inventory table against each item's reorder level.
   Same shape as `upToDateCount = 0` behind "0 of 35 gaming PCs up to date" (#30), and worth treating as one class of bug rather than two coincidences: a placeholder put in so a screen would render, which then survives because a hardcoded 0 looks exactly like a real answer. Nothing throws, nothing is blank, so nobody questions it. Anything that cannot be answered yet should say so on screen rather than quietly return zero — that is the difference between "no alerts" and "not being counted", and only one of them is safe to trust.
 
+### Issue #35 — Shutdown does nothing, because it is sent to a program that is not running
+- Where: Counter PC, Sessions page. Both "Shut Down PC" and "Shut Down All PCs".
+- What I did: Started a session on a gaming PC, stopped it, then tried per-PC shutdown and shut-down-all.
+- What happened: Nothing at all, and no error either. The gaming PC stayed on.
+- What should happen instead: The PC shuts down.
+- Priority: Urgent
+- Notes from investigation: The command is delivered to the SignalR group `agent:{pcId}`, and only `AppleEsportsAgent.exe` ever joins that group — by calling `AgentConnected` in `DualConnectionService.cs:123`. At Citylight, all 35 PCs report 0 agents online, 0 that have ever sent an agent heartbeat, and 0 provisioned, so nothing has ever joined those groups. `Clients.Group(...).SendAsync(...)` does not fail when a group is empty, so the message is dropped in silence and the operator gets a success toast. The shutdown work in #25 is correct as far as it goes — role check, branch check, skipping busy PCs — it just hands off to a listener that is not there.
+  Two ways out, and the second is better. The agent could be made to run and stay running on gaming PCs (kiosk-guard.ps1 already starts `AppleEsportsAgent.exe` when the file is present, so 3.1.1 may partly do this by accident). But the more solid route is to stop depending on that separate program: `AppleEsports.exe` is definitely running on a gaming PC — it is drawing the lock screen — and it already has a native bridge for `session-ended`. Delivering shutdown to the overlay page and letting the native shell run the shutdown removes a whole component from the path, and with it the failure mode where the visible app is fine and the invisible one is missing.
+  Whichever is chosen, the hub should stop reporting success for a command nobody received. Sending to an empty group is knowable at the moment of sending, and saying "no agent is connected to that PC" is the difference between a bug that took one test to find and one that hid behind a green toast.
+
+### Issue #36 — A gaming PC takes too long to be usable after switching on
+- Where: Gaming PCs, from power on to the Choose User Type screen.
+- What I did: Switched a gaming PC on.
+- What happened: Startup works correctly now, but it takes longer than it should before the screen is ready for a customer.
+- What should happen instead: Ready as quickly as possible after Windows arrives at the desktop.
+- Priority: Normal
+- Notes from investigation: Raised after #24 was confirmed working on a real machine. Not yet measured, and that is the first job — where the time actually goes decides the fix. Candidates worth timing separately: the app's own launch and WebView2 startup; the wait before it can reach the branch API, which on a gaming PC means the counter PC's API and database being up first; and the dashboard bundle being fetched over the LAN. The gaming PC also currently has to wait for the counter PC to be ready, which on a shop-wide power cut means every gaming PC is waiting on one machine. Measure before changing anything.
+
 ## Fixed (history log)
 
 ### Issue #23 — Member "Forgot Password" was silently resetting the wrong account (2026-08-11)
