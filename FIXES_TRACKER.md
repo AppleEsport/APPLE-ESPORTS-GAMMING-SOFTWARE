@@ -71,6 +71,22 @@ How to use this file:
 - Priority: Normal
 - Notes from investigation: The widget inherited `TopMost` from the full-screen gate. That pin is right for the gate — the walk-in/member screen and the locked "session ended" screen must beat anything on the desktop, or a game drawn over the top of them is a customer playing with no session — but it was being kept once the overlay shrank to the widget. Now only the full-screen modes are pinned; bubble and panel are ordinary windows. It already defaults to the bottom-right corner.
 
+### Issue #30 — The operator cannot see a gaming PC's update happening
+- Where: Counter PC, Updates page.
+- What I did: Looked for what the gaming PCs attached to this counter are doing during an update.
+- What happened: Nothing about them is shown. The counter reports its own version and progress, and the gaming PCs report nothing at all.
+- What should happen instead: If a gaming PC is connected to this counter, the operator should see that its update is happening and how far along it is, the same way the counter's own is now shown.
+- Priority: Normal
+- Notes from investigation: `BranchVersionStatuses` already has `GamingPcsUpToDateCount` and `GamingPcsTotalCount`, and the total is filled in honestly — but `BranchVersionReporterService` passes `upToDateCount = 0` hardcoded, so "0 of 35" is what it always says regardless of the truth. Nothing anywhere records a gaming PC's own version. The 3.1.0 stage/progress reporting added in this session is per-branch, sent by whichever app is running; a gaming PC reports under the same branch id as the counter, so the two would overwrite each other rather than appearing separately. Needs per-PC rows, not just per-branch, and each gaming PC reporting its own version and stage.
+
+### Issue #31 — Updates leave no trace in the Audit Trail
+- Where: Audit Trail, whole system.
+- What I did: Looked for a record of updates being approved, sent, started, finished or failed.
+- What happened: None of it is in the Audit Trail. Approving a version, a branch downloading and installing one, an install failing, and a PC being pushed a specific version are all invisible there.
+- What should happen instead: Every step of an update should appear in the Audit Trail, like the rest of the system — who approved it, which branch and which PC took it, when it started, whether it finished, and why it failed if it did.
+- Priority: Normal
+- Notes from investigation: The 3.1.0 work writes update stage and progress to `BranchVersionStatuses`, which is live status and is overwritten on every report — nothing is kept. `RemoteBranchControl.SendAsync` does audit `remote_command_issued`, which is why "send this branch a specific version" shows up, but the ordinary automatic update path writes no audit entry at any stage. Worth doing together with #30, since both need the update path to record per-PC facts rather than one row per branch that everything overwrites.
+
 ## Fixed (history log)
 
 ### Issue #23 — Member "Forgot Password" was silently resetting the wrong account (2026-08-11)
