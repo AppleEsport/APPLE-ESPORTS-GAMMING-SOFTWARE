@@ -12,7 +12,7 @@
 ; ============================================================================
 
 #define AppName        "Apple Esports"
-#define AppVersion     "3.1.3"
+#define AppVersion     "3.1.4"
 #define AppPublisher   "Apple Esports"
 #define Staging        "branch\staging"
 
@@ -75,6 +75,10 @@ Source: "branch\kiosk-guard.ps1"; DestDir: "{app}"; Components: core; Flags: ign
 ; The SYSTEM updater. Ships to every role: this is what installs updates with nothing to click,
 ; on counter PCs and gaming PCs alike. See KioskGuard.EnsureAutoUpdateTask.
 Source: "branch\apply-update.ps1"; DestDir: "{app}"; Components: core; Flags: ignoreversion
+; Starts the watchdog with no console window. Task Scheduler launching powershell.exe as the
+; logged-in user flashes one every time regardless of -WindowStyle Hidden, which on a gaming PC
+; meant a black box blinking over the customer's game every two minutes. See KioskGuard.
+Source: "branch\run-hidden.vbs"; DestDir: "{app}"; Components: core; Flags: ignoreversion
 ; NOTE: AppleEsports.config.json is deliberately NOT shipped. It is written by
 ; WriteClientConfig below, per machine, because what belongs in it depends on which kind
 ; of PC this is. The version in the repo is a developer's, pointed at a public server and

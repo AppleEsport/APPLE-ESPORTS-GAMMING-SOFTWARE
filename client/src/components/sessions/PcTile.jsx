@@ -1,29 +1,38 @@
 import { memo, useState, useEffect, useId } from 'react';
-import { Infinity as InfinityIcon } from 'lucide-react';
+import { Keyboard, Mouse, Clock } from 'lucide-react';
 import { motion } from 'framer-motion';
 import api from '../../config/api';
 import { useToast } from '../ui/Toast';
 
 // ── Pancafe-style status colors: icon + name + status dot only, no inline
 // timers/charges/buttons — click a tile to load its detail panel ──
+// bg is a permanent wash across the whole tile rather than a hover effect, and that is what makes a
+// status readable from across the room instead of only when the mouse happens to be on it.
+//
+// AwaitingBilling uses pc-awaiting (white) now. It used to borrow neon-orange, which left the
+// dedicated token unused and made "waiting to be billed" and "time finished" the same colour - two
+// states an operator has to tell apart at a glance, because only one of them owes money.
+//
+// UnderMaintenance gets its own yellow for the same reason: it used to share red with a PC that had
+// simply been shut down.
 const STATUS_STYLES = {
-  Idle:            { icon: 'text-pc-idle',     dot: 'bg-pc-idle',     border: 'border-pc-idle/40',     label: 'FREE' },
-  Active:          { icon: 'text-pc-active',   dot: 'bg-pc-active',   border: 'border-pc-active/50',   label: 'OCCUPIED' },
-  Reserved:        { icon: 'text-pc-reserved', dot: 'bg-pc-reserved', border: 'border-pc-reserved/50',  label: 'RESERVED' },
-  AwaitingBilling: { icon: 'text-neon-orange', dot: 'bg-neon-orange', border: 'border-neon-orange/50',  label: 'BILLING' },
-  UnderMaintenance:{ icon: 'text-pc-offline',  dot: 'bg-pc-offline',  border: 'border-pc-offline/40',   label: 'MAINT' },
-  Expired:         { icon: 'text-text-3',      dot: 'bg-text-3',      border: 'border-border',          label: 'EXPIRED' },
+  Idle:            { icon: 'text-pc-idle',        dot: 'bg-pc-idle',        border: 'border-pc-idle/50',        bg: 'bg-pc-idle/10',        label: 'FREE' },
+  Active:          { icon: 'text-pc-active',      dot: 'bg-pc-active',      border: 'border-pc-active/60',      bg: 'bg-pc-active/10',      label: 'OCCUPIED' },
+  Reserved:        { icon: 'text-pc-reserved',    dot: 'bg-pc-reserved',    border: 'border-pc-reserved/60',    bg: 'bg-pc-reserved/25',    label: 'RESERVED' },
+  AwaitingBilling: { icon: 'text-pc-awaiting',    dot: 'bg-pc-awaiting',    border: 'border-pc-awaiting/60',    bg: 'bg-pc-awaiting/10',    label: 'BILLING' },
+  UnderMaintenance:{ icon: 'text-pc-maintenance', dot: 'bg-pc-maintenance', border: 'border-pc-maintenance/60', bg: 'bg-pc-maintenance/10', label: 'MAINT' },
+  Expired:         { icon: 'text-neon-orange',    dot: 'bg-neon-orange',    border: 'border-neon-orange/60',    bg: 'bg-neon-orange/10',    label: 'EXPIRED' },
 };
-const DEFAULT_STYLE = { icon: 'text-text-3', dot: 'bg-pc-offline', border: 'border-pc-offline/40', label: 'OFFLINE' };
-const PENDING_STYLE = { icon: 'text-accent', dot: 'bg-accent', border: 'border-accent/50', label: 'PENDING' };
+const DEFAULT_STYLE = { icon: 'text-pc-offline', dot: 'bg-pc-offline', border: 'border-pc-offline/50', bg: 'bg-pc-offline/10', label: 'OFFLINE' };
+const PENDING_STYLE = { icon: 'text-accent', dot: 'bg-accent', border: 'border-accent/50', bg: 'bg-accent/10', label: 'PENDING' };
 
 // ── Tile size steps — driven by the zoom control on SessionsPage ──
 export const TILE_SIZES = ['sm', 'md', 'lg', 'xl'];
 const SIZE_STYLES = {
-  sm: { glyph: 'w-10 h-10', infinity: 'w-4 h-4', name: 'text-xs',   status: 'text-[9px]',  dot: 'w-1.5 h-1.5', gap: 'gap-1',   py: 'py-3'  },
-  md: { glyph: 'w-16 h-16', infinity: 'w-6 h-6', name: 'text-base', status: 'text-[10px]', dot: 'w-2 h-2',     gap: 'gap-2',   py: 'py-5'  },
-  lg: { glyph: 'w-24 h-24', infinity: 'w-9 h-9', name: 'text-xl',   status: 'text-xs',     dot: 'w-2.5 h-2.5', gap: 'gap-2.5', py: 'py-7'  },
-  xl: { glyph: 'w-32 h-32', infinity: 'w-12 h-12', name: 'text-2xl', status: 'text-sm',    dot: 'w-3 h-3',     gap: 'gap-3',   py: 'py-9'  },
+  sm: { glyph: 'w-10 h-10', infinity: 'w-4 h-4', name: 'text-xs',   status: 'text-[9px]',  dot: 'w-2 h-2',     gap: 'gap-1',   py: 'py-3'  },
+  md: { glyph: 'w-16 h-16', infinity: 'w-6 h-6', name: 'text-base', status: 'text-[10px]', dot: 'w-2.5 h-2.5', gap: 'gap-2',   py: 'py-5'  },
+  lg: { glyph: 'w-24 h-24', infinity: 'w-9 h-9', name: 'text-xl',   status: 'text-xs',     dot: 'w-3 h-3',     gap: 'gap-2.5', py: 'py-7'  },
+  xl: { glyph: 'w-32 h-32', infinity: 'w-12 h-12', name: 'text-2xl', status: 'text-sm',    dot: 'w-4 h-4',     gap: 'gap-3',   py: 'py-9'  },
 };
 
 // ── Glossy monitor glyph: bezel + screen + diagonal light sheen + stand,
@@ -147,7 +156,7 @@ const PcTile = memo(({ pc, walkinReq, isSelected, onSelect, onQuickStart, onRefr
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       title={walkinReq ? `${pc.name}: Walk-in pending` : hasReservation ? `${pc.name}: RESERVED at ${new Date(pc.nextReservationTime).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}` : isPayAsYouGo ? `${pc.name}: ${style.label} (Pay-As-You-Go, ${timerLabel} elapsed)` : hasPlanTime ? `${pc.name}: ${style.label} (${timerLabel} left)` : `${pc.name}: ${style.label}`}
-      className={`group relative flex flex-col items-center justify-center ${sizeStyle.gap} rounded-xl ${sizeStyle.py} px-2 select-none transition-all
+      className={`group relative flex flex-col items-center justify-center ${sizeStyle.gap} rounded-xl ${sizeStyle.py} px-2 select-none transition-all border ${style.border} ${style.bg ?? ''}
         ${isSelected ? 'brightness-150 scale-105' : 'hover:brightness-125 hover:scale-105'}
         ${isDragOver ? 'bg-pc-active/5' : ''}
         ${isActive ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'}
@@ -160,11 +169,21 @@ const PcTile = memo(({ pc, walkinReq, isSelected, onSelect, onQuickStart, onRefr
       )}
 
       <div className={`relative flex items-center justify-center ${(walkinReq || pc.state === 'AwaitingBilling') ? 'animate-pulse' : ''}`}>
-        <MonitorGlyph className={style.icon} sizeClass={sizeStyle.glyph} glow={isActive || isSelected}>
-          {isPayAsYouGo && (
-            <foreignObject x="16" y="12" width="32" height="24">
-              <div className="flex items-center justify-center w-full h-full">
-                <InfinityIcon className={`${sizeStyle.infinity} text-neon-purple`} strokeWidth={2.5} />
+        <MonitorGlyph className={style.icon} sizeClass={sizeStyle.glyph} glow={true}>
+          {/* What the customer is being charged on, said with a picture rather than a symbol. An
+              infinity glyph is accurate and means nothing from four metres away; a keyboard and
+              mouse reads as "playing, charged as they go", and a clock reads as "bought an hour". */}
+          {(isPayAsYouGo || hasPlanTime) && (
+            <foreignObject x="14" y="12" width="36" height="24">
+              <div className="flex items-center justify-center w-full h-full gap-0.5">
+                {isPayAsYouGo ? (
+                  <>
+                    <Keyboard className={`${sizeStyle.infinity} text-pc-active`} strokeWidth={2.5} />
+                    <Mouse className={`${sizeStyle.infinity} text-pc-active`} strokeWidth={2.5} />
+                  </>
+                ) : (
+                  <Clock className={`${sizeStyle.infinity} text-neon-orange`} strokeWidth={2.5} />
+                )}
               </div>
             </foreignObject>
           )}

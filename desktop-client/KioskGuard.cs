@@ -149,12 +149,27 @@ internal static class KioskGuard
 
         if (TaskExists(TaskName)) return;
 
-        // schtasks rather than a scheduled-task COM reference, to keep this to the framework the
-        // rest of the client already uses. /RL HIGHEST so it can start the app after a logon where
-        // the shell is still coming up; /F to replace a stale definition rather than fail.
+        // Launched through run-hidden.vbs rather than powershell.exe directly, and that is not
+        // fussiness - it is the fix for a console window blinking over a customer's game every two
+        // minutes, all evening.
+        //
+        // This task has to run as the logged-in user: its job is to start the app into that
+        // person's session, which SYSTEM cannot do. But Task Scheduler starting powershell.exe
+        // interactively creates a console window before PowerShell is running to hide itself, so
+        // -WindowStyle Hidden is answered too late and a black box flashes every time. The update
+        // task never had this problem because it runs as SYSTEM, which has no desktop at all -
+        // which is exactly why this was easy to miss.
+        //
+        // WScript.Shell.Run with window style 0 never creates a window in the first place.
+        var launcher = Path.Combine(Path.GetDirectoryName(Environment.ProcessPath!)!, "run-hidden.vbs");
+
         Run("schtasks.exe",
-            $"/Create /F /TN \"{TaskName}\" /SC MINUTE /MO 2 /RL HIGHEST " +
-            $"/TR \"powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \\\"{script}\\\"\"");
+            File.Exists(launcher)
+                ? $"/Create /F /TN \"{TaskName}\" /SC MINUTE /MO 2 /RL HIGHEST " +
+                  $"/TR \"wscript.exe //B //Nologo \\\"{launcher}\\\" \\\"{script}\\\"\""
+                // Older install without the launcher: still register, still works, still blinks.
+                : $"/Create /F /TN \"{TaskName}\" /SC MINUTE /MO 2 /RL HIGHEST " +
+                  $"/TR \"powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \\\"{script}\\\"\"");
     }
 
     private static bool TaskExists(string taskName)
@@ -198,12 +213,47 @@ internal static class KioskGuard
     /// </summary>
     public static void DisableUntilRestart()
     {
+        // Written first, in case this process happens to have the rights - a counter PC does, and
+        // it saves an elevation prompt there.
         try
         {
             Directory.CreateDirectory(StateDirectory);
             File.WriteAllText(FlagPath, BootStamp);
+            if (File.Exists(FlagPath)) return;
         }
-        catch { /* if this fails the watchdog simply reopens the app - the safe direction */ }
+        catch { /* fall through to the elevated route below */ }
+
+        // A gaming PC's app runs as whoever is logged in, and this folder belongs to the installer,
+        // which created it as administrator. So the write above was simply refused - and being
+        // wrapped in a catch, it was refused silently: Ctrl+Alt+Q asked for the PIN, closed the
+        // app, and the watchdog put it straight back two minutes later with nothing anywhere to
+        // say why.
+        //
+        // Asking for elevation is the right answer rather than a fallback, and it is not a burden
+        // here: somebody has just typed the admin PIN and is standing at the machine. The one thing
+        // that must NOT be done is moving the flag somewhere an ordinary user can write - a
+        // customer able to create it could switch the kiosk off and walk out to Windows, which is
+        // precisely what the watchdog exists to stop.
+        try
+        {
+            var script = Path.Combine(Path.GetDirectoryName(Environment.ProcessPath!)!, "kiosk-guard.ps1");
+            if (!File.Exists(script)) return;
+
+            using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("powershell.exe")
+            {
+                Arguments = $"-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"{script}\" -Disable",
+                UseShellExecute = true,
+                Verb = "runas",
+            });
+
+            p?.WaitForExit(20000);
+        }
+        catch
+        {
+            // Refused at the prompt. The app closes anyway and the watchdog reopens it, which is
+            // the safe direction to fail in - a PC that stays protected rather than one that
+            // silently does not.
+        }
     }
 
     /// <summary>

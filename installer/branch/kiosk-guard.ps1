@@ -20,7 +20,8 @@
 #>
 
 param(
-    [switch]$Resume
+    [switch]$Resume,
+    [switch]$Disable
 )
 
 $ErrorActionPreference = 'Stop'
@@ -63,6 +64,24 @@ function Start-IfMissing([string]$processName, [string]$path) {
     if (Get-Process -Name $processName -ErrorAction SilentlyContinue) { return }
 
     Start-Process -FilePath $path
+}
+
+if ($Disable) {
+    # Writes the flag that stands the watchdog down until the next restart.
+    #
+    # Done from here, elevated, rather than by the app itself. The app on a gaming PC runs as
+    # whoever is logged in, and this folder was created by the installer as administrator - so the
+    # app's own attempt to write the flag was refused and swallowed, and Ctrl+Alt+Q appeared to
+    # work while the watchdog put the app straight back two minutes later.
+    #
+    # It must NOT be somewhere an ordinary user can write. A customer who could create this file
+    # could switch the kiosk off themselves and walk out to Windows, which is the whole thing the
+    # watchdog exists to prevent. Elevation is the right answer here and costs nothing: a member of
+    # staff has just typed the admin PIN and is standing at the machine.
+    New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
+    Set-Content -Path $FlagPath -Value (Get-BootStamp) -Encoding ascii
+    Write-Output 'Kiosk mode off until this PC restarts.'
+    exit 0
 }
 
 if ($Resume) {
