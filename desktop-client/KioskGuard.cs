@@ -98,7 +98,13 @@ internal static class KioskGuard
         var script = Path.Combine(Path.GetDirectoryName(exe)!, "apply-update.ps1");
         if (!File.Exists(script)) return;   // older install without the updater shipped
 
-        if (TaskExists(AutoUpdateTaskName)) return;
+        // Written every launch, not only when missing. /F replaces, so this is idempotent.
+        //
+        // Skipping when a task already exists is what let a broken definition live for ever: an
+        // existing task was taken as a correct one. A machine that received a task from an older
+        // build kept that build's command line through every update after it, because the code that
+        // would have corrected it returned early on the first line. Two schtasks calls on a
+        // background thread at startup is nothing; a definition that can never be repaired is not.
 
         // Every 15 minutes. Frequent enough that a release reaches the shop the same day without
         // anybody thinking about it, and rare enough that thirty-five gaming PCs asking their
@@ -147,7 +153,15 @@ internal static class KioskGuard
         var script = Path.Combine(Path.GetDirectoryName(exe)!, "kiosk-guard.ps1");
         if (!File.Exists(script)) return;   // older install without the guard shipped
 
-        if (TaskExists(TaskName)) return;
+        // Rewritten on every launch, not only when the task is missing, and this is the line that
+        // actually made the flicker stop.
+        //
+        // 3.1.4 changed this task to launch through run-hidden.vbs to kill a console window that
+        // blinked over customers' games every two minutes. It changed nothing on any real machine,
+        // because every one of them already had the task from 3.1.0 - and an existing task was
+        // being treated as a correct task, so the code returned on the line above before it could
+        // replace anything. The flicker would have outlived every future update. /F replaces, so
+        // writing it each time is safe and is the only way a bad definition ever gets corrected.
 
         // Launched through run-hidden.vbs rather than powershell.exe directly, and that is not
         // fussiness - it is the fix for a console window blinking over a customer's game every two
