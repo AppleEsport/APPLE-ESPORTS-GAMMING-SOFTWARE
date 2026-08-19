@@ -12,7 +12,7 @@
 ; ============================================================================
 
 #define AppName        "Apple Esports"
-#define AppVersion     "3.1.2"
+#define AppVersion     "3.1.3"
 #define AppPublisher   "Apple Esports"
 #define Staging        "branch\staging"
 
@@ -129,6 +129,18 @@ Name: "{autodesktop}\{#AppName}";        Filename: "{app}\AppleEsports.exe"
 ; wizard still reports success - which is exactly how an install ends up looking fine
 ; while the branch has no database and can never start. It runs from CurStepChanged
 ; instead, where the exit code can be checked and a failure actually reported.
+; Registers the auto-update task from HERE, while Setup still has administrator rights.
+;
+; It used to be done by the app on launch, and that could never work on a gaming PC: creating a
+; task that runs as SYSTEM needs admin, and the app runs as whoever is logged in. It failed
+; silently on every launch, so a gaming PC stayed on an old version with the script sitting right
+; there on disk and no error anywhere. The counter PC masked it completely, because its app happens
+; to run elevated and so the same broken code appeared to work.
+;
+; runascurrentuser is wrong here and deliberately not used - Setup is elevated and that elevation
+; is exactly what this needs.
+Filename: "powershell.exe"; Parameters: "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{app}\apply-update.ps1"" -Register"; StatusMsg: "Setting up automatic updates..."; Flags: runhidden waituntilterminated; Components: core
+
 Filename: "{app}\AppleEsports.exe"; Description: "Set up this PC now"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]

@@ -27,6 +27,23 @@
     Files, which needs admin rights to change in the first place.
 #>
 
+<#
+    -Register creates the scheduled task that runs this script, and is called by the installer.
+
+    It has to be the installer that does this, not the app. Creating a task that runs as SYSTEM
+    needs administrator rights, and on a gaming PC the app runs as whoever is logged in - an
+    ordinary user. So the app's attempt failed every single time, silently, and the machine sat on
+    an old version with the whole mechanism apparently in place: the script was on disk, the app had
+    tried, nothing errored anywhere. A counter PC worked only because its app happens to run
+    elevated, which made the same broken code look like it worked and hid the fault completely.
+
+    The installer is already elevated - it writes to Program Files and registers Windows services -
+    so it is the one place that can do this and know it succeeded.
+#>
+param(
+    [switch]$Register
+)
+
 $ErrorActionPreference = 'Stop'
 
 $AppDir     = $PSScriptRoot
@@ -42,6 +59,23 @@ function Write-Log([string]$message) {
         Add-Content -Path $LogPath -Value $line
     } catch { }
     Write-Output $line
+}
+
+if ($Register) {
+    # /RU SYSTEM is the point of the whole thing: SYSTEM is already privileged and has no desktop,
+    # so the install needs no prompt and there is nothing for anyone to click or ignore.
+    $task = 'AppleEsports Auto Update'
+    $tr = 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f (Join-Path $AppDir 'apply-update.ps1')
+
+    & schtasks.exe /Create /F /TN $task /SC MINUTE /MO 15 /RU SYSTEM /RL HIGHEST /TR $tr | Out-Null
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Log "Could not register the auto-update task (schtasks exit $LASTEXITCODE)."
+        exit $LASTEXITCODE
+    }
+
+    Write-Log "Registered '$task' to run every 15 minutes as SYSTEM."
+    exit 0
 }
 
 try {
