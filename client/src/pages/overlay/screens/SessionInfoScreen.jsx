@@ -240,8 +240,15 @@ export default function SessionInfoScreen() {
       {/* Session Status Header */}
       <div className="flex items-center justify-between mb-8">
         <div>
+          {/* pcId here is the raw route param the desktop client's overlay window opens with -
+              the PC's internal Guid (see desktop-client/AppConfig.cs's PcId), never meant to be
+              read by a customer. It used to be the fallback here, so on the rare response where
+              sessionData.pcName came back empty this heading showed a bare GUID like
+              "F702A3E4-F94D-4A57-A587-4EAEBC28A693" instead of anything meaningful - even though
+              sessionData.customerName is already always populated (backend defaults it to
+              "Guest") and rendered correctly a few sections below under the Customer label. */}
           <h1 className="font-heading text-3xl font-bold text-text tracking-wider uppercase">
-            {sessionData.pcName || pcId}
+            {sessionData.pcName || sessionData.customerName || 'Session'}
           </h1>
           <div className="flex items-center gap-2 mt-1">
             <span className="w-2 h-2 rounded-full bg-neon-green shadow-[0_0_5px_#22d3a6]" />

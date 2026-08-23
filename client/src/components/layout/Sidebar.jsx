@@ -8,6 +8,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { ROLES, DASHBOARDS } from '../../config/constants';
+import api from '../../config/api';
 
 const MIN_SIDEBAR_WIDTH = 180;
 const MAX_SIDEBAR_WIDTH = 420;
@@ -179,6 +180,18 @@ export default function Sidebar({ isOpen, onClose, collapsed = false, width = 24
   const location = useLocation();
   const [resizing, setResizing] = useState(false);
 
+  // The real, currently-running build version - straight from the API's own assembly
+  // (VersionController.GetRunningVersion), not a hardcoded string in this component that
+  // drifts the moment a new build ships. This footer used to read a fixed "v2.0" no matter
+  // what was actually installed, which is exactly what made "did the update really take
+  // effect" impossible to answer just by looking at the running app.
+  const [appVersion, setAppVersion] = useState(null);
+  useEffect(() => {
+    api.get('/versions/running')
+      .then(({ data }) => setAppVersion(data?.data?.version || null))
+      .catch(() => setAppVersion(null));
+  }, []);
+
   const handleResizeStart = useCallback((e) => {
     e.preventDefault();
     setResizing(true);
@@ -322,7 +335,7 @@ export default function Sidebar({ isOpen, onClose, collapsed = false, width = 24
             </div>
           )}
           <div className="text-[9px] text-text-3 font-mono tracking-wide px-1">
-            v2.0 · SOP Compliant
+            {appVersion ? `v${appVersion}` : 'v—'} · SOP Compliant
           </div>
         </div>
         </div>
