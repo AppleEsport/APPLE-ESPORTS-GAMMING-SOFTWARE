@@ -208,7 +208,7 @@ export function OverlaySocketProvider({ children, pcId, isMinimized: initialMini
       if ('speechSynthesis' in window) {
         setTimeout(() => {
           const utterance = new SpeechSynthesisUtterance(
-            `Attention. ${Math.floor(remaining)} rupees remaining in your gaming wallet. That is about ${minutes} minute${minutes === 1 ? '' : 's'} of play. Please top up to continue.`
+            `Attention. ${Math.floor(remaining)} rupees remaining in your gaming Member Amount. That is about ${minutes} minute${minutes === 1 ? '' : 's'} of play. Please top up to continue.`
           );
           utterance.rate = 0.9;
           utterance.pitch = 1.1;

@@ -436,7 +436,7 @@ export default function ReservationsPage() {
                   <div className="flex items-center gap-2 mt-1.5 bg-neon-purple/10 border border-neon-purple/30 rounded px-2.5 py-1.5">
                     <CheckCircle className="w-3.5 h-3.5 text-neon-purple" />
                     <span className="text-[10px] font-semibold text-neon-purple">{selectedMember.fullName}</span>
-                    <span className="text-[9px] text-text-3 font-mono">• Wallet: ₹{selectedMember.gamingBalance?.toFixed(0) || 0}</span>
+                    <span className="text-[9px] text-text-3 font-mono">• Member Amount: ₹{selectedMember.gamingBalance?.toFixed(0) || 0}</span>
                   </div>
                 )}
               </div>

@@ -54,8 +54,8 @@ const SUMMARIES = {
   denomination_count: () => 'counted the drawer\'s notes and coins',
 
   member_create: (d) => `registered member ${d?.FullName ?? ''} (${d?.MemberNumber ?? '?'})`,
-  wallet_recharge: (d) => `topped up a wallet by ${money(d?.Amount)}${d?.PaymentType ? ` (${d.PaymentType})` : ''}`,
-  wallet_deduction: (d) => `deducted ${money(d?.Amount)} from a wallet${d?.Reason ? ` (${d.Reason})` : ''}`,
+  wallet_recharge: (d) => `topped up Member Amount by ${money(d?.Amount)}${d?.PaymentType ? ` (${d.PaymentType})` : ''}`,
+  wallet_deduction: (d) => `deducted ${money(d?.Amount)} from Member Amount${d?.Reason ? ` (${d.Reason})` : ''}`,
   points_redeem: (d) => `redeemed ${d?.Points ?? ''} loyalty points`.trim(),
 
   operator_create: (d) => `added operator ${d?.FullName ?? ''}`.trim(),
@@ -158,5 +158,16 @@ export function summarize(action, details, success = true) {
   return pairs ? `${titleCase(action)} — ${pairs}` : titleCase(action);
 }
 
+// Display-only overrides for action codes whose auto-generated (titleCase) label would still
+// read "Wallet" — the `value` stays the real action code the backend expects, only the label
+// shown in the dropdown changes.
+const ACTION_LABEL_OVERRIDES = {
+  wallet_recharge: 'Member Amount Top-Up',
+  wallet_deduction: 'Member Amount Deduction',
+};
+
 /** For the action filter dropdown - every code this file knows how to describe, readably labelled. */
-export const KNOWN_ACTIONS = Object.keys(SUMMARIES).map((value) => ({ value, label: titleCase(value) }));
+export const KNOWN_ACTIONS = Object.keys(SUMMARIES).map((value) => ({
+  value,
+  label: ACTION_LABEL_OVERRIDES[value] ?? titleCase(value),
+}));

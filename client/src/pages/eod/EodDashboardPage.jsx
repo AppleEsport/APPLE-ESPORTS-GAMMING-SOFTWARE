@@ -276,7 +276,7 @@ export default function EodDashboardPage() {
       // handover shortfall must not vanish from the column it explains.
       body: [
         ['Opening Balance Total', `Rs ${report.cash.totalOpeningBalance}`],
-        ['Cash Sales + Wallet TopUps', `Rs ${report.cash.totalCashSales}`],
+        ['Cash Sales + Member Amount Top-Ups', `Rs ${report.cash.totalCashSales}`],
         ['Petty Expenses', `-Rs ${report.cash.totalPettyExpenses}`],
         ...(Number(report.cash.differencesFoundEarlier ?? 0) !== 0
           ? [[
@@ -307,8 +307,8 @@ export default function EodDashboardPage() {
       body: [
         ['Cash', `Rs ${report.paymentMethods.totalCash}`],
         ['Online', `Rs ${report.paymentMethods.totalOnline}`],
-        ['Wallet Deductions (Gaming/Food)', `Rs ${report.paymentMethods.totalWalletDeductions}`],
-        ['Wallet Top-Ups (Cash Collected)', `Rs ${report.paymentMethods.totalWalletTopUps}`],
+        ['Member Amount Deductions (Gaming/Food)', `Rs ${report.paymentMethods.totalWalletDeductions}`],
+        ['Member Amount Top-Ups (Cash Collected)', `Rs ${report.paymentMethods.totalWalletTopUps}`],
         ['Credits Pending', `-Rs ${creditsPending}`],
         ['Overall End Total', `Rs ${overallEndTotal}`],
         ['Total Sessions', String(report.operations.totalSessions)],

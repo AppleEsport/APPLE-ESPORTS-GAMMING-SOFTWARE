@@ -81,7 +81,7 @@ export const deletePc = async (id) => {
 
 // --- Audit Logs ---
 export const getAuditLogs = async () => {
-  const response = await api.get('/audit-logs?limit=500');
+  const response = await api.get('/audit-logs?pageSize=500');
   return response.data;
 };
 
