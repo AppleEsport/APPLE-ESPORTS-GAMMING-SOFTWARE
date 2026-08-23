@@ -144,6 +144,20 @@ ADD COLUMN IF NOT EXISTS ""PhotoDataUrl"" text,
 ADD COLUMN IF NOT EXISTS ""AadharDataUrl"" text;
 ");
 
+        // A PC that has never been claimed by a real machine used to be created as Idle -
+        // PcsController.Create now creates it AwaitingSetup instead, but that fix only reaches
+        // PCs created after it shipped. Every PC added before then is still sitting on the old
+        // value, on every branch that had already added one, and looks identical on screen to a
+        // real, working, free PC. MachineId IS NULL is the same signal AwaitingSetup itself is
+        // defined by - a real claim always sets it - so this can never touch a PC that is
+        // genuinely idle and working. Runs on every startup rather than once, so it also cleans
+        // up anything added between two updates on a branch that skipped a version, and finds
+        // nothing to do once a branch is already caught up.
+        db.Database.ExecuteSqlRaw(@"
+UPDATE pcs SET ""State"" = 'awaitingsetup', ""PoweredOff"" = false
+WHERE ""MachineId"" IS NULL AND ""State"" = 'idle';
+");
+
         // Seed the four branches, their PCs, pricing and operators — at HEAD OFFICE, in
         // Development ONLY.
         //
