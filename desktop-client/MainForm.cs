@@ -498,6 +498,16 @@ public sealed class MainForm : Form
                 return;
             }
 
+            // Posted by OverlaySocketContext.jsx on PcStatusHub's ShutdownPc - the operator's
+            // "Shut Down" button, carried over the same live connection this PC already holds
+            // for its lock screen and session overlay. Only meaningful on a gaming PC; a counter
+            // PC ignores it. Fixed-word, no parameter, same as close-app above.
+            if (string.Equals(message, "shutdown-pc", StringComparison.Ordinal))
+            {
+                if (_config.IsUserPc) ShutdownMachine();
+                return;
+            }
+
             // Everything else is the JSON overlay-layout/overlay-drag bridge UserOverlayApp.jsx
             // posts on every mode change and every drag movement — only meaningful, and only
             // handled, on a customer gaming PC.
@@ -511,10 +521,6 @@ public sealed class MainForm : Form
         };
 
         Connect();
-
-        // Clear a stale "kiosk off" flag before anything reads it. Staff stepping out of kiosk
-        // mode lasts until the machine restarts and no longer, and this is the restart.
-        KioskGuard.ClearStaleFlag();
 
         // Fire and forget. An update check must never delay the dashboard appearing — the
         // shop opens whether or not Head Office is reachable.
@@ -1001,16 +1007,12 @@ public sealed class MainForm : Form
                 return true;
 
             // Ctrl+Alt+Q is "Exit Kiosk Mode / Switch to Windows" on a gaming PC: staff have
-            // asked, with a PIN, for this machine to be an ordinary Windows PC for a while. The
-            // watchdog is told to stand down first, or it would simply put the app back within
-            // two minutes and the option would appear not to work. It lasts until the next
-            // restart, and no longer - see KioskGuard.DisableUntilRestart.
+            // asked, with a PIN, for this machine to be an ordinary Windows PC for a while.
+            // There is no watchdog left to stand down - closing the app is the whole thing. It
+            // stays closed until somebody opens it again (the desktop shortcut) or the PC is
+            // restarted, whichever comes first.
             case Keys.Control | Keys.Alt | Keys.Q:
-                if (Unlocked("close Apple Esports"))
-                {
-                    if (_config.IsUserPc) KioskGuard.DisableUntilRestart();
-                    ForceExit();
-                }
+                if (Unlocked("close Apple Esports")) ForceExit();
                 return true;
 
             // Swallowed on both roles now that neither has a close button - Alt+F4 must not
@@ -1182,6 +1184,25 @@ public sealed class MainForm : Form
     {
         _allowClose = true;
         Application.Exit();
+    }
+
+    /// <summary>
+    /// "Shut Down" from the operator's PC screen (PcStatusHub.SendShutdownCommand), carried here
+    /// over the connection this PC already holds for its lock screen and session overlay - see
+    /// the shutdown-pc case in WebMessageReceived above. Windows' own shutdown.exe, not a script:
+    /// one built-in command, same as calling schtasks.exe elsewhere in this app.
+    /// </summary>
+    private void ShutdownMachine()
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("shutdown.exe", "/s /t 0 /f")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            });
+        }
+        catch { /* nothing else to do if Windows itself refuses to shut down */ }
     }
 
     /// <summary>

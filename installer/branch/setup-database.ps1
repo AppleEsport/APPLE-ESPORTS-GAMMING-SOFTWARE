@@ -16,8 +16,11 @@ param(
 
     # Where this branch reports to. The shop does not need it to trade - it is used only by
     # the background courier, so Head Office can see what happened here. Overridable so the
-    # move to the owner's own server is a parameter, not a rebuild.
-    [string]$HeadOfficeUrl = 'http://140.245.195.222:8081',
+    # move to the owner's own server is a parameter, not a rebuild - which is exactly what
+    # happened here: the business moved off this address, and this default did not move with
+    # it until now. Every branch installed since then quietly kept relaying to the old
+    # server, including for its own "which branches exist" list during setup.
+    [string]$HeadOfficeUrl = 'http://68.233.113.53:8081',
 
     # Must match setup-api.ps1's own default - see the App:BaseUrl comment below for why.
     [int]   $ApiPort = 5016

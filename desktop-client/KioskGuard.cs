@@ -3,7 +3,7 @@ using Microsoft.Win32;
 namespace AppleEsports.Desktop;
 
 /// <summary>
-/// Makes sure this machine comes back on its own, and lets staff deliberately step out.
+/// Makes sure this machine comes back on its own.
 ///
 /// Nothing on a gaming PC used to start by itself. A power cut, or a customer choosing Restart,
 /// left Windows on its desktop with no lock screen, no member login, no session gate and no
@@ -11,34 +11,27 @@ namespace AppleEsports.Desktop;
 /// Menu and Desktop shortcut and nothing more; the branch API was the only thing that came back,
 /// because it was the only Windows service.
 ///
-/// Two halves, because they fail differently. The registry Run entry handles a boot. A scheduled
-/// task handles everything else - the app being closed, or crashing at nine in the evening with
-/// nobody looking - by checking every couple of minutes. Registered from here rather than only by
-/// the installer so that it repairs itself: a Run key removed by a customer, cleanup software or
-/// somebody tidying msconfig would otherwise leave the PC quietly unprotected until the next time
-/// it was reinstalled, with nothing to indicate it.
+/// One piece now, not two. There used to be a second half here - a scheduled task that woke up
+/// every two minutes, running a PowerShell script, to relaunch the app if it had been closed or
+/// had crashed. That is also what caused a console window to blink over customers' games, and
+/// what made "Exit Kiosk Mode" refuse to stay off - the watchdog kept fighting the very thing
+/// staff had just asked for. It is gone entirely, script and task both. The tradeoff is explicit
+/// and accepted: if the app is closed or crashes mid-session, nothing brings it back until the
+/// PC is next restarted. A power cut already meant a restart, which is the case this guard
+/// exists for; nothing here was ever meant to survive the app dying while Windows stays up.
+///
+/// Registered from here rather than only by the installer so that it repairs itself: a Run key
+/// removed by a customer, cleanup software or somebody tidying msconfig would otherwise leave
+/// the PC quietly unprotected until the next time it was reinstalled, with nothing to indicate it.
 /// </summary>
 internal static class KioskGuard
 {
     private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string RunValueName = "AppleEsports";
-    private const string TaskName = "AppleEsports Kiosk Guard";
     private const string AutoUpdateTaskName = "AppleEsports Auto Update";
 
-    private static string StateDirectory => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Apple Esports");
-
-    private static string FlagPath => Path.Combine(StateDirectory, "kiosk-off.flag");
-
-    /// <summary>
-    /// Which boot this is, as "now minus how long the machine has been up".
-    ///
-    /// kiosk-guard.ps1 computes this identically ([Environment]::TickCount64), so the two always
-    /// agree about which boot they are in - that agreement is what makes "Exit Kiosk Mode lasts
-    /// until the next restart" work without needing anywhere to store state that a reboot wipes.
-    /// </summary>
-    private static string BootStamp =>
-        DateTime.Now.AddMilliseconds(-Environment.TickCount64).ToString("yyyy-MM-ddTHH:mm:ss");
+    /// <summary>The watchdog task this version retires. Only referenced now to remove it.</summary>
+    private const string LegacyWatchdogTaskName = "AppleEsports Kiosk Guard";
 
     /// <summary>
     /// Called on every launch. Never throws: a PC that cannot register its own guard still has to
@@ -53,12 +46,11 @@ internal static class KioskGuard
         // their own - see EnsureAutoUpdateTask.
         try { EnsureAutoUpdateTask(); } catch { /* best effort */ }
 
-        // The relaunch watchdog is for customer machines only. On a counter PC the operator closes
-        // the app deliberately, with a PIN, and having it reappear two minutes later would be a
-        // fault rather than a feature.
-        if (!isGamingPc) return;
-
-        try { EnsureWatchdogTask(); } catch { /* best effort */ }
+        // A machine upgraded from an older build may still have the retired watchdog task and its
+        // now-deleted script files registered. Left alone, Task Scheduler would keep trying to
+        // launch a script that no longer exists, every two minutes, forever. Harmless to call when
+        // there is nothing to remove - schtasks simply reports so.
+        if (isGamingPc) try { RemoveLegacyWatchdogTask(); } catch { /* best effort */ }
     }
 
     /// <summary>
@@ -146,57 +138,14 @@ internal static class KioskGuard
         key.SetValue(RunValueName, wanted, RegistryValueKind.String);
     }
 
-    private static void EnsureWatchdogTask()
+    /// <summary>
+    /// Removes the watchdog task this version retires, from any machine that still has it from
+    /// an older install. /Delete on a task that does not exist just fails quietly - nothing here
+    /// needs to know in advance whether there was anything to remove.
+    /// </summary>
+    private static void RemoveLegacyWatchdogTask()
     {
-        if (Environment.ProcessPath is not { } exe) return;
-
-        var script = Path.Combine(Path.GetDirectoryName(exe)!, "kiosk-guard.ps1");
-        if (!File.Exists(script)) return;   // older install without the guard shipped
-
-        // Rewritten on every launch, not only when the task is missing, and this is the line that
-        // actually made the flicker stop.
-        //
-        // 3.1.4 changed this task to launch through run-hidden.vbs to kill a console window that
-        // blinked over customers' games every two minutes. It changed nothing on any real machine,
-        // because every one of them already had the task from 3.1.0 - and an existing task was
-        // being treated as a correct task, so the code returned on the line above before it could
-        // replace anything. The flicker would have outlived every future update. /F replaces, so
-        // writing it each time is safe and is the only way a bad definition ever gets corrected.
-
-        // Launched through run-hidden.vbs rather than powershell.exe directly, and that is not
-        // fussiness - it is the fix for a console window blinking over a customer's game every two
-        // minutes, all evening.
-        //
-        // This task has to run as the logged-in user: its job is to start the app into that
-        // person's session, which SYSTEM cannot do. But Task Scheduler starting powershell.exe
-        // interactively creates a console window before PowerShell is running to hide itself, so
-        // -WindowStyle Hidden is answered too late and a black box flashes every time. The update
-        // task never had this problem because it runs as SYSTEM, which has no desktop at all -
-        // which is exactly why this was easy to miss.
-        //
-        // WScript.Shell.Run with window style 0 never creates a window in the first place.
-        var launcher = Path.Combine(Path.GetDirectoryName(Environment.ProcessPath!)!, "run-hidden.vbs");
-
-        // No /RL HIGHEST, and that omission is the fix rather than a detail.
-        //
-        // Measured on a real machine: a process that is not elevated cannot create a task carrying
-        // /RL HIGHEST - schtasks answers "Access is denied" - while the identical command without it
-        // succeeds and runs as the logged-in user, which is exactly what this task needs.
-        //
-        // So on a gaming PC this task could only ever be created during an install, where the
-        // installer's post-install step happens to launch the app elevated. Every ordinary launch
-        // afterwards was refused, silently, which is why 3.1.4's change to run-hidden.vbs reached no
-        // machine at all and the flicker survived a release that was supposed to end it.
-        //
-        // The watchdog has no need of elevation. Its whole job is starting the app in the user's own
-        // session, and /RL HIGHEST bought nothing while making the task permanently unfixable.
-        Run("schtasks.exe",
-            File.Exists(launcher)
-                ? $"/Create /F /TN \"{TaskName}\" /SC MINUTE /MO 2 " +
-                  $"/TR \"wscript.exe //B //Nologo \\\"{launcher}\\\" \\\"{script}\\\"\""
-                // Older install without the launcher: still register, still works, still blinks.
-                : $"/Create /F /TN \"{TaskName}\" /SC MINUTE /MO 2 " +
-                  $"/TR \"powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \\\"{script}\\\"\"");
+        Run("schtasks.exe", $"/Delete /F /TN \"{LegacyWatchdogTaskName}\"");
     }
 
     private static bool TaskExists(string taskName)
@@ -228,80 +177,5 @@ internal static class KioskGuard
         });
 
         p?.WaitForExit(15000);
-    }
-
-    /// <summary>
-    /// "Exit Kiosk Mode / Switch to Windows" - staff have deliberately asked for this PC to be
-    /// usable as an ordinary Windows machine, so the watchdog stops putting the app back.
-    ///
-    /// Stamped with the current boot, which is what makes it end at the next restart. A flag that
-    /// outlived a reboot would leave the machine permanently open with nothing on any screen to
-    /// say so, and that is a worse state than the bug this whole guard was written to fix.
-    /// </summary>
-    public static void DisableUntilRestart()
-    {
-        // Written first, in case this process happens to have the rights - a counter PC does, and
-        // it saves an elevation prompt there.
-        try
-        {
-            Directory.CreateDirectory(StateDirectory);
-            File.WriteAllText(FlagPath, BootStamp);
-            if (File.Exists(FlagPath)) return;
-        }
-        catch { /* fall through to the elevated route below */ }
-
-        // A gaming PC's app runs as whoever is logged in, and this folder belongs to the installer,
-        // which created it as administrator. So the write above was simply refused - and being
-        // wrapped in a catch, it was refused silently: Ctrl+Alt+Q asked for the PIN, closed the
-        // app, and the watchdog put it straight back two minutes later with nothing anywhere to
-        // say why.
-        //
-        // Asking for elevation is the right answer rather than a fallback, and it is not a burden
-        // here: somebody has just typed the admin PIN and is standing at the machine. The one thing
-        // that must NOT be done is moving the flag somewhere an ordinary user can write - a
-        // customer able to create it could switch the kiosk off and walk out to Windows, which is
-        // precisely what the watchdog exists to stop.
-        try
-        {
-            var script = Path.Combine(Path.GetDirectoryName(Environment.ProcessPath!)!, "kiosk-guard.ps1");
-            if (!File.Exists(script)) return;
-
-            using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("powershell.exe")
-            {
-                Arguments = $"-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"{script}\" -Disable",
-                UseShellExecute = true,
-                Verb = "runas",
-            });
-
-            p?.WaitForExit(20000);
-        }
-        catch
-        {
-            // Refused at the prompt. The app closes anyway and the watchdog reopens it, which is
-            // the safe direction to fail in - a PC that stays protected rather than one that
-            // silently does not.
-        }
-    }
-
-    /// <summary>
-    /// Clears a flag left behind by an earlier boot.
-    ///
-    /// The watchdog does this too, but the app can be started by hand before the task's next
-    /// two-minute tick, and it should not be looking at a stale flag while it decides anything.
-    /// </summary>
-    public static void ClearStaleFlag()
-    {
-        try
-        {
-            if (!File.Exists(FlagPath)) return;
-
-            var stored = File.ReadAllText(FlagPath).Trim();
-            if (!DateTime.TryParse(stored, out var storedBoot)) { File.Delete(FlagPath); return; }
-            if (!DateTime.TryParse(BootStamp, out var currentBoot)) return;
-
-            if (Math.Abs((storedBoot - currentBoot).TotalMinutes) >= 3)
-                File.Delete(FlagPath);
-        }
-        catch { /* best effort */ }
     }
 }

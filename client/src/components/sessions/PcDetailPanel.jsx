@@ -54,9 +54,19 @@ const STATUS_STYLES = {
   AwaitingBilling: { text: 'text-pc-awaiting', border: 'border-pc-awaiting/50', label: 'BILLING' },
   UnderMaintenance:{ text: 'text-pc-offline',  border: 'border-pc-offline/30',  label: 'MAINT' },
   Expired:         { text: 'text-text-3',      border: 'border-border',        label: 'EXPIRED' },
+  // A PC record no physical machine has ever claimed - matches PcTile.jsx's own AwaitingSetup
+  // entry and the same pc-awaitingsetup token, so this state reads the same way in both places
+  // an operator can see it.
+  AwaitingSetup:   { text: 'text-pc-awaitingsetup', border: 'border-pc-awaitingsetup/50', label: 'NOT SET UP' },
 };
 const DEFAULT_STYLE = { text: 'text-text-3', border: 'border-border', label: 'OFFLINE' };
 const PENDING_STYLE = { text: 'text-accent', border: 'border-accent/50', label: 'WALK-IN PENDING' };
+
+// PC was shut down (pc.poweredOff) while a session was still open on it - the clock is still
+// billing but the machine has actually powered off. Kept distinct from the plain offline style
+// above for the same reason as the tile: an operator needs to see at a glance that this one
+// still owes money. Reuses neon-orange, the same token PcTile.jsx's Expired state uses.
+const SHUTDOWN_BILLING_STYLE = { text: 'text-neon-orange', border: 'border-neon-orange/60', label: 'OFF - BILLING' };
 
 // ── Persistent detail panel — shows placeholder when nothing is selected,
 // otherwise renders the form/info/actions appropriate to that PC's state ──
@@ -145,7 +155,22 @@ export default function PcDetailPanel({
   }
 
   const hasUpcomingReservation = pc.nextReservationTime && new Date(pc.nextReservationTime) > new Date();
-  const style = walkinReq ? PENDING_STYLE : (hasUpcomingReservation ? STATUS_STYLES.Reserved : (STATUS_STYLES[pc.state] || DEFAULT_STYLE));
+
+  // pc.poweredOff means PcStatusHub's shutdown command was sent and the PC has not reconnected
+  // since (see backend Pc.PoweredOff). Combined with state here purely to pick the header
+  // badge's colour/label - none of the body sections below key off this, only off pc.state, so
+  // a shut-down PC with a session still open on it keeps showing that session's normal details.
+  const hasOpenSession = pc.state === 'Active' || pc.state === 'AwaitingBilling';
+  const isShutDownWhileBilling = pc.poweredOff && hasOpenSession;
+  const isShutDownIdle = pc.poweredOff && !hasOpenSession;
+
+  const style = walkinReq
+    ? PENDING_STYLE
+    : isShutDownWhileBilling
+      ? SHUTDOWN_BILLING_STYLE
+      : isShutDownIdle
+        ? DEFAULT_STYLE
+        : (hasUpcomingReservation ? STATUS_STYLES.Reserved : (STATUS_STYLES[pc.state] || DEFAULT_STYLE));
   const isActive = pc.state === 'Active';
   const isAwaiting = pc.state === 'AwaitingBilling';
   const isReserved = pc.state === 'Reserved' || hasUpcomingReservation;

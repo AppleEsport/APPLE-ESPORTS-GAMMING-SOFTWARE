@@ -12,7 +12,7 @@
 ; ============================================================================
 
 #define AppName        "Apple Esports"
-#define AppVersion     "3.1.6"
+#define AppVersion     "3.1.8"
 #define AppPublisher   "Apple Esports"
 #define Staging        "branch\staging"
 
@@ -69,16 +69,9 @@ Source: "..\SHORTCUT_KEYS.md";                        DestDir: "{app}"; Componen
 ; triggered on an operator PC) rather than gated to the gaming component alone, since a
 ; machine can change role after install via Ctrl+Shift+P without a reinstall.
 Source: "branch\end-session-cleanup.ps1"; DestDir: "{app}"; Components: core; Flags: ignoreversion
-; The kiosk watchdog. Ships to every role because the app decides at runtime whether to
-; register the scheduled task - only a customer gaming PC does. See KioskGuard.EnsureRegistered.
-Source: "branch\kiosk-guard.ps1"; DestDir: "{app}"; Components: core; Flags: ignoreversion
 ; The SYSTEM updater. Ships to every role: this is what installs updates with nothing to click,
 ; on counter PCs and gaming PCs alike. See KioskGuard.EnsureAutoUpdateTask.
 Source: "branch\apply-update.ps1"; DestDir: "{app}"; Components: core; Flags: ignoreversion
-; Starts the watchdog with no console window. Task Scheduler launching powershell.exe as the
-; logged-in user flashes one every time regardless of -WindowStyle Hidden, which on a gaming PC
-; meant a black box blinking over the customer's game every two minutes. See KioskGuard.
-Source: "branch\run-hidden.vbs"; DestDir: "{app}"; Components: core; Flags: ignoreversion
 ; NOTE: AppleEsports.config.json is deliberately NOT shipped. It is written by
 ; WriteClientConfig below, per machine, because what belongs in it depends on which kind
 ; of PC this is. The version in the repo is a developer's, pointed at a public server and
@@ -122,9 +115,6 @@ Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 [Icons]
 Name: "{group}\{#AppName}";              Filename: "{app}\AppleEsports.exe"
 Name: "{group}\Keyboard shortcuts";      Filename: "{app}\SHORTCUT_KEYS.md"
-; Puts kiosk protection back after somebody used Ctrl+Alt+Q to step out to Windows. Needed
-; because once the app is closed there is no screen of ours left to offer the option on.
-Name: "{group}\Return to Kiosk Mode"; Filename: "powershell.exe"; Parameters: "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{app}\kiosk-guard.ps1"" -Resume"; Components: core
 Name: "{group}\Uninstall {#AppName}";    Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}";        Filename: "{app}\AppleEsports.exe"
 
