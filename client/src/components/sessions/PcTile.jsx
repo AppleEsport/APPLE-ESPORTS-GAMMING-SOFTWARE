@@ -97,8 +97,15 @@ const PcTile = memo(({ pc, walkinReq, isSelected, onSelect, onQuickStart, onRefr
   // session still open on it (Active/AwaitingBilling) is still billing the customer and needs
   // the operator's attention, which a plain "Shut Down" tile would hide.
   const hasOpenSession = pc.state === 'Active' || pc.state === 'AwaitingBilling';
-  const isShutDownWhileBilling = pc.poweredOff && hasOpenSession;
-  const isShutDownIdle = pc.poweredOff && !hasOpenSession;
+
+  // A PC still AwaitingSetup has never been claimed by a real machine, so poweredOff being true
+  // on one is stale leftover state from before the backend guarded shutdown commands against
+  // this exact case (SendShutdownCommand/SendShutdownAllCommand skip AwaitingSetup PCs now) -
+  // never a real signal to act on. Excluded here too so old, already-stuck data can't force a
+  // never-set-up PC to render as freshly shut down.
+  const neverClaimed = pc.state === 'AwaitingSetup';
+  const isShutDownWhileBilling = pc.poweredOff && hasOpenSession && !neverClaimed;
+  const isShutDownIdle = pc.poweredOff && !hasOpenSession && !neverClaimed;
 
   const style = walkinReq
     ? PENDING_STYLE
