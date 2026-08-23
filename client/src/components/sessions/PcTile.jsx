@@ -120,6 +120,15 @@ const PcTile = memo(({ pc, walkinReq, isSelected, onSelect, onQuickStart, onRefr
   const isPayAsYouGo = isActive && !!pc.activeSessionId && !pc.sessionEndTime;
   const hasPlanTime = isActive && !!pc.sessionEndTime;
 
+  // Same distinction as above, but for the plan-type glyph alone: it should still read while
+  // a session is AwaitingBilling (time's up or manually stopped, still owed) - the whole
+  // reason it's a separate pair of booleans instead of reusing isPayAsYouGo/hasPlanTime is
+  // that those two also drive timerLabel, which must keep showing "BILLING" (via style.label)
+  // rather than a stale countdown once the session leaves Active.
+  const showPlanGlyph = hasOpenSession && !!pc.activeSessionId;
+  const glyphIsPayAsYouGo = showPlanGlyph && !pc.sessionEndTime;
+  const glyphIsPlanTime = showPlanGlyph && !!pc.sessionEndTime;
+
   useEffect(() => {
     if (!isActive) return;
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -203,10 +212,10 @@ const PcTile = memo(({ pc, walkinReq, isSelected, onSelect, onQuickStart, onRefr
           {/* What the customer is being charged on, said with a picture rather than a symbol. An
               infinity glyph is accurate and means nothing from four metres away; a keyboard and
               mouse reads as "playing, charged as they go", and a clock reads as "bought an hour". */}
-          {(isPayAsYouGo || hasPlanTime) && (
+          {(glyphIsPayAsYouGo || glyphIsPlanTime) && (
             <foreignObject x="14" y="12" width="36" height="24">
               <div className="flex items-center justify-center w-full h-full gap-0.5">
-                {isPayAsYouGo ? (
+                {glyphIsPayAsYouGo ? (
                   <>
                     <Keyboard className={`${sizeStyle.infinity} text-pc-active`} strokeWidth={2.5} />
                     <Mouse className={`${sizeStyle.infinity} text-pc-active`} strokeWidth={2.5} />

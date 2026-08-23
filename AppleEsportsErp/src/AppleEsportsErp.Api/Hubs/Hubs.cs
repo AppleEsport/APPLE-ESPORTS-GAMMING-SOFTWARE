@@ -234,7 +234,12 @@ public class PcStatusHub : BranchAwareHub
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var pc = await db.Pcs.FirstOrDefaultAsync(p => p.Id == pcGuid);
-            if (pc != null)
+
+            // AwaitingSetup means no real machine has ever claimed this PC - there is nothing to
+            // shut down, and marking it PoweredOff would make an unclaimed PC indistinguishable
+            // from a real one that was just switched off. See the same guard in
+            // SendShutdownAllCommand.
+            if (pc != null && pc.State != Domain.Enums.PcState.AwaitingSetup)
             {
                 pc.PoweredOff = true;
                 pc.UpdatedAt = DateTimeOffset.UtcNow;
@@ -288,7 +293,14 @@ public class PcStatusHub : BranchAwareHub
             p.State == Domain.Enums.PcState.Active ||
             p.State == Domain.Enums.PcState.AwaitingBilling).ToList();
 
-        var targets = pcs.Except(busy).ToList();
+        // A PC still AwaitingSetup has no real machine that has ever claimed it - no agent
+        // listening, nothing plugged in as far as this system knows. There is nothing to send a
+        // shutdown to, and marking one PoweredOff would make an unclaimed PC look identical to a
+        // real one that was just switched off, which is exactly the distinction this state exists
+        // to preserve.
+        var neverClaimed = pcs.Where(p => p.State == Domain.Enums.PcState.AwaitingSetup).ToList();
+
+        var targets = pcs.Except(busy).Except(neverClaimed).ToList();
 
         // Same reasoning as SendShutdownCommand: mark these powered-off in the database so their
         // tiles actually change colour, not only send the live command. Loaded separately from

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Monitor, User, Clock, Wrench, AlertTriangle, Square, RefreshCw, Receipt, Coffee, Gift, Banknote, X, Power } from 'lucide-react';
+import { Monitor, User, Clock, Wrench, AlertTriangle, Square, RefreshCw, Receipt, Coffee, Gift, Banknote, X, Power, Keyboard, Mouse } from 'lucide-react';
 import api from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
@@ -178,6 +178,28 @@ export default function PcDetailPanel({
   const isMaintenance = pc.state === 'UnderMaintenance';
   const canStart = !walkinReq && pc.state === 'Idle' && !hasUpcomingReservation;
 
+  // What this session is billed on - same rule as PcTile.jsx's isPayAsYouGo/hasPlanTime: an
+  // open session with no end time is billed as time elapses (Pay-As-You-Go), one with an end
+  // time was a fixed pre-purchased duration. Shown for both Active and AwaitingBilling, since
+  // a session that finished still had one or the other - only an idle/offline/maintenance PC
+  // genuinely has no plan to show an icon for.
+  const hasSessionPlan = hasOpenSession && !!pc.activeSessionId;
+  const isPayAsYouGoPlan = hasSessionPlan && !pc.sessionEndTime;
+  const isFixedPlan = hasSessionPlan && !!pc.sessionEndTime;
+
+  const PlanIcon = () => (
+    isPayAsYouGoPlan ? (
+      <span className="flex items-center gap-0.5 text-pc-active" title="Pay-As-You-Go">
+        <Keyboard className="w-3 h-3" strokeWidth={2.5} />
+        <Mouse className="w-3 h-3" strokeWidth={2.5} />
+      </span>
+    ) : isFixedPlan ? (
+      <span className="text-neon-orange" title="Limited Time Plan">
+        <Clock className="w-3 h-3" strokeWidth={2.5} />
+      </span>
+    ) : null
+  );
+
   return (
     <div className={`rounded-lg border ${style.border} bg-bg-2 flex flex-col overflow-hidden`}>
       {/* Header */}
@@ -245,6 +267,7 @@ export default function PcDetailPanel({
             <div className="flex items-center gap-1.5 text-text-2 text-xs">
               <User className="w-3.5 h-3.5 text-text-3" />
               <span>{pc.customerName || pc.customerType || 'Walk-in'}</span>
+              <PlanIcon />
             </div>
 
             <div className={`grid ${pc.sessionEndTime ? 'grid-cols-3' : 'grid-cols-2'} gap-2 bg-bg-3 rounded p-2.5 border border-border`}>
@@ -371,6 +394,7 @@ export default function PcDetailPanel({
             <div className="flex items-center gap-1.5 text-neon-orange text-xs">
               <AlertTriangle className="w-3.5 h-3.5" />
               <span>{pc.customerName || 'Awaiting checkout'}</span>
+              <PlanIcon />
             </div>
             <div className="text-[10px] text-text-3 font-mono text-center py-1">Pending at billing counter</div>
             <ActionBtn
