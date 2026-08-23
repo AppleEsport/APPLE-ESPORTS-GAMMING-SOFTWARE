@@ -109,16 +109,19 @@ public class PcStatusHub : BranchAwareHub
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IHubContext<PcOverlayHub> _pcOverlayHub;
     private readonly IHubNotificationService _hubNotificationService;
+    private readonly IAuditService _auditService;
 
     public PcStatusHub(
         ILogger<PcStatusHub> logger,
         IServiceScopeFactory scopeFactory,
         IHubContext<PcOverlayHub> pcOverlayHub,
-        IHubNotificationService hubNotificationService) : base(logger)
+        IHubNotificationService hubNotificationService,
+        IAuditService auditService) : base(logger)
     {
         _scopeFactory = scopeFactory;
         _pcOverlayHub = pcOverlayHub;
         _hubNotificationService = hubNotificationService;
+        _auditService = auditService;
     }
 
     /// <summary>Called by the Gaming PC Agent when it connects</summary>
@@ -259,10 +262,30 @@ public class PcStatusHub : BranchAwareHub
         // 20-second safety poll.
         await _hubNotificationService.BroadcastPcStatusChangeAsync(branchId, pcGuid);
 
+        var actorRole = Context.User?.FindFirstValue(ClaimTypes.Role);
+        var actorId = Context.User?.FindFirstValue(ClaimTypes.NameIdentifier);
+        var actorName = Context.User?.FindFirstValue(ClaimTypes.Name);
+        var isOperatorActor = actorRole == Roles.Operator;
+
+        // Every other PC action (add, update, maintenance, delete) writes to the Audit Trail -
+        // this one only ever wrote to the technical log, which an operator or Head Office never
+        // sees. A shutdown is exactly the kind of action that needs to be on the record.
+        await _auditService.LogAsync(new AuditEntry
+        {
+            UserId = isOperatorActor ? null : (Guid.TryParse(actorId, out var uid) ? uid : null),
+            OperatorId = isOperatorActor && Guid.TryParse(actorId, out var oid) ? oid : null,
+            UserRole = actorRole,
+            UserName = actorName,
+            Action = "pc_shutdown",
+            BranchId = branchId,
+            TargetType = "pc",
+            TargetId = pcGuid,
+            Details = null
+        });
+
         Logger.LogWarning(
             "Shutdown command sent to PC {PcId} by {Role} {User} of branch {BranchId}",
-            pcId, Context.User?.FindFirstValue(ClaimTypes.Role),
-            Context.User?.FindFirstValue(ClaimTypes.Name), branchId);
+            pcId, actorRole, actorName, branchId);
     }
 
     /// <summary>
@@ -317,6 +340,11 @@ public class PcStatusHub : BranchAwareHub
             await db.SaveChangesAsync();
         }
 
+        var actorRole = Context.User?.FindFirstValue(ClaimTypes.Role);
+        var actorId = Context.User?.FindFirstValue(ClaimTypes.NameIdentifier);
+        var actorName = Context.User?.FindFirstValue(ClaimTypes.Name);
+        var isOperatorActor = actorRole == Roles.Operator;
+
         foreach (var pc in targets)
         {
             await Clients.Group($"agent:{pc.Id}").SendAsync("ForceShutdown", new
@@ -331,13 +359,27 @@ public class PcStatusHub : BranchAwareHub
             // Same live-dashboard broadcast SendShutdownCommand uses, sent per PC so every tile
             // updates immediately.
             await _hubNotificationService.BroadcastPcStatusChangeAsync(branchId, pc.Id);
+
+            // One entry per PC, same action name SendShutdownCommand uses, so the Audit Trail
+            // reads the same regardless of whether a PC was shut down on its own or as part of
+            // closing the whole branch.
+            await _auditService.LogAsync(new AuditEntry
+            {
+                UserId = isOperatorActor ? null : (Guid.TryParse(actorId, out var uid) ? uid : null),
+                OperatorId = isOperatorActor && Guid.TryParse(actorId, out var oid) ? oid : null,
+                UserRole = actorRole,
+                UserName = actorName,
+                Action = "pc_shutdown",
+                BranchId = branchId,
+                TargetType = "pc",
+                TargetId = pc.Id,
+                Details = null
+            });
         }
 
         Logger.LogWarning(
             "Shut down all PCs at branch {BranchId}: {Sent} sent, {Skipped} skipped as busy, by {Role} {User}",
-            branchId, targets.Count, busy.Count,
-            Context.User?.FindFirstValue(ClaimTypes.Role),
-            Context.User?.FindFirstValue(ClaimTypes.Name));
+            branchId, targets.Count, busy.Count, actorRole, actorName);
 
         return new { sent = targets.Count, skippedBusy = busy.Count };
     }
