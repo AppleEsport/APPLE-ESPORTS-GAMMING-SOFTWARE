@@ -594,7 +594,7 @@ public class InventoryController : ControllerBase
     }
 
     [HttpGet("discrepancies")]
-    [Authorize(Policy = "Dashboard:reports")]
+    [Authorize(Policy = $"Dashboard:{Dashboards.Reports}")]
     public async Task<IActionResult> GetDiscrepancies([FromQuery] Guid? branchId = null)
     {
         Console.WriteLine($"[DEBUG GetDiscrepancies] HttpContext is null: {HttpContext == null}");
