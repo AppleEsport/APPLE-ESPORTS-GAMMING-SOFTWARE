@@ -13,7 +13,15 @@ public class PcStatusDto
     // Agent Connectivity
     public bool IsAgentOnline { get; set; }
     public string? ConnectionMode { get; set; }
-    
+
+    /// <summary>
+    /// True if PcStatusHub's shutdown command was sent to this PC and it has not reconnected
+    /// since (see Pc.PoweredOff). Combined on the frontend with State being Active/AwaitingBilling
+    /// to tell "shut down, idle" (red) apart from "shut down while a session is still billing"
+    /// (orange) - two states that look identical from this field alone.
+    /// </summary>
+    public bool PoweredOff { get; set; }
+
     // Active session details (if busy or awaiting billing)
     public Guid? ActiveSessionId { get; set; }
     public Guid? ActiveBillId { get; set; }

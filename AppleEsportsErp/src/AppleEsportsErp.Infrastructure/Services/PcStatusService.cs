@@ -91,7 +91,8 @@ public class PcStatusService : IPcStatusService
                 RatePerHour = calculatedRate,
                 BufferMinutes = bufferMinutes,
                 IsAgentOnline = pc.IsAgentOnline,
-                ConnectionMode = pc.ConnectionMode
+                ConnectionMode = pc.ConnectionMode,
+                PoweredOff = pc.PoweredOff
             };
 
             // Whether this PC is holding a customer at all is decided by the PC's own row, never

@@ -15,6 +15,13 @@ import { useToast } from '../ui/Toast';
 //
 // UnderMaintenance gets its own yellow for the same reason: it used to share red with a PC that had
 // simply been shut down.
+//
+// AwaitingSetup gets its own grey for the same reason again: a PC record that has never been
+// claimed by a physical machine used to fall through to STATUS_STYLES[pc.state] finding nothing
+// and landing on DEFAULT_STYLE (bright red, "OFFLINE") - wrong in the other direction, since a PC
+// that was never set up is not the same fact as one that lost power. Grey rather than another
+// bright hue, deliberately: this is the one state on the grid that is not "something happening",
+// so it should not compete for attention the way the others are meant to.
 const STATUS_STYLES = {
   Idle:            { icon: 'text-pc-idle',        dot: 'bg-pc-idle',        border: 'border-pc-idle/50',        bg: 'bg-pc-idle/10',        label: 'FREE' },
   Active:          { icon: 'text-pc-active',      dot: 'bg-pc-active',      border: 'border-pc-active/60',      bg: 'bg-pc-active/10',      label: 'OCCUPIED' },
@@ -22,9 +29,17 @@ const STATUS_STYLES = {
   AwaitingBilling: { icon: 'text-pc-awaiting',    dot: 'bg-pc-awaiting',    border: 'border-pc-awaiting/60',    bg: 'bg-pc-awaiting/10',    label: 'BILLING' },
   UnderMaintenance:{ icon: 'text-pc-maintenance', dot: 'bg-pc-maintenance', border: 'border-pc-maintenance/60', bg: 'bg-pc-maintenance/10', label: 'MAINT' },
   Expired:         { icon: 'text-neon-orange',    dot: 'bg-neon-orange',    border: 'border-neon-orange/60',    bg: 'bg-neon-orange/10',    label: 'EXPIRED' },
+  AwaitingSetup:   { icon: 'text-pc-awaitingsetup', dot: 'bg-pc-awaitingsetup', border: 'border-pc-awaitingsetup/50', bg: 'bg-pc-awaitingsetup/10', label: 'NOT SET UP' },
 };
 const DEFAULT_STYLE = { icon: 'text-pc-offline', dot: 'bg-pc-offline', border: 'border-pc-offline/50', bg: 'bg-pc-offline/10', label: 'OFFLINE' };
 const PENDING_STYLE = { icon: 'text-accent', dot: 'bg-accent', border: 'border-accent/50', bg: 'bg-accent/10', label: 'PENDING' };
+
+// PC was told to shut down (pc.poweredOff) while a session was still open on it - the "time
+// chalu, PC shutdown" case: the clock is still billing but the machine has actually powered
+// off. Distinct from plain Shut Down (DEFAULT_STYLE, red) on purpose - an operator needs to
+// see at a glance that this one still owes money. Reuses the same neon-orange token as
+// Expired above rather than a new colour, since both are "needs attention" states.
+const SHUTDOWN_BILLING_STYLE = { icon: 'text-neon-orange', dot: 'bg-neon-orange', border: 'border-neon-orange/60', bg: 'bg-neon-orange/10', label: 'OFF - BILLING' };
 
 // ── Tile size steps — driven by the zoom control on SessionsPage ──
 export const TILE_SIZES = ['sm', 'md', 'lg', 'xl'];
@@ -76,7 +91,22 @@ const PcTile = memo(({ pc, walkinReq, isSelected, onSelect, onQuickStart, onRefr
   const sizeStyle = SIZE_STYLES[size] || SIZE_STYLES.md;
 
   const hasReservation = pc.nextReservationTime && new Date(pc.nextReservationTime) > new Date();
-  const style = walkinReq ? PENDING_STYLE : (hasReservation ? STATUS_STYLES.Reserved : (STATUS_STYLES[pc.state] || DEFAULT_STYLE));
+
+  // pc.poweredOff means PcStatusHub's shutdown command was sent and the PC has not reconnected
+  // since (see backend Pc.PoweredOff). On its own that's ambiguous: a shut-down PC with a
+  // session still open on it (Active/AwaitingBilling) is still billing the customer and needs
+  // the operator's attention, which a plain "Shut Down" tile would hide.
+  const hasOpenSession = pc.state === 'Active' || pc.state === 'AwaitingBilling';
+  const isShutDownWhileBilling = pc.poweredOff && hasOpenSession;
+  const isShutDownIdle = pc.poweredOff && !hasOpenSession;
+
+  const style = walkinReq
+    ? PENDING_STYLE
+    : isShutDownWhileBilling
+      ? SHUTDOWN_BILLING_STYLE
+      : isShutDownIdle
+        ? DEFAULT_STYLE
+        : (hasReservation ? STATUS_STYLES.Reserved : (STATUS_STYLES[pc.state] || DEFAULT_STYLE));
   const isIdle = pc.state === 'Idle' && !walkinReq && !hasReservation;
   const isActive = pc.state === 'Active';
   // activeSessionId is only ever set when the session that lives behind it was actually

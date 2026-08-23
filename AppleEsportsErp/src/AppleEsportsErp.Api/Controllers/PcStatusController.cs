@@ -123,7 +123,15 @@ public class PcsController : ControllerBase
             Zone = dto.Zone ?? "Standard",
             HardwareNotes = dto.HardwareNotes,
             PricingProfileId = pricingProfile?.Id,
-            State = AppleEsportsErp.Domain.Enums.PcState.Idle,
+
+            // NOT Idle. This is the record's first moment of existing - no physical machine has
+            // claimed it yet, and Idle would tell the Sessions page (and the public walk-in
+            // kiosk picker, PublicController's PcState.Idle filter) that it is a real, bookable
+            // seat. It was Idle here for as long as this endpoint has existed, which is why a
+            // brand-new, never-set-up PC looked identical to a genuinely free one - both blue,
+            // both "FREE" - until whichever machine claims this PC number calls
+            // /api/agent/provision and that flips it to Idle for real. See PcState.AwaitingSetup.
+            State = AppleEsportsErp.Domain.Enums.PcState.AwaitingSetup,
             IsActive = true,
             IsDeleted = false,
             CreatedAt = DateTimeOffset.UtcNow,

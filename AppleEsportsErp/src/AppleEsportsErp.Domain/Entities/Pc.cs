@@ -74,7 +74,24 @@ public class Pc
     public bool IsAgentOnline { get; set; } = false;
     public string ConnectionMode { get; set; } = "None";  // "LAN", "Cloud", "None"
     public DateTimeOffset? LastAgentHeartbeat { get; set; }
-    
+
+    /// <summary>
+    /// True once <see cref="AppleEsportsErp.Api.Hubs.PcStatusHub.SendShutdownCommand"/> or
+    /// SendShutdownAllCommand has told this PC to power off, and not yet cleared by
+    /// <see cref="AppleEsportsErp.Api.Hubs.PcOverlayHub.ConnectPc"/> seeing it come back.
+    ///
+    /// Deliberately its own column rather than a new <see cref="PcState"/> value, and
+    /// deliberately never written into <see cref="State"/> either. State is overwritten
+    /// wholesale on every branch heartbeat with whatever the branch itself currently reports
+    /// (see BranchHeartbeatController.ApplyPcStatesAsync) - and mid-shutdown the branch is
+    /// still reporting the state from a moment ago (Active, Idle, whatever it was), so
+    /// anything written here into State would be clobbered by the next beat, a few seconds
+    /// later, before anyone's eyes even left the screen. This flag has nothing to race
+    /// against: nothing else writes it, and nothing reads it into a billing decision -
+    /// it exists purely to colour a tile correctly.
+    /// </summary>
+    public bool PoweredOff { get; set; } = false;
+
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 

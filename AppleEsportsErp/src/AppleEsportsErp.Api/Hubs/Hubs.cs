@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using AppleEsportsErp.Application.Constants;
+using AppleEsportsErp.Application.Interfaces;
 using AppleEsportsErp.Infrastructure.Data;
 
 namespace AppleEsportsErp.Api.Hubs;
@@ -106,9 +107,19 @@ public class ReservationHub : BranchAwareHub
 public class PcStatusHub : BranchAwareHub
 {
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IHubContext<PcOverlayHub> _pcOverlayHub;
+    private readonly IHubNotificationService _hubNotificationService;
 
-    public PcStatusHub(ILogger<PcStatusHub> logger, IServiceScopeFactory scopeFactory) : base(logger)
-        => _scopeFactory = scopeFactory;
+    public PcStatusHub(
+        ILogger<PcStatusHub> logger,
+        IServiceScopeFactory scopeFactory,
+        IHubContext<PcOverlayHub> pcOverlayHub,
+        IHubNotificationService hubNotificationService) : base(logger)
+    {
+        _scopeFactory = scopeFactory;
+        _pcOverlayHub = pcOverlayHub;
+        _hubNotificationService = hubNotificationService;
+    }
 
     /// <summary>Called by the Gaming PC Agent when it connects</summary>
     public async Task AgentConnected(string pcId, string connectionMode)
@@ -197,6 +208,14 @@ public class PcStatusHub : BranchAwareHub
     ///
     /// It also took a pcId and sent to agent:{pcId} without ever asking whose PC that was, so an
     /// operator at one branch could shut down another branch's machine by id.
+    ///
+    /// Also sent to PcOverlayHub's own pc:{pcId} group, which is where a real machine actually is.
+    /// agent:{pcId} is who AppleEsportsErp.ClientAgent joins, and nothing puts a real gaming PC in
+    /// that group today - ClientAgent is never launched by the installer and ships with a
+    /// placeholder token, so it never connects (see PHASE3_PLAN.md). The WebView2 page every
+    /// gaming PC actually runs joins pc:{pcId} on load (OverlaySocketContext.jsx) for its lock
+    /// screen and session overlay, and is genuinely connected. Kept both rather than replacing one
+    /// with the other, so a future working ClientAgent does not need this touched again.
     /// </summary>
     public async Task SendShutdownCommand(string pcId)
     {
@@ -205,10 +224,35 @@ public class PcStatusHub : BranchAwareHub
         if (!await PcBelongsToBranchAsync(pcId, branchId))
             throw new HubException("That PC does not belong to this branch.");
 
+        var pcGuid = Guid.Parse(pcId); // safe: PcBelongsToBranchAsync above already parsed this
+
+        // Marks the PC powered-off in the database, not only over the wire - without this the
+        // shutdown was a SignalR message nobody's screen remembered, and the tile never changed
+        // colour no matter how many times it was sent. See Pc.PoweredOff for why this is its own
+        // column rather than State.
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var pc = await db.Pcs.FirstOrDefaultAsync(p => p.Id == pcGuid);
+            if (pc != null)
+            {
+                pc.PoweredOff = true;
+                pc.UpdatedAt = DateTimeOffset.UtcNow;
+                await db.SaveChangesAsync();
+            }
+        }
+
         await Clients.Group($"agent:{pcId}").SendAsync("ForceShutdown", new
         {
             Timestamp = DateTimeOffset.UtcNow
         });
+
+        await _pcOverlayHub.Clients.Group($"pc:{pcId}").SendAsync("ShutdownPc");
+
+        // Same broadcast a session start/stop or a maintenance flag already triggers, so every
+        // open dashboard sees the tile change colour immediately instead of waiting on the
+        // 20-second safety poll.
+        await _hubNotificationService.BroadcastPcStatusChangeAsync(branchId, pcGuid);
 
         Logger.LogWarning(
             "Shutdown command sent to PC {PcId} by {Role} {User} of branch {BranchId}",
@@ -246,12 +290,35 @@ public class PcStatusHub : BranchAwareHub
 
         var targets = pcs.Except(busy).ToList();
 
+        // Same reasoning as SendShutdownCommand: mark these powered-off in the database so their
+        // tiles actually change colour, not only send the live command. Loaded separately from
+        // the AsNoTracking query above because that one only projects Id/State.
+        if (targets.Count > 0)
+        {
+            var targetIds = targets.Select(t => t.Id).ToList();
+            var targetPcs = await db.Pcs.Where(p => targetIds.Contains(p.Id)).ToListAsync();
+            foreach (var pc in targetPcs)
+            {
+                pc.PoweredOff = true;
+                pc.UpdatedAt = DateTimeOffset.UtcNow;
+            }
+            await db.SaveChangesAsync();
+        }
+
         foreach (var pc in targets)
         {
             await Clients.Group($"agent:{pc.Id}").SendAsync("ForceShutdown", new
             {
                 Timestamp = DateTimeOffset.UtcNow
             });
+
+            // See the comment on SendShutdownCommand above - this is the group a real machine is
+            // actually in today.
+            await _pcOverlayHub.Clients.Group($"pc:{pc.Id}").SendAsync("ShutdownPc");
+
+            // Same live-dashboard broadcast SendShutdownCommand uses, sent per PC so every tile
+            // updates immediately.
+            await _hubNotificationService.BroadcastPcStatusChangeAsync(branchId, pc.Id);
         }
 
         Logger.LogWarning(
