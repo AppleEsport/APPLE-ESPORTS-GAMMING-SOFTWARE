@@ -161,8 +161,13 @@ export default function PcDetailPanel({
   // badge's colour/label - none of the body sections below key off this, only off pc.state, so
   // a shut-down PC with a session still open on it keeps showing that session's normal details.
   const hasOpenSession = pc.state === 'Active' || pc.state === 'AwaitingBilling';
-  const isShutDownWhileBilling = pc.poweredOff && hasOpenSession;
-  const isShutDownIdle = pc.poweredOff && !hasOpenSession;
+
+  // A PC still AwaitingSetup has never been claimed by a real machine, so poweredOff being true
+  // on one is stale leftover state from before the backend guarded shutdown commands against
+  // this exact case - never a real signal to act on. See the matching exclusion in PcTile.jsx.
+  const neverClaimed = pc.state === 'AwaitingSetup';
+  const isShutDownWhileBilling = pc.poweredOff && hasOpenSession && !neverClaimed;
+  const isShutDownIdle = pc.poweredOff && !hasOpenSession && !neverClaimed;
 
   const style = walkinReq
     ? PENDING_STYLE

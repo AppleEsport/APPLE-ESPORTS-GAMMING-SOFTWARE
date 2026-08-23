@@ -156,6 +156,14 @@ ADD COLUMN IF NOT EXISTS ""AadharDataUrl"" text;
         db.Database.ExecuteSqlRaw(@"
 UPDATE pcs SET ""State"" = 'awaitingsetup', ""PoweredOff"" = false
 WHERE ""MachineId"" IS NULL AND ""State"" = 'idle';
+
+-- A separate leftover from the same underlying cause: a PC that was already AwaitingSetup
+-- when someone pressed Shut Down / Shut Down All, before SendShutdownCommand and
+-- SendShutdownAllCommand were guarded against sending that to an unclaimed PC. Nothing
+-- meaningfully shuts down a machine that was never claimed, so PoweredOff should never be
+-- true here regardless of how it got set.
+UPDATE pcs SET ""PoweredOff"" = false
+WHERE ""State"" = 'awaitingsetup' AND ""PoweredOff"" = true;
 ");
 
         // Seed the four branches, their PCs, pricing and operators — at HEAD OFFICE, in
