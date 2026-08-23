@@ -51,7 +51,7 @@ public class EodController : ControllerBase
                      && b.CompletedAt <= endUtc)
             .ToListAsync();
 
-        // Bucketed by the 06:00-06:00 IST trading day, the same day boundary
+        // Bucketed by the midnight-to-midnight IST day, the same day boundary
         // /eod/preview and /eod/finalize use - not the raw UTC calendar date, which
         // puts a bill rung up at 01:30 IST on the wrong day here and the right day
         // everywhere else.

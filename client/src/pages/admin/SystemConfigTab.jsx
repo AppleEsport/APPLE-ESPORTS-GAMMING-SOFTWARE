@@ -13,7 +13,7 @@ function WalletTopUpSettingsCard() {
   useEffect(() => {
     getWalletTopUpRules()
       .then(res => res?.data && setRules(res.data))
-      .catch(() => toast.error('Failed to load wallet top-up settings'))
+      .catch(() => toast.error('Failed to load Member Amount top-up settings'))
       .finally(() => setLoading(false));
   }, []);
 
@@ -28,9 +28,9 @@ function WalletTopUpSettingsCard() {
     try {
       await saveWalletTopUpRules(payload);
       setRules(payload);
-      toast.success('Wallet top-up settings saved');
+      toast.success('Member Amount top-up settings saved');
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed to save wallet top-up settings');
+      toast.error(err.response?.data?.error || 'Failed to save Member Amount top-up settings');
     } finally {
       setSaving(false);
     }
@@ -41,9 +41,9 @@ function WalletTopUpSettingsCard() {
   return (
     <form onSubmit={handleSave} className="bg-bg-2 p-5 rounded-lg border border-border">
       <h3 className="text-sm font-semibold mb-1 text-accent flex items-center gap-2">
-        <Wallet size={14} /> Wallet Top-Up Settings
+        <Wallet size={14} /> Member Amount Top-Up Settings
       </h3>
-      <p className="text-xs text-text-2 mb-4">Controls every Gaming wallet top-up across all branches — the minimum amount allowed and the default bonus % applied automatically.</p>
+      <p className="text-xs text-text-2 mb-4">Controls every Gaming Member Amount top-up across all branches — the minimum amount allowed and the default bonus % applied automatically.</p>
       <div className="grid grid-cols-2 gap-4">
         <div className="form-group">
           <label>Minimum Gaming Top-Up (₹)</label>
@@ -56,7 +56,7 @@ function WalletTopUpSettingsCard() {
       </div>
       <div className="flex justify-end mt-4">
         <button type="submit" disabled={saving} className="btn-primary flex items-center gap-2 shadow-lg shadow-accent/25 disabled:opacity-50">
-          <Save size={14} /> {saving ? 'SAVING...' : 'SAVE WALLET SETTINGS'}
+          <Save size={14} /> {saving ? 'SAVING...' : 'SAVE MEMBER AMOUNT SETTINGS'}
         </button>
       </div>
     </form>
@@ -158,7 +158,7 @@ export default function SystemConfigTab() {
         </div>
 
         <div className="bg-bg-2 p-5 rounded-lg border border-border">
-          <h3 className="text-sm font-semibold mb-4 text-accent">Loyalty & Wallet Rules</h3>
+          <h3 className="text-sm font-semibold mb-4 text-accent">Loyalty & Member Amount Rules</h3>
           <div className="grid grid-cols-2 gap-4">
             <div className="form-group">
               <label>Points Per ₹ Spent</label>

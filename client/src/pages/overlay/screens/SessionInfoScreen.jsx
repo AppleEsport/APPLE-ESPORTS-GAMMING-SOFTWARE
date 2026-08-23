@@ -66,12 +66,12 @@ export default function SessionInfoScreen() {
       const profile = res.data?.data;
 
       if (!profile) {
-        setResumeError('Could not read your wallet. Please see the operator.');
+        setResumeError('Could not read your Member Amount. Please see the operator.');
         return;
       }
 
       if (profile.gamingBalance < MIN_GAMING_BALANCE_TO_START) {
-        setResumeError(`Your Gaming wallet is still ₹${profile.gamingBalance.toFixed(2)}. Please complete the top-up at the counter.`);
+        setResumeError(`Your Gaming Member Amount is still ₹${profile.gamingBalance.toFixed(2)}. Please complete the top-up at the counter.`);
         return;
       }
 
@@ -79,7 +79,7 @@ export default function SessionInfoScreen() {
       localStorage.removeItem('walletEmptyAlert');
       navigate(`/pc-overlay/${pcId}/login`);
     } catch (err) {
-      setResumeError(err.response?.data?.error || 'Could not check your wallet. Please see the operator.');
+      setResumeError(err.response?.data?.error || 'Could not check your Member Amount. Please see the operator.');
     } finally {
       setResumeChecking(false);
     }
@@ -135,7 +135,7 @@ export default function SessionInfoScreen() {
             <AlertTriangle className="w-12 h-12 text-neon-red mx-auto mb-4" />
             <h2 className="font-heading text-2xl font-bold text-neon-red tracking-wide uppercase mb-2">Session Ended</h2>
             <p className="text-neon-red font-body font-bold text-lg">
-              Your gaming wallet is empty.<br/>Your bill has been paid from your wallet.
+              Your gaming Member Amount is empty.<br/>Your bill has been paid from your Member Amount.
             </p>
             <p className="text-text-2 font-body text-sm mt-3">
               Top up at the counter, then tap below to jump straight back in.

@@ -27,11 +27,10 @@ public class EodService : IEodService
         var startOfDay = new DateTimeOffset(targetDate.UtcDateTime.Date, TimeSpan.Zero);
         var endOfDay = startOfDay.AddDays(1);
 
-        // The window everything is actually counted over: 06:00 to 06:00 IST, the trading day.
-        // A session that starts at 01:00 belongs to the night before, and the cash desk and
-        // wallet desk have always read it that way. This screen read midnight-to-midnight UTC,
-        // which is 05:30 IST - so late-night takings landed on the wrong day here and the right
-        // day everywhere else, and the two screens disagreed about the same money.
+        // The window everything is actually counted over: midnight to midnight IST, the
+        // calendar day. This screen used to read midnight-to-midnight UTC, which is 05:30
+        // IST - so late-night takings landed on the wrong day here and the right day
+        // everywhere else, and the two screens disagreed about the same money.
         var (dayStart, dayEnd) = IndiaTime.BusinessDayRange(DateOnly.FromDateTime(startOfDay.UtcDateTime.Date));
 
         var blockers = new List<string>();
@@ -81,11 +80,10 @@ public class EodService : IEodService
         var startOfDay = new DateTimeOffset(targetDate.UtcDateTime.Date, TimeSpan.Zero);
         var endOfDay = startOfDay.AddDays(1);
 
-        // The window everything is actually counted over: 06:00 to 06:00 IST, the trading day.
-        // A session that starts at 01:00 belongs to the night before, and the cash desk and
-        // wallet desk have always read it that way. This screen read midnight-to-midnight UTC,
-        // which is 05:30 IST - so late-night takings landed on the wrong day here and the right
-        // day everywhere else, and the two screens disagreed about the same money.
+        // The window everything is actually counted over: midnight to midnight IST, the
+        // calendar day. This screen used to read midnight-to-midnight UTC, which is 05:30
+        // IST - so late-night takings landed on the wrong day here and the right day
+        // everywhere else, and the two screens disagreed about the same money.
         var (dayStart, dayEnd) = IndiaTime.BusinessDayRange(DateOnly.FromDateTime(startOfDay.UtcDateTime.Date));
 
         // Fetch Bills

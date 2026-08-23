@@ -44,7 +44,7 @@ export default function WalletDeskPage() {
       <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
         <Wallet className="w-12 h-12 text-text-3 mb-4" />
         <h2 className="text-xl font-heading font-bold text-text mb-2">Select a Branch</h2>
-        <p className="text-text-2">You must select a branch to access the Wallet Desk.</p>
+        <p className="text-text-2">You must select a branch to access the Member Amount Desk.</p>
       </div>
     );
   }
@@ -61,8 +61,8 @@ export default function WalletDeskPage() {
     <div className="h-full flex flex-col max-w-4xl mx-auto">
       <div className="mb-6">
         <PageHeader
-          title="Wallet Desk"
-          subtitle="Member Wallet Top-ups and Deductions"
+          title="Member Amount Desk"
+          subtitle="Member Amount Top-ups and Deductions"
           icon="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"
           badge="SYSTEM"
         />
@@ -95,10 +95,10 @@ export default function WalletDeskPage() {
 
           {/* Transactions List */}
           <div className="col-span-1 md:col-span-2 border border-border bg-bg-2 rounded-xl p-6 h-fit max-h-[60vh] flex flex-col">
-            <h3 className="text-sm font-heading font-bold uppercase tracking-wider text-text mb-4">Wallet Transactions History</h3>
+            <h3 className="text-sm font-heading font-bold uppercase tracking-wider text-text mb-4">Member Amount Transactions History</h3>
             {data.transactions.length === 0 ? (
               <div className="flex-1 flex items-center justify-center text-text-3 text-sm py-8">
-                No wallet transactions in this shift yet.
+                No Member Amount transactions in this shift yet.
               </div>
             ) : (
               <div className="flex-1 overflow-y-auto pr-2 scrollbar-thin">

@@ -6,6 +6,7 @@ const MAX_HEIGHT = 420;
 
 const TABS = [
   { key: 'payment', label: 'Payment Method Summary' },
+  { key: 'wallet', label: 'Member Amount' },
   { key: 'cash', label: 'Cash & Collection' },
 ];
 
@@ -118,7 +119,11 @@ export default function EodPaymentSummaryBar({ report, targetDate, height, onHei
           </div>
         </div>
         <div className="font-mono text-xs font-bold text-neon-blue">
-          {activeTab === 'payment' ? `Total: ₹${grandTotal.toFixed(2)}` : `End Total: ₹${grandTotal.toFixed(2)}`}
+          {activeTab === 'payment'
+            ? `Total: ₹${grandTotal.toFixed(2)}`
+            : activeTab === 'wallet'
+              ? `Top-Ups: ₹${n(pm.totalWalletTopUps).toFixed(2)}`
+              : `End Total: ₹${grandTotal.toFixed(2)}`}
         </div>
       </div>
 
@@ -143,7 +148,7 @@ export default function EodPaymentSummaryBar({ report, targetDate, height, onHei
                     <td className="py-1.5 pr-4 text-right text-text">₹{n(report.revenue.totalFoodRevenue).toFixed(2)}</td>
                   </tr>
                   <tr>
-                    <td className="py-1.5 pr-4 text-text-2 font-sans">Wallet Top-Ups</td>
+                    <td className="py-1.5 pr-4 text-text-2 font-sans">Member Amount Top-Ups</td>
                     <td className="py-1.5 pr-4 text-right text-text">₹{n(pm.totalWalletTopUps).toFixed(2)}</td>
                   </tr>
                   {n(pm.totalWalletBonusGiven) > 0 && (
@@ -184,7 +189,7 @@ export default function EodPaymentSummaryBar({ report, targetDate, height, onHei
                     <td className="py-1.5 pr-4 text-right text-text font-bold">₹{onlineTotal.toFixed(2)}</td>
                   </tr>
                   <tr>
-                    <td className="py-1.5 pr-4 text-text-2 font-sans">Wallet Deductions (Gaming/Food)</td>
+                    <td className="py-1.5 pr-4 text-text-2 font-sans">Member Amount Deductions (Gaming/Food)</td>
                     <td className="py-1.5 pr-4 text-right text-neon-green">₹{walletDeductionsTotal.toFixed(2)}</td>
                     <td className="py-1.5 pr-4 text-right text-text-3">₹0.00</td>
                     <td className="py-1.5 pr-4 text-right text-text font-bold">₹{walletDeductionsTotal.toFixed(2)}</td>
@@ -218,6 +223,65 @@ export default function EodPaymentSummaryBar({ report, targetDate, height, onHei
               </div>
             </div>
           </div>
+        ) : activeTab === 'wallet' ? (
+          // ── Member Amount ──
+          // Everything to do with member wallet balance, gathered in one place instead of split
+          // across the Payment Method and Cash & Collection tabs. Top-ups are split by how they
+          // were actually paid (same cash/online split used elsewhere). Deductions and bonus are
+          // called out with a note explaining why neither is new income - a deduction is already-
+          // collected money being spent, and a bonus is promotional money the customer never paid.
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-[11px] whitespace-nowrap">
+                <thead>
+                  <tr className="border-b border-border text-text-3 uppercase tracking-wider font-bold text-[9px]">
+                    <th className="py-1.5 pr-4">Member Amount Top-Ups</th>
+                    <th className="py-1.5 pr-4 text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border/40 font-mono">
+                  <tr>
+                    <td className="py-1.5 pr-4 text-text-2 font-sans">Cash Portion</td>
+                    <td className="py-1.5 pr-4 text-right text-neon-green">₹{n(pm.totalWalletTopUpsCash).toFixed(2)}</td>
+                  </tr>
+                  <tr>
+                    <td className="py-1.5 pr-4 text-text-2 font-sans">Online Portion</td>
+                    <td className="py-1.5 pr-4 text-right text-neon-green">₹{n(pm.totalWalletTopUpsOnline).toFixed(2)}</td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <div className="flex justify-between items-center bg-neon-blue/10 px-3 py-1.5 rounded-lg border border-neon-blue/30 mt-2">
+                <span className="font-bold text-neon-blue uppercase tracking-widest text-[10px]">Total Top-Ups</span>
+                <span className="font-mono font-bold text-base text-neon-blue">₹{n(pm.totalWalletTopUps).toFixed(2)}</span>
+              </div>
+            </div>
+
+            <div className="space-y-1.5 text-xs">
+              <div className="flex justify-between items-center">
+                <span className="text-text-2">Deductions (Gaming/Food from existing balance)</span>
+                <span className="font-mono text-neon-purple">₹{walletDeductionsTotal.toFixed(2)}</span>
+              </div>
+              <p className="text-[10px] text-text-3 italic">
+                Already-collected money being spent, not new revenue - excluded from Total Amount.
+              </p>
+
+              <div className="flex justify-between items-center pt-1.5">
+                <span className="text-text-2">Bonus Given (promotional)</span>
+                <span className="font-mono text-neon-orange">₹{n(pm.totalWalletBonusGiven).toFixed(2)}</span>
+              </div>
+              <p className="text-[10px] text-text-3 italic">
+                Loyalty credit handed out for free, not money the customer paid in.
+              </p>
+
+              <div className="flex justify-between items-center bg-bg-3 px-3 py-1.5 rounded-lg border border-border mt-2">
+                <span className="font-bold text-text uppercase tracking-widest text-[10px]">Net Balance Movement</span>
+                <span className="font-mono font-bold text-text">
+                  ₹{(n(pm.totalWalletTopUps) - walletDeductionsTotal).toFixed(2)}
+                </span>
+              </div>
+            </div>
+          </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* Cash Lifecycle Summary */}
@@ -227,7 +291,7 @@ export default function EodPaymentSummaryBar({ report, targetDate, height, onHei
                 <span className="font-mono text-text">₹{report.cash.totalOpeningBalance}</span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-text-2">Cash Sales + Wallet TopUps</span>
+                <span className="text-text-2">Cash Sales + Member Amount Top-Ups</span>
                 <span className="font-mono text-neon-green">+ ₹{report.cash.totalCashSales}</span>
               </div>
               <div className="flex justify-between items-center">
@@ -294,7 +358,7 @@ export default function EodPaymentSummaryBar({ report, targetDate, height, onHei
                 <span className="font-mono text-text">₹{onlineTotal.toFixed(2)}</span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-text-2">Wallet Deductions (Gaming/Food)</span>
+                <span className="text-text-2">Member Amount Deductions (Gaming/Food)</span>
                 <span className="font-mono text-neon-purple">₹{walletDeductionsTotal.toFixed(2)}</span>
               </div>
               <div className="flex justify-between items-center">

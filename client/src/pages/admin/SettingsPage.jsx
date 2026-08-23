@@ -32,8 +32,8 @@ const PERMISSION_KEYS = [
   { id: 'cash_register', label: 'Cash Desk', desc: 'Manage cash transactions in open shift' },
   { id: 'cash_desk', label: 'Cash Register', desc: 'Verify expected vs counted cash in drawer' },
   { id: 'online_desk', label: 'Online Desk', desc: 'Track all online (UPI/Card) payments in real-time' },
-  { id: 'wallet_desk', label: 'Wallet Desk', desc: 'Track member wallet top-ups and session deductions' },
-  { id: 'members', label: 'Members', desc: 'Register new loyalty accounts and top-up wallets' },
+  { id: 'wallet_desk', label: 'Member Amount Desk', desc: 'Track Member Amount top-ups and session deductions' },
+  { id: 'members', label: 'Members', desc: 'Register new loyalty accounts and top up Member Amount' },
   { id: 'menu_editor', label: 'Menu Editor', desc: 'Configure cafe rates and menu card items' },
   { id: 'pc_status', label: 'PC Status', desc: 'Full PC network health overview (Admin only)' },
   { id: 'reports', label: 'Reports', desc: 'Reconciliation reports, shift summaries and revenue data' },
@@ -78,7 +78,7 @@ export default function SettingsPage() {
       ]);
       setBranches(bRes.data || []);
       setOperators(oRes.data || []);
-      setAuditLogs(aRes.data || []);
+      setAuditLogs(aRes.data?.items || []);
     } catch (error) {
       toast.error('Failed to load settings data');
     } finally {

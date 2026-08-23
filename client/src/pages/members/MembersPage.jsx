@@ -15,6 +15,7 @@ import {
 } from '../../api/members.api';
 import { getWalletTopUpRules } from '../../api/settings.api';
 import { logActivity } from '../../utils/sessionLog';
+import { formatTime } from '../../utils/timeUtils';
 
 const TOPUP_PRESETS = [200, 500, 1000, 2000, 5000];
 
@@ -196,7 +197,7 @@ function RegisterDrawer({ open, onClose, onSuccess, editMember }) {
 
           <div>
             <label className="block text-[10px] text-text-3 uppercase tracking-widest font-bold mb-1.5">
-              Username * <span className="normal-case font-normal">(login &amp; wallet payments)</span>
+              Username * <span className="normal-case font-normal">(login &amp; Member Amount payments)</span>
             </label>
             <div className="relative">
               <UserIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-3" />
@@ -287,8 +288,8 @@ function TopUpModal({ member, isSuperAdmin, onClose, onSuccess }) {
         ...(isSuperAdmin && walletType === 'Gaming' && bonusPercent !== topUpRules.defaultBonusPercent && { bonusPercentOverride: bonusPercent }),
         reason: reason.trim() || 'Manual top-up',
       });
-      toast.success(`₹${numAmount} added to ${member.fullName}'s ${walletType} wallet`);
-      logActivity(`${member.fullName}: Wallet top-up of ₹${numAmount} (${walletType}, ${paymentType}).`, 'success');
+      toast.success(`₹${numAmount} added to ${member.fullName}'s ${walletType} Member Amount`);
+      logActivity(`${member.fullName}: Member Amount top-up of ₹${numAmount} (${walletType}, ${paymentType}).`, 'success');
       onSuccess();
       onClose();
     } catch (err) {
@@ -305,7 +306,7 @@ function TopUpModal({ member, isSuperAdmin, onClose, onSuccess }) {
           <div className="flex items-center gap-2">
             <Wallet className="w-5 h-5 text-neon-blue" />
             <div>
-              <h2 className="font-heading font-bold text-text uppercase tracking-wider text-sm leading-none">Top-Up Wallet</h2>
+              <h2 className="font-heading font-bold text-text uppercase tracking-wider text-sm leading-none">Top-Up Member Amount</h2>
               <p className="text-[10px] text-text-3 mt-0.5 font-mono">
                 {member.fullName} · G: ₹{parseFloat(member.gamingBalance || 0).toFixed(0)} · F: ₹{parseFloat(member.foodBalance || 0).toFixed(0)}
               </p>
@@ -342,11 +343,11 @@ function TopUpModal({ member, isSuperAdmin, onClose, onSuccess }) {
             <div className="flex gap-2 mt-3">
               <label className="flex items-center gap-1.5 text-xs text-text-2 cursor-pointer">
                 <input type="radio" name="walletType" value="Gaming" checked={walletType === 'Gaming'} onChange={() => setWalletType('Gaming')} className="text-neon-blue bg-bg-3 border-border focus:ring-neon-blue" />
-                Gaming Wallet
+                Gaming Member Amount
               </label>
               <label className="flex items-center gap-1.5 text-xs text-text-2 cursor-pointer">
                 <input type="radio" name="walletType" value="Food" checked={walletType === 'Food'} onChange={() => setWalletType('Food')} className="text-neon-orange bg-bg-3 border-border focus:ring-neon-orange" />
-                Food Wallet
+                Food Member Amount
               </label>
             </div>
 
@@ -532,8 +533,8 @@ function TopUpModal({ member, isSuperAdmin, onClose, onSuccess }) {
 // if explicitly granted via Settings → Admins).
 // ═══════════════════════════════════════════════════════════════════════════════
 const EDITABLE_FIELDS = [
-  { key: 'gamingBalance', label: 'Gaming Wallet Balance (₹)', step: '0.01' },
-  { key: 'foodBalance', label: 'Food Wallet Balance (₹)', step: '0.01' },
+  { key: 'gamingBalance', label: 'Gaming Member Amount Balance (₹)', step: '0.01' },
+  { key: 'foodBalance', label: 'Food Member Amount Balance (₹)', step: '0.01' },
   { key: 'totalGamingTopUps', label: 'Total Gaming Top-Ups (₹, lifetime)', step: '0.01' },
   { key: 'totalGamingBonusEarned', label: 'Total Gaming Bonus Earned (₹, lifetime)', step: '0.01' },
   { key: 'totalGamingSpend', label: 'Total Gaming Spend (₹, lifetime)', step: '0.01' },
@@ -691,7 +692,7 @@ function ExtraBonusModal({ member, onClose, onSuccess }) {
       };
 
       await topUpWallet(member.id, dto);
-      toast.success(`₹${bonusAmount.toFixed(0)} bonus given to ${member.fullName}'s ${walletType} wallet`);
+      toast.success(`₹${bonusAmount.toFixed(0)} bonus given to ${member.fullName}'s ${walletType} Member Amount`);
       onSuccess();
       onClose();
     } catch (err) {
@@ -722,7 +723,7 @@ function ExtraBonusModal({ member, onClose, onSuccess }) {
           </div>
 
           <div>
-            <label className="block text-[10px] text-text-3 uppercase tracking-widest font-bold mb-2">Wallet</label>
+            <label className="block text-[10px] text-text-3 uppercase tracking-widest font-bold mb-2">Member Amount</label>
             <div className="grid grid-cols-2 gap-2">
               {[
                 { val: 'Gaming', Icon: Gamepad2, active: 'bg-neon-blue/15 border-neon-blue text-neon-blue' },
@@ -967,7 +968,7 @@ function MemberDetailPanel({ member, onEdit, onTopUp, onDiscount, onEditValues, 
             <RefreshCw className="w-3.5 h-3.5" />
           </button>
           {hasDashboardAccess('member_value_edit') && (
-            <button onClick={() => onEditValues(member)} className="p-1.5 text-text-3 hover:text-neon-orange rounded transition-colors" title="Edit wallet values (Admin)">
+            <button onClick={() => onEditValues(member)} className="p-1.5 text-text-3 hover:text-neon-orange rounded transition-colors" title="Edit Member Amount values (Admin)">
               <SlidersHorizontal className="w-3.5 h-3.5" />
             </button>
           )}
@@ -997,7 +998,7 @@ function MemberDetailPanel({ member, onEdit, onTopUp, onDiscount, onEditValues, 
         {/* Wallet Cards */}
         <div className="grid grid-cols-2 gap-2.5 px-4 mb-3">
           <div className="bg-bg-3 border border-border rounded-xl p-3 text-center">
-            <p className="text-[9px] text-text-3 uppercase tracking-widest font-bold">Gaming Wallet</p>
+            <p className="text-[9px] text-text-3 uppercase tracking-widest font-bold">Gaming Member Amount</p>
             <p className="font-mono font-bold text-2xl text-neon-blue mt-1 drop-shadow-[0_0_10px_rgba(77,166,255,0.4)]">
               ₹{parseFloat(member.gamingBalance || 0).toFixed(0)}
             </p>
@@ -1009,7 +1010,7 @@ function MemberDetailPanel({ member, onEdit, onTopUp, onDiscount, onEditValues, 
             )}
           </div>
           <div className="bg-bg-3 border border-border rounded-xl p-3 text-center">
-            <p className="text-[9px] text-text-3 uppercase tracking-widest font-bold">Food Wallet</p>
+            <p className="text-[9px] text-text-3 uppercase tracking-widest font-bold">Food Member Amount</p>
             <p className="font-mono font-bold text-2xl text-neon-green mt-1 drop-shadow-[0_0_10px_rgba(34,211,166,0.4)]">
               ₹{parseFloat(member.foodBalance || 0).toFixed(0)}
             </p>
@@ -1038,7 +1039,7 @@ function MemberDetailPanel({ member, onEdit, onTopUp, onDiscount, onEditValues, 
             onClick={() => { member.tempTarget = 'Gaming'; onTopUp(member); }}
             className="w-full py-3.5 rounded-xl bg-neon-green text-bg font-bold text-sm uppercase tracking-widest flex items-center justify-center gap-2 hover:brightness-110 transition-all shadow-[0_0_20px_rgba(34,211,166,0.2)]"
           >
-            <Receipt className="w-4 h-4" /> Process Wallet Top-Up
+            <Receipt className="w-4 h-4" /> Process Member Amount Top-Up
           </button>
           {hasDashboardAccess('member_extra_bonus') && (
             <button
@@ -1115,7 +1116,7 @@ function MemberDetailPanel({ member, onEdit, onTopUp, onDiscount, onEditValues, 
                       </p>
                     )}
                     <p className="text-[10px] text-text-3 font-mono">
-                      {new Date(tx.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
+                      {new Date(tx.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })} · {formatTime(tx.createdAt)}
                     </p>
                   </div>
                 </div>
