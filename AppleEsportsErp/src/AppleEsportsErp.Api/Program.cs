@@ -220,7 +220,7 @@ builder.Services.AddAuthorization(options =>
     foreach (var dashboard in new[] { Dashboards.BillingCounter, Dashboards.Sessions, Dashboards.Reservations,
         Dashboards.FoodOrders, Dashboards.CashRegister, Dashboards.CashDesk, Dashboards.Members,
         Dashboards.MenuEditor, Dashboards.MainDashboard, Dashboards.PcStatus, Dashboards.Eod, Dashboards.Settings,
-        Dashboards.WalletSettings, Dashboards.MemberValueEdit })
+        Dashboards.WalletSettings, Dashboards.MemberValueEdit, Dashboards.Reports })
     {
         options.AddPolicy($"Dashboard:{dashboard}", policy =>
             policy.Requirements.Add(new DashboardRequirement(dashboard)));
