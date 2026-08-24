@@ -1,5 +1,5 @@
 import { memo, useState, useEffect, useId } from 'react';
-import { Keyboard, Mouse, Clock, Gamepad2 } from 'lucide-react';
+import { Keyboard, Mouse, Clock } from 'lucide-react';
 import { motion } from 'framer-motion';
 import api from '../../config/api';
 import { useToast } from '../ui/Toast';
@@ -69,6 +69,38 @@ function MonitorGlyph({ className = '', sizeClass = 'w-16 h-16', glow = false, c
       <rect x="27" y="41" width="10" height="7" fill="currentColor" opacity="0.55" />
       <rect x="17" y="49" width="30" height="4" rx="2" fill="currentColor" opacity="0.55" />
       {children}
+    </svg>
+  );
+}
+
+// ── Console glyph: a DualSense-style controller silhouette (bar + two grips), drawn in the
+// same style as MonitorGlyph - currentColor layers plus a diagonal sheen - so a console tile
+// reads as part of the same set rather than a mismatched stock icon dropped in next to it ──
+function ControllerGlyph({ className = '', sizeClass = 'w-16 h-16', glow = false }) {
+  const clipId = useId();
+  return (
+    <svg
+      viewBox="0 0 64 40"
+      className={`${sizeClass} ${className} ${glow ? 'drop-shadow-[0_0_8px_currentColor]' : ''}`}
+      fill="none"
+    >
+      <clipPath id={clipId}>
+        <rect x="8" y="10" width="48" height="16" rx="8" />
+        <circle cx="16" cy="26" r="11" />
+        <circle cx="48" cy="26" r="11" />
+      </clipPath>
+      <g clipPath={`url(#${clipId})`}>
+        <rect x="4" y="10" width="56" height="27" fill="currentColor" opacity="0.85" />
+        <polygon points="4,26 32,4 60,4 32,26" fill="#fff" opacity="0.14" />
+      </g>
+      {/* D-pad, left grip */}
+      <rect x="11" y="24" width="10" height="4" rx="1" fill="currentColor" opacity="0.45" />
+      <rect x="14" y="21" width="4" height="10" rx="1" fill="currentColor" opacity="0.45" />
+      {/* face buttons, right grip */}
+      <circle cx="48" cy="21" r="1.8" fill="currentColor" opacity="0.45" />
+      <circle cx="48" cy="29" r="1.8" fill="currentColor" opacity="0.45" />
+      <circle cx="44" cy="25" r="1.8" fill="currentColor" opacity="0.45" />
+      <circle cx="52" cy="25" r="1.8" fill="currentColor" opacity="0.45" />
     </svg>
   );
 }
@@ -222,7 +254,7 @@ const PcTile = memo(({ pc, walkinReq, isSelected, onSelect, onQuickStart, onRefr
 
       <div className={`relative flex items-center justify-center ${(walkinReq || pc.state === 'AwaitingBilling') ? 'animate-pulse' : ''}`}>
         {isConsole ? (
-          <Gamepad2 className={`${style.icon} ${sizeStyle.glyph} drop-shadow-[0_0_8px_currentColor]`} strokeWidth={1.5} />
+          <ControllerGlyph className={style.icon} sizeClass={sizeStyle.glyph} glow={true} />
         ) : (
         <MonitorGlyph className={style.icon} sizeClass={sizeStyle.glyph} glow={true}>
           {/* What the customer is being charged on, said with a picture rather than a symbol. An
