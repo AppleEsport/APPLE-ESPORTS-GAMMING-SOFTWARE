@@ -66,22 +66,27 @@ internal static class KioskGuard
     /// <summary>
     /// The task that actually installs updates, running as SYSTEM.
     ///
-    /// This is the fix for updates never arriving. The app cannot install one: writing to Program
-    /// Files and stopping services needs elevation, so it asked Windows (Verb=runas) and Windows
-    /// answered with a prompt. Nobody is at a counter PC at 3am, and nobody at a gaming PC is going
-    /// to approve an administrator prompt over their game, so the update simply never happened -
-    /// and because Process.Start only fails when a prompt is REFUSED, an unanswered one looked
-    /// exactly like having nothing to install. Branches sat four releases behind while the Updates
-    /// page said "install updates by themselves" and reported no error at all.
+    /// This call has been silently failing on every ordinary launch since the day it was written,
+    /// on a counter PC as much as a gaming PC, and it is worth being honest about why rather than
+    /// leaving the older, more hopeful version of this comment in place.
     ///
-    /// Counter PCs got away with it because the branch API is a Windows service and could install
-    /// on their behalf. Gaming PCs have no service, which is why APPLE144HZ-02 was still on 3.0.6
-    /// two days and four releases later.
+    /// Creating a task that runs /RU SYSTEM /RL HIGHEST needs an elevated caller. This app runs as
+    /// whoever is logged in - not elevated, even on an administrator's own account, because
+    /// Windows does not elevate an app just because the signed-in user could approve a prompt. So
+    /// this has only ever actually succeeded once per machine: immediately after install, when it
+    /// happened to inherit the installer's own elevation for that one launch - at which point the
+    /// installer's own [Run] step had already registered the same task moments earlier anyway,
+    /// making this call redundant even in the one case where it worked.
     ///
-    /// /RU SYSTEM is the whole difference: SYSTEM is already privileged and has no desktop to draw a
-    /// prompt on, so there is nothing to click and nothing to ignore. The script does its own
-    /// downloading and hash checking rather than being handed a file by this app - see the security
-    /// note in apply-update.ps1 for why a SYSTEM task must never run a path a user could influence.
+    /// On a counter PC this no longer matters: AutoUpdateTaskGuard on the branch API repairs the
+    /// same task on every service startup instead, and a Windows service is always elevated and
+    /// always running, which this app is neither. That is the real fix for "the Updates page says
+    /// one is waiting, but it never installs" - a task disturbed by a Windows Update, security
+    /// software, or someone tidying Task Scheduler by hand could never be recreated by anything on
+    /// the machine short of a full reinstall, and this call was never able to do it either.
+    ///
+    /// A gaming PC has no local service, so it has nothing else and this stays exactly as
+    /// unreliable there as it always was - a real gap, not yet closed.
     /// </summary>
     private static void EnsureAutoUpdateTask()
     {

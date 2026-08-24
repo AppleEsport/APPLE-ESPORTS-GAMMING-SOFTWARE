@@ -489,6 +489,16 @@ using (var scope = app.Services.CreateScope())
             // IsDevelopment() together.
             AppleEsportsErp.Api.DbUpdater.UpdateSchema(app);
             Log.Information("Database schema patches applied ✓");
+
+            // Checked here, not only by the desktop app on launch, because the desktop app's own
+            // attempt to do this needs elevation it does not normally have and has been silently
+            // failing on every ordinary launch since the day it was written - see
+            // AutoUpdateTaskGuard for the full reasoning. This service is always elevated and
+            // always running, which the desktop app is neither.
+            if (!AppleEsportsErp.Infrastructure.Configuration.DeploymentRole.IsHeadOffice(app.Configuration))
+            {
+                AppleEsportsErp.Api.AutoUpdateTaskGuard.EnsureRegistered(app.Logger);
+            }
         }
         else
         {
