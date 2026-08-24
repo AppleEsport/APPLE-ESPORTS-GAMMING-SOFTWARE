@@ -12,7 +12,7 @@
 ; ============================================================================
 
 #define AppName        "Apple Esports"
-#define AppVersion     "3.1.11"
+#define AppVersion     "3.1.12"
 #define AppPublisher   "Apple Esports"
 #define Staging        "branch\staging"
 
@@ -111,6 +111,14 @@ Name: "{app}\backups"; Components: server
 ; See KioskGuard.EnsureStartsOnBoot for the per-user fallback. uninsdeletevalue so uninstalling really
 ; does stop it coming back.
 Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "AppleEsports"; ValueData: """{app}\AppleEsports.exe"""; Flags: uninsdeletevalue
+
+; KioskGuard.EnsureStartsOnBoot falls back to writing this same value under HKCU (the logged-in
+; user's own hive) whenever HKLM was unreadable or wrong at some point during the machine's life -
+; see the comment there. This installer never writes that fallback itself (ValueType: none means
+; install does nothing here), but uninstall must still remove it if KioskGuard ever did, or the
+; machine would keep relaunching a deleted AppleEsports.exe every time that user logs in, forever,
+; with "Uninstall a program" having reported a clean removal.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "AppleEsports"; Flags: uninsdeletevalue
 
 [Icons]
 Name: "{group}\{#AppName}";              Filename: "{app}\AppleEsports.exe"
