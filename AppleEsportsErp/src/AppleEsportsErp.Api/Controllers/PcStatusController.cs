@@ -112,26 +112,34 @@ public class PcsController : ControllerBase
         if (pricingProfile == null)
             return BadRequest(ApiResponse<object>.Fail("This branch has no Pricing Profile yet. Create one in Settings → Pricing Profiles before adding a PC."));
 
+        // A console (PS5, Xbox, etc.) has no ClientAgent to ever call /api/agent/provision -
+        // there is no software running on it at all, only a row in this table used for timing
+        // and billing. Gating it behind AwaitingSetup the same way a real gaming PC is would
+        // mean it could never be started on, forever - nothing would ever flip it to Idle. It
+        // is trusted to be ready the moment Super Admin registers it instead.
+        var isConsole = string.Equals(dto.Zone, "Console", StringComparison.OrdinalIgnoreCase);
+
         var pc = new AppleEsportsErp.Domain.Entities.Pc
         {
             Id = Guid.NewGuid(),
             PcNumber = dto.PcNumber,
             PcName = dto.PcName ?? dto.PcNumber,
             BranchId = dto.BranchId,
-            IpAddress = dto.IpAddress,
+            IpAddress = isConsole ? null : dto.IpAddress,
             Specs = dto.Specs ?? "{}",
             Zone = dto.Zone ?? "Standard",
             HardwareNotes = dto.HardwareNotes,
             PricingProfileId = pricingProfile?.Id,
 
-            // NOT Idle. This is the record's first moment of existing - no physical machine has
-            // claimed it yet, and Idle would tell the Sessions page (and the public walk-in
-            // kiosk picker, PublicController's PcState.Idle filter) that it is a real, bookable
-            // seat. It was Idle here for as long as this endpoint has existed, which is why a
-            // brand-new, never-set-up PC looked identical to a genuinely free one - both blue,
-            // both "FREE" - until whichever machine claims this PC number calls
+            // NOT Idle for a real gaming PC. This is the record's first moment of existing - no
+            // physical machine has claimed it yet, and Idle would tell the Sessions page (and the
+            // public walk-in kiosk picker, PublicController's PcState.Idle filter) that it is a
+            // real, bookable seat. It was Idle here for as long as this endpoint has existed,
+            // which is why a brand-new, never-set-up PC looked identical to a genuinely free one -
+            // both blue, both "FREE" - until whichever machine claims this PC number calls
             // /api/agent/provision and that flips it to Idle for real. See PcState.AwaitingSetup.
-            State = AppleEsportsErp.Domain.Enums.PcState.AwaitingSetup,
+            // A console skips this entirely - see isConsole above.
+            State = isConsole ? AppleEsportsErp.Domain.Enums.PcState.Idle : AppleEsportsErp.Domain.Enums.PcState.AwaitingSetup,
             IsActive = true,
             IsDeleted = false,
             CreatedAt = DateTimeOffset.UtcNow,
@@ -160,9 +168,11 @@ public class PcsController : ControllerBase
 
         if (exists) return BadRequest(ApiResponse<object>.Fail("PC number already exists in this branch"));
 
+        var isConsole = string.Equals(dto.Zone, "Console", StringComparison.OrdinalIgnoreCase);
+
         pc.PcNumber = dto.PcNumber;
         pc.PcName = dto.PcName ?? dto.PcNumber;
-        pc.IpAddress = dto.IpAddress;
+        pc.IpAddress = isConsole ? null : dto.IpAddress;
         pc.Specs = dto.Specs ?? "{}";
         pc.Zone = dto.Zone ?? "Standard";
         pc.HardwareNotes = dto.HardwareNotes;
