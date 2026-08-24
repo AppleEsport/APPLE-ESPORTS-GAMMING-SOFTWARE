@@ -8,7 +8,13 @@ public class VersionInfo
     public bool ApprovedForRollout { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? ApprovedAt { get; set; }
-    public string ApprovedByUserId { get; set; }
+    // Nullable alongside ApprovedAt, deliberately: CreateVersionAsync makes a row with neither
+    // set, and ApproveVersionAsync is the only place that ever fills either in. The column was
+    // NOT NULL with no default until now, which meant creating a version - the first of the two
+    // steps in the API this app actually exposes - could never succeed on its own. Every
+    // version before this one was ever only written by a single direct SQL insert that set both
+    // fields together in the same statement, which is the only reason this was never hit.
+    public string? ApprovedByUserId { get; set; }
     public int BranchesApprovedCount { get; set; }
 
     // ── The installer this version refers to ──
