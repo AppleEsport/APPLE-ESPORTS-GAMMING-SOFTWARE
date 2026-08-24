@@ -1,5 +1,5 @@
 import { memo, useState, useEffect, useId } from 'react';
-import { Keyboard, Mouse, Clock } from 'lucide-react';
+import { Keyboard, Mouse, Clock, Gamepad2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import api from '../../config/api';
 import { useToast } from '../ui/Toast';
@@ -89,6 +89,12 @@ const PcTile = memo(({ pc, walkinReq, isSelected, onSelect, onQuickStart, onRefr
   const [isTransferring, setIsTransferring] = useState(false);
   const [now, setNow] = useState(Date.now());
   const sizeStyle = SIZE_STYLES[size] || SIZE_STYLES.md;
+
+  // A console (PS5, Xbox...) is a Pc row like any other underneath - same State, same Session,
+  // same billing - tagged only by Zone so it never needed its own entity. This is purely a
+  // display distinction: an operator glancing at the grid should see a controller, not a
+  // monitor, for a seat that has neither a screen nor a screen-lock agent.
+  const isConsole = pc.zone === 'Console';
 
   const hasReservation = pc.nextReservationTime && new Date(pc.nextReservationTime) > new Date();
 
@@ -215,6 +221,9 @@ const PcTile = memo(({ pc, walkinReq, isSelected, onSelect, onQuickStart, onRefr
       )}
 
       <div className={`relative flex items-center justify-center ${(walkinReq || pc.state === 'AwaitingBilling') ? 'animate-pulse' : ''}`}>
+        {isConsole ? (
+          <Gamepad2 className={`${style.icon} ${sizeStyle.glyph} drop-shadow-[0_0_8px_currentColor]`} strokeWidth={1.5} />
+        ) : (
         <MonitorGlyph className={style.icon} sizeClass={sizeStyle.glyph} glow={true}>
           {/* What the customer is being charged on, said with a picture rather than a symbol. An
               infinity glyph is accurate and means nothing from four metres away; a keyboard and
@@ -234,6 +243,7 @@ const PcTile = memo(({ pc, walkinReq, isSelected, onSelect, onQuickStart, onRefr
             </foreignObject>
           )}
         </MonitorGlyph>
+        )}
       </div>
 
       <span className={`font-heading font-bold text-text ${sizeStyle.name} tracking-wider truncate max-w-full`}>{pc.name}</span>

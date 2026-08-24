@@ -15,7 +15,7 @@ import {
 } from '../../api/settings.api';
 import { authAPI } from '../../api/auth.api';
 import {
-  Store, Users, Activity, MoreVertical, Edit, Trash2, Plus, Save, Clock, MapPin, Monitor, Wrench, Shield, Check, Info, Eye, EyeOff, KeyRound
+  Store, Users, Activity, MoreVertical, Edit, Trash2, Plus, Save, Clock, MapPin, Monitor, Wrench, Shield, Check, Info, Eye, EyeOff, KeyRound, Gamepad2
 } from 'lucide-react';
 import SystemConfigTab from './SystemConfigTab';
 import SecuritySettingsTab from './SecuritySettingsTab';
@@ -835,12 +835,21 @@ export default function SettingsPage() {
                   <Info className="w-4 h-4" />
                   PC number must be unique within this branch context.
                 </div>
-                <button 
-                  onClick={() => setPcDrawer({ isOpen: true, data: null })}
-                  className="btn-primary flex items-center gap-1.5 text-[11px] font-bold uppercase py-1.5 px-3"
-                >
-                  <Plus size={13} /> ADD PC RIG
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setPcDrawer({ isOpen: true, data: null, isConsole: false })}
+                    className="btn-primary flex items-center gap-1.5 text-[11px] font-bold uppercase py-1.5 px-3"
+                  >
+                    <Plus size={13} /> ADD PC RIG
+                  </button>
+                  <button
+                    onClick={() => setPcDrawer({ isOpen: true, data: null, isConsole: true })}
+                    className="btn-primary flex items-center gap-1.5 text-[11px] font-bold uppercase py-1.5 px-3"
+                    title="A console (PS5, Xbox...) is billed and timed like a PC but has no screen-lock agent and no IP"
+                  >
+                    <Gamepad2 size={13} /> ADD CONSOLE
+                  </button>
+                </div>
               </div>
 
               {pcModal.loading ? (
@@ -876,7 +885,10 @@ export default function SettingsPage() {
                         return (
                           <tr key={p.id}>
                             <td className="font-semibold text-text font-heading text-xs">
-                              {p.pcNumber} {p.pcName && p.pcName !== p.pcNumber && <span className="text-text-3">({p.pcName})</span>}
+                              <span className="inline-flex items-center gap-1.5">
+                                {p.zone === 'Console' && <Gamepad2 size={12} className="text-accent shrink-0" />}
+                                {p.pcNumber} {p.pcName && p.pcName !== p.pcNumber && <span className="text-text-3">({p.pcName})</span>}
+                              </span>
                             </td>
                             <td className="text-text-2 max-w-[120px] truncate">
                               {parsedSpecs.gpu || parsedSpecs.cpu ? (
@@ -933,47 +945,61 @@ export default function SettingsPage() {
       )}
 
       {/* NESTED PC CREATE/EDIT DRAWER — key forces form remount per PC */}
+      {(() => {
+        // A drawer opened via "Add Console" starts with no data yet, so pcDrawer.isConsole
+        // carries the intent; editing an existing row instead reads it back off that row's own
+        // zone. Either way this decides whether the form asks for an IP at all.
+        const isConsoleMode = pcDrawer.data ? pcDrawer.data?.zone === 'Console' : !!pcDrawer.isConsole;
+        return (
       <Drawer
         isOpen={pcDrawer.isOpen}
         onClose={() => setPcDrawer({ isOpen: false, data: null })}
-        title={pcDrawer.data ? 'Update PC Rig Details' : 'Register PC Rig'}
+        title={pcDrawer.data ? 'Update PC Rig Details' : (isConsoleMode ? 'Register Console' : 'Register PC Rig')}
         width="400px"
       >
         <form key={pcDrawer.data?.id || 'new-pc'} onSubmit={handleSavePc} className="form-stack text-xs">
           <div className="form-group">
-            <label>PC ID / Station Number *</label>
-            <input 
-              name="pcNumber" 
-              required 
-              defaultValue={pcDrawer.data?.pcNumber} 
-              className="form-control" 
-              placeholder="e.g. PC-01"
-            />
-          </div>
-          
-          <div className="form-group">
-            <label>Friendly Name</label>
-            <input 
-              name="pcName" 
-              defaultValue={pcDrawer.data?.pcName} 
-              className="form-control" 
-              placeholder="e.g. RTX 4090 VIP Rig"
+            <label>{isConsoleMode ? 'Console ID / Station Number *' : 'PC ID / Station Number *'}</label>
+            <input
+              name="pcNumber"
+              required
+              defaultValue={pcDrawer.data?.pcNumber}
+              className="form-control"
+              placeholder={isConsoleMode ? 'e.g. PS5-01' : 'e.g. PC-01'}
             />
           </div>
 
           <div className="form-group">
-            <label>Zone / Tier (Legacy)</label>
-            <select 
-              name="zone" 
-              defaultValue={pcDrawer.data?.zone || 'Standard'} 
+            <label>Friendly Name</label>
+            <input
+              name="pcName"
+              defaultValue={pcDrawer.data?.pcName}
               className="form-control"
-            >
-              <option value="Standard">Standard Area</option>
-              <option value="VIP">VIP Lounge</option>
-              <option value="Console">Console Room</option>
-              <option value="Streaming">Streaming Booth</option>
-            </select>
+              placeholder={isConsoleMode ? 'e.g. PS5 - Booth 1' : 'e.g. RTX 4090 VIP Rig'}
+            />
           </div>
+
+          {isConsoleMode ? (
+            // A console is not a "zone" a customer picks a seat in - it is a device type. Fixed
+            // rather than shown as a dropdown, so nobody accidentally reassigns a registered
+            // console back into Standard/VIP/Streaming, which would put it behind the same
+            // AwaitingSetup gate a real gaming PC needs and it can never satisfy (no agent will
+            // ever call /api/agent/provision for a PS5).
+            <input type="hidden" name="zone" value="Console" />
+          ) : (
+            <div className="form-group">
+              <label>Zone / Tier (Legacy)</label>
+              <select
+                name="zone"
+                defaultValue={pcDrawer.data?.zone || 'Standard'}
+                className="form-control"
+              >
+                <option value="Standard">Standard Area</option>
+                <option value="VIP">VIP Lounge</option>
+                <option value="Streaming">Streaming Booth</option>
+              </select>
+            </div>
+          )}
 
           <div className="form-group">
             <label>Pricing Profile / Dynamic Zone</label>
@@ -992,15 +1018,17 @@ export default function SettingsPage() {
             <p className="text-[10px] text-text-3 mt-1">Select the billing profile for this PC.</p>
           </div>
 
-          <div className="form-group">
-            <label>IP Address</label>
-            <input 
-              name="ipAddress" 
-              defaultValue={pcDrawer.data?.ipAddress} 
-              className="form-control" 
-              placeholder="e.g. 192.168.1.100"
-            />
-          </div>
+          {!isConsoleMode && (
+            <div className="form-group">
+              <label>IP Address</label>
+              <input
+                name="ipAddress"
+                defaultValue={pcDrawer.data?.ipAddress}
+                className="form-control"
+                placeholder="e.g. 192.168.1.100"
+              />
+            </div>
+          )}
 
           <div className="border-t border-border pt-3 mt-3">
             <h4 className="font-semibold text-text uppercase tracking-wider text-[10px] mb-2 text-accent">Specifications</h4>
@@ -1050,6 +1078,8 @@ export default function SettingsPage() {
           </div>
         </form>
       </Drawer>
+        );
+      })()}
 
     </div>
   );
