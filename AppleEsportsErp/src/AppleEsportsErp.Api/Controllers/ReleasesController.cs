@@ -224,6 +224,11 @@ public class ReleasesController : ControllerBase
     [HttpPost("upload")]
     [Authorize(Roles = Roles.SuperAdmin)]
     [RequestSizeLimit(1_073_741_824)]
+    // RequestSizeLimit alone was not enough: it caps Kestrel's overall request body, but
+    // ASP.NET Core's multipart/form-data parser enforces its own separate 128MB default on
+    // top of that - a branch installer is ~164MB, so every upload failed with "Multipart body
+    // length limit exceeded" even after nginx and RequestSizeLimit were both raised.
+    [RequestFormLimits(MultipartBodyLengthLimit = 1_073_741_824)]
     public async Task<IActionResult> Upload([FromForm] IFormFile file, [FromForm] string version, CancellationToken ct)
     {
         if (file is null || file.Length == 0)
