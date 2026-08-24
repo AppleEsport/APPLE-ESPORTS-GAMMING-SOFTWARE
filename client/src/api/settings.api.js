@@ -112,6 +112,11 @@ export const saveSystemConfig = async (data) => {
   return response.data;
 };
 
+export const testEmailConfig = async (toAddress) => {
+  const response = await api.post('/system-config/test-email', { toAddress });
+  return response.data;
+};
+
 // --- Wallet Top-Up Settings ---
 export const getWalletTopUpRules = async () => {
   const response = await api.get('/wallet-settings');
