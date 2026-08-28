@@ -420,11 +420,33 @@ public class PcStatusHub : BranchAwareHub
             .AnyAsync(p => p.Id == id && p.BranchId == branchId && !p.IsDeleted);
     }
 
-    /// <summary>Heartbeat from agent to keep connection alive</summary>
-    public async Task AgentHeartbeat(string pcId, string mode)
+    /// <summary>
+    /// Heartbeat from agent to keep connection alive. Also the only place a gaming PC's agent
+    /// version reaches the database - agentVersion is optional so an older agent talking to a
+    /// newer server (which has not yet installed the update that adds this parameter) still
+    /// heartbeats successfully, just without a version to report yet.
+    ///
+    /// Written only when it actually changed. A PC heartbeats every 10 seconds
+    /// (DualConnectionService.HealthCheckIntervalSeconds) and its version changes maybe once a
+    /// month - writing on every heartbeat regardless would be 35 PCs' worth of UPDATEs every
+    /// 10 seconds for a value that is, almost always, identical to what is already stored.
+    /// </summary>
+    public async Task AgentHeartbeat(string pcId, string mode, string? agentVersion = null)
     {
         Logger.LogDebug("Heartbeat from PC {PcId} in {Mode} mode", pcId, mode);
-        await Task.CompletedTask;
+
+        if (!string.IsNullOrWhiteSpace(agentVersion) && Guid.TryParse(pcId, out var id))
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+            var pc = await db.Pcs.FirstOrDefaultAsync(p => p.Id == id && !p.IsDeleted);
+            if (pc != null && pc.AgentVersion != agentVersion)
+            {
+                pc.AgentVersion = agentVersion;
+                await db.SaveChangesAsync();
+            }
+        }
     }
 }
 
