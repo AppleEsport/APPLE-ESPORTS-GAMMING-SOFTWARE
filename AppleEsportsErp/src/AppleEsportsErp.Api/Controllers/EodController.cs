@@ -1,13 +1,10 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using AppleEsportsErp.Api.Extensions;
 using AppleEsportsErp.Api.Filters;
 using AppleEsportsErp.Application.DTOs.Common;
 using AppleEsportsErp.Application.DTOs.Eod;
 using AppleEsportsErp.Application.Interfaces;
-using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.Services;
-using System.Security.Claims;
 
 using Microsoft.EntityFrameworkCore;
 
@@ -52,9 +49,8 @@ public class EodController : ControllerBase
             .ToListAsync();
 
         // Bucketed by the midnight-to-midnight IST day, the same day boundary
-        // /eod/preview and /eod/finalize use - not the raw UTC calendar date, which
-        // puts a bill rung up at 01:30 IST on the wrong day here and the right day
-        // everywhere else.
+        // /eod/preview uses - not the raw UTC calendar date, which puts a bill rung
+        // up at 01:30 IST on the wrong day here and the right day everywhere else.
         var billsByBusinessDay = bills
             .Select(b => (Bill: b, BusinessDay: IndiaTime.BusinessDayOf(b.CompletedAt!.Value)))
             .ToList();
@@ -331,92 +327,5 @@ public class EodController : ControllerBase
         return Ok(ApiResponse<EodReportDto>.Ok(result));
     }
 
-    [HttpGet("validation")]
-    public async Task<IActionResult> GetValidationStatus([FromQuery] string? date)
-    {
-        DateTimeOffset targetDate;
-
-        if (string.IsNullOrWhiteSpace(date))
-        {
-            targetDate = DateTimeOffset.UtcNow.ToUniversalTime();
-        }
-        else if (DateTimeOffset.TryParse(date, null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsed))
-        {
-            targetDate = parsed.ToUniversalTime();
-        }
-        else if (DateTime.TryParse(date, out var dateOnly))
-        {
-            // Handle "YYYY-MM-DD" format from React component
-            targetDate = new DateTimeOffset(dateOnly.Date, TimeSpan.Zero);
-        }
-        else
-        {
-            return BadRequest(ApiResponse<object>.Fail("Invalid date format. Use ISO 8601 format or YYYY-MM-DD."));
-        }
-
-        var result = await _eodService.GetValidationStatusAsync(GetBranchId(), targetDate);
-        return Ok(ApiResponse<ValidationStatusDto>.Ok(result));
-    }
-
-    [HttpPost("finalize")]
-    [Authorize(Roles = Roles.SuperAdmin)] // Strictly SuperAdmin as per SOP
-    public async Task<IActionResult> FinalizeEod([FromBody] FinalizeEodRequest request)
-    {
-        DateTimeOffset targetDate;
-
-        if (string.IsNullOrWhiteSpace(request.Date))
-        {
-            targetDate = DateTimeOffset.UtcNow.ToUniversalTime();
-        }
-        else if (DateTimeOffset.TryParse(request.Date, null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsed))
-        {
-            targetDate = parsed.ToUniversalTime();
-        }
-        else if (DateTime.TryParse(request.Date, out var dateOnly))
-        {
-            // Handle "YYYY-MM-DD" format from React component
-            targetDate = new DateTimeOffset(dateOnly.Date, TimeSpan.Zero);
-        }
-        else
-        {
-            return BadRequest(ApiResponse<object>.Fail("Invalid date format. Use ISO 8601 format or YYYY-MM-DD."));
-        }
-
-        var result = await _eodService.FinalizeEodAsync(GetBranchId(), (await this.GetOperatorIdAsync()), targetDate);
-        return Ok(ApiResponse<EodSnapshotDto>.Ok(result));
-    }
-
-    [HttpGet("history")]
-    public async Task<IActionResult> GetHistoricalEod([FromQuery] string? date)
-    {
-        if (string.IsNullOrWhiteSpace(date))
-        {
-            return BadRequest(ApiResponse<object>.Fail("Date parameter is required."));
-        }
-
-        DateTimeOffset targetDate;
-        if (DateTimeOffset.TryParse(date, null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsed))
-        {
-            targetDate = parsed.ToUniversalTime();
-        }
-        else if (DateTime.TryParse(date, out var dateOnly))
-        {
-            // Handle "YYYY-MM-DD" format from React component
-            targetDate = new DateTimeOffset(dateOnly.Date, TimeSpan.Zero);
-        }
-        else
-        {
-            return BadRequest(ApiResponse<object>.Fail("Invalid date format. Use ISO 8601 format or YYYY-MM-DD."));
-        }
-
-        var result = await _eodService.GetHistoricalEodAsync(GetBranchId(), targetDate);
-        if (result == null) return NotFound(ApiResponse<EodSnapshotDto>.Fail("No finalized EOD snapshot found for the specified date."));
-        return Ok(ApiResponse<EodSnapshotDto>.Ok(result));
-    }
-}
-
-public class FinalizeEodRequest
-{
-    public string? Date { get; set; }
 }
 

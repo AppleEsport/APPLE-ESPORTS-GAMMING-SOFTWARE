@@ -74,7 +74,7 @@ export const currentTradingDayIst = () => {
  * The [start, end) instant window for one IST trading day, ready to send
  * to the API. Midnight IST on `tradingDayDate` to midnight IST the next day -
  * the same window AppleEsportsErp.Application.Services.IndiaTime.BusinessDayRange
- * computes on the backend for /eod/preview and /eod/finalize.
+ * computes on the backend for /eod/preview.
  */
 export const tradingDayRangeIst = (tradingDayDate) => {
   // +05:30 is IST's fixed, DST-free offset - explicit here so the instant

@@ -30,13 +30,12 @@ public class CashDeskService : ICashDeskService
 
     public async Task StartVerificationAsync(Guid branchId, Guid operatorId, Guid shiftId)
     {
-        // Worked out here, not inside the query. EF Core has to turn the predicate into SQL
-        // and has no idea what BusinessDayOf is, so having it inline threw on every call -
-        // which meant an operator could not count the drawer, and so could not end a shift.
-        var today = IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow);
-
+        // The branch's currently open drawer, whatever day it was opened on. Filtering by
+        // BusinessDay == today used to mean a register opened before midnight and still open
+        // after it could no longer be found here at all, so an operator trying to count out
+        // past midnight got "no open cash register" instead of the drawer in front of them.
         var register = await _unitOfWork.Repository<CashRegister>().Query()
-            .FirstOrDefaultAsync(r => r.BranchId == branchId && r.BusinessDay == today && r.Status == CashRegisterStatus.Open)
+            .FirstOrDefaultAsync(r => r.BranchId == branchId && r.Status == CashRegisterStatus.Open)
             ?? throw new NotFoundException("No open cash register found to verify.");
 
         register.Status = CashRegisterStatus.Verifying;
@@ -60,16 +59,13 @@ public class CashDeskService : ICashDeskService
 
     public async Task<DenominationCountDto> SubmitDenominationsAsync(Guid branchId, Guid operatorId, Guid shiftId, SubmitDenominationDto dto)
     {
-        // Worked out here, not inside the query. EF Core has to turn the predicate into SQL
-        // and has no idea what BusinessDayOf is, so having it inline threw on every call -
-        // which meant an operator could not count the drawer, and so could not end a shift.
-        var today = IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow);
-
+        // Same reasoning as StartVerificationAsync above: found by status only, not by whatever
+        // calendar day the register happened to be opened on.
         await _unitOfWork.BeginTransactionAsync();
         try
         {
             var register = await _unitOfWork.Repository<CashRegister>().Query()
-                .FirstOrDefaultAsync(r => r.BranchId == branchId && r.BusinessDay == today && r.Status == CashRegisterStatus.Verifying)
+                .FirstOrDefaultAsync(r => r.BranchId == branchId && r.Status == CashRegisterStatus.Verifying)
                 ?? throw new NotFoundException("No verifying cash register found. Must start verification first.");
 
             decimal countedTotal = 

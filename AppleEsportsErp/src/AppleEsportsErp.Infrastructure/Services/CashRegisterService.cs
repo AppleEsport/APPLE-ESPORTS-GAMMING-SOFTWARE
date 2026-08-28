@@ -29,21 +29,22 @@ public class CashRegisterService : ICashRegisterService
     }
 
     /// <summary>
-    /// The branch's drawer for the current trading day, whoever opened it.
+    /// The branch's currently open (or being verified/verified) drawer, whoever opened it.
     ///
-    /// Scoped by day rather than by shift: there is one physical cash box, and an operator
-    /// logging in again part-way through the evening should carry on with the same drawer
-    /// rather than be told there isn't one.
+    /// Scoped by status only, not by calendar day: there is one physical cash box, and an
+    /// operator logging in again part-way through the evening — or well past midnight, for a
+    /// branch still trading — should carry on with the same drawer rather than be told there
+    /// isn't one. A register opened yesterday and never closed is still "the open register",
+    /// full stop; see AuthService.CloseFinishedTradingDaysAsync for what actually decides when
+    /// a branch is genuinely done trading for the night.
     /// </summary>
     public async Task<CashRegisterDto> GetActiveRegisterAsync(Guid branchId, Guid shiftId)
     {
-        var today = IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow);
-
         var register = await _unitOfWork.Repository<CashRegister>().Query()
             .Include(r => r.CashTransactions)
-            .FirstOrDefaultAsync(r => r.BranchId == branchId
-                                   && r.BusinessDay == today
-                                   && r.Status != CashRegisterStatus.Closed)
+            .Where(r => r.BranchId == branchId && r.Status != CashRegisterStatus.Closed)
+            .OrderByDescending(r => r.OpenedAt)
+            .FirstOrDefaultAsync()
             ?? throw new NotFoundException("No cash register has been opened for today yet.");
 
         return MapToDto(register);
@@ -55,29 +56,31 @@ public class CashRegisterService : ICashRegisterService
     /// Reads exactly what <see cref="OpenRegisterAsync"/> will do rather than guessing at it, so
     /// the figure shown to the operator is the figure the drawer opens with. Two rules that
     /// disagree is how the branch ended up with two registers for one drawer in the first place.
+    ///
+    /// Not scoped by calendar day: the most recent register for the branch is the one that
+    /// matters, whatever day it was opened on — a register still open from before midnight must
+    /// not be treated as "nothing open yet" the instant the date rolls over.
     /// </summary>
     public async Task<RegisterOpeningDto> GetOpeningAsync(Guid branchId)
     {
-        var today = IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow);
-
-        var lastToday = await _unitOfWork.Repository<CashRegister>().Query()
-            .Where(r => r.BranchId == branchId && r.BusinessDay == today)
+        var lastRegister = await _unitOfWork.Repository<CashRegister>().Query()
+            .Where(r => r.BranchId == branchId)
             .OrderByDescending(r => r.OpenedAt)
             .FirstOrDefaultAsync();
 
-        if (lastToday is null)
+        if (lastRegister is null)
             return new RegisterOpeningDto { IsFirstOfDay = true };
 
-        if (lastToday.Status == CashRegisterStatus.Open)
+        if (lastRegister.Status == CashRegisterStatus.Open)
             return new RegisterOpeningDto
             {
                 AlreadyOpen = true,
-                InheritedBalance = lastToday.ExpectedDrawerCash,
+                InheritedBalance = lastRegister.ExpectedDrawerCash,
             };
 
         return new RegisterOpeningDto
         {
-            InheritedBalance = lastToday.PhysicalCashCounted ?? lastToday.ExpectedDrawerCash,
+            InheritedBalance = lastRegister.PhysicalCashCounted ?? lastRegister.ExpectedDrawerCash,
         };
     }
 
@@ -85,30 +88,37 @@ public class CashRegisterService : ICashRegisterService
     {
         var today = IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow);
 
-        // The most recent drawer for today, whatever state it is in. Matching only on Open was
-        // the bug: an operator who ended their shift and logged back in found nothing open, was
-        // asked for a fresh float, and got a SECOND drawer for the same till. One held Rs 100
-        // and one held Rs 0, the end-of-day screen read one and the lock screen the other, and
-        // nothing compared them.
+        // The most recent drawer for this branch, whatever state it is in and whatever day it
+        // was opened on. Matching only on Open was the bug: an operator who ended their shift
+        // and logged back in found nothing open, was asked for a fresh float, and got a SECOND
+        // drawer for the same till. One held Rs 100 and one held Rs 0, the end-of-day screen
+        // read one and the lock screen the other, and nothing compared them.
+        //
+        // Matching on BusinessDay == today was a second, later version of the same bug: a
+        // register opened before midnight and still genuinely open after it stopped being found
+        // at all the moment the calendar date rolled over, so a branch open past midnight got
+        // asked to open a brand new drawer mid-shift. BusinessDay is still stamped on the
+        // register below when a new one is actually opened - it is only this lookup that no
+        // longer filters by it.
         //
         // In the branch EXE this needs no reload to happen. The prompt is remembered in
         // sessionStorage, which is wiped whenever the app closes - so it returns after every
         // restart, which means after every power cut.
-        var lastToday = await _unitOfWork.Repository<CashRegister>().Query()
-            .Where(r => r.BranchId == branchId && r.BusinessDay == today)
+        var lastRegister = await _unitOfWork.Repository<CashRegister>().Query()
+            .Where(r => r.BranchId == branchId)
             .OrderByDescending(r => r.OpenedAt)
             .FirstOrDefaultAsync();
 
         // Still open: hand back the same drawer rather than opening a rival to it.
-        if (lastToday != null && lastToday.Status == CashRegisterStatus.Open)
-            return MapToDto(lastToday);
+        if (lastRegister != null && lastRegister.Status == CashRegisterStatus.Open)
+            return MapToDto(lastRegister);
 
         // A branch has ONE drawer and it runs through the trading day. Only the first shift
         // puts money in; a later one inherits what the last shift left. What was counted is
         // preferred over what was expected - the count is what is physically there.
-        var openingBalance = lastToday is null
+        var openingBalance = lastRegister is null
             ? dto.OpeningBalance
-            : (lastToday.PhysicalCashCounted ?? lastToday.ExpectedDrawerCash);
+            : (lastRegister.PhysicalCashCounted ?? lastRegister.ExpectedDrawerCash);
 
 
         var register = new CashRegister
@@ -150,14 +160,12 @@ public class CashRegisterService : ICashRegisterService
         await _unitOfWork.BeginTransactionAsync();
         try
         {
-            // Today's drawer, whoever opened it — cash taken after a re-login belongs in the
-            // same box it physically went into.
-            var today = IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow);
-
+            // The branch's currently open drawer, whoever opened it and whatever day it was
+            // opened on — cash taken after a re-login belongs in the same box it physically
+            // went into.
             var register = await _unitOfWork.Repository<CashRegister>().Query()
                 .Include(r => r.CashTransactions)
                 .FirstOrDefaultAsync(r => r.BranchId == branchId
-                                       && r.BusinessDay == today
                                        && r.Status == CashRegisterStatus.Open)
                 ?? throw new NotFoundException("No cash register has been opened for today yet.");
 
