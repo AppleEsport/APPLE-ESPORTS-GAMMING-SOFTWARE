@@ -3,12 +3,14 @@ using Microsoft.AspNetCore.Mvc;
 using AppleEsportsErp.Api.Extensions;
 using Microsoft.EntityFrameworkCore;
 using AppleEsportsErp.Api.Filters;
+using AppleEsportsErp.Api.Services;
 using AppleEsportsErp.Application.Interfaces;
 using AppleEsportsErp.Application.DTOs.Common;
 using AppleEsportsErp.Application.DTOs.PcStatus;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Claims;
 using System.Threading.Tasks;
 
 namespace AppleEsportsErp.Api.Controllers;
@@ -21,11 +23,13 @@ public class PcsController : ControllerBase
 {
     private readonly IPcStatusService _pcStatusService;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly IRemoteBranchControl _remote;
 
-    public PcsController(IPcStatusService pcStatusService, IUnitOfWork unitOfWork)
+    public PcsController(IPcStatusService pcStatusService, IUnitOfWork unitOfWork, IRemoteBranchControl remote)
     {
         _pcStatusService = pcStatusService;
         _unitOfWork = unitOfWork;
+        _remote = remote;
     }
 
     [HttpGet]
@@ -83,8 +87,29 @@ public class PcsController : ControllerBase
 
     [HttpPost]
     [Authorize(Policy = "SuperAdminOnly")]
-    public async Task<IActionResult> Create([FromBody] AppleEsportsErp.Application.DTOs.Settings.CreatePcDto dto)
+    public async Task<IActionResult> Create([FromBody] AppleEsportsErp.Application.DTOs.Settings.CreatePcDto dto, CancellationToken ct)
     {
+        // Head Office holds a mirrored copy of every branch's PCs, not the real one - writing a
+        // new row here the way this endpoint used to would create it only in that mirror, never
+        // on the branch's own database the counter and the gaming PCs actually read from. It
+        // looked like it worked (Head Office's own Settings page showed the new PC immediately)
+        // and did nothing an operator at the branch could ever see, the same fault RemoteBranchControl
+        // exists to fix for every other PC action.
+        if (_remote.MustTravel)
+        {
+            var receipt = await _remote.SendAsync(
+                dto.BranchId, BranchCommands.AddPc, dto,
+                Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!), ct);
+
+            return Accepted(ApiResponse<object>.Ok(new
+            {
+                queued = true,
+                commandId = receipt.CommandId,
+                branchIsReporting = receipt.BranchIsReporting,
+                message = receipt.Message,
+            }));
+        }
+
         var exists = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.Pc>()
             .Query()
             .AnyAsync(p => p.BranchId == dto.BranchId && p.PcNumber == dto.PcNumber && !p.IsDeleted);
