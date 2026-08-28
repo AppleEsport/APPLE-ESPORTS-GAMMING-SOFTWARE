@@ -1,5 +1,5 @@
 import { memo, useState, useEffect, useId } from 'react';
-import { Keyboard, Mouse, Clock } from 'lucide-react';
+import { Infinity as InfinityIcon, Timer } from 'lucide-react';
 import { motion } from 'framer-motion';
 import api from '../../config/api';
 import { useToast } from '../ui/Toast';
@@ -73,35 +73,18 @@ function MonitorGlyph({ className = '', sizeClass = 'w-16 h-16', glow = false, c
   );
 }
 
-// ── Console glyph: a DualSense-style controller silhouette (bar + two grips), drawn in the
-// same style as MonitorGlyph - currentColor layers plus a diagonal sheen - so a console tile
-// reads as part of the same set rather than a mismatched stock icon dropped in next to it ──
-function ControllerGlyph({ className = '', sizeClass = 'w-16 h-16', glow = false }) {
-  const clipId = useId();
+// ── Console tile: the actual console photo (PS5 today) rather than a drawn glyph, so it reads
+// unmistakably as a console at a glance instead of a stylised icon that could be mistaken for
+// anything else. Tinted via the same status-color + drop-shadow pattern as MonitorGlyph, which
+// works on a PNG the same way it does on an SVG as long as the source image has a transparent
+// background - the glow traces the console's own silhouette rather than a plain rectangle. ──
+function ConsoleGlyph({ className = '', sizeClass = 'w-16 h-16', glow = false }) {
   return (
-    <svg
-      viewBox="0 0 64 40"
-      className={`${sizeClass} ${className} ${glow ? 'drop-shadow-[0_0_8px_currentColor]' : ''}`}
-      fill="none"
-    >
-      <clipPath id={clipId}>
-        <rect x="8" y="10" width="48" height="16" rx="8" />
-        <circle cx="16" cy="26" r="11" />
-        <circle cx="48" cy="26" r="11" />
-      </clipPath>
-      <g clipPath={`url(#${clipId})`}>
-        <rect x="4" y="10" width="56" height="27" fill="currentColor" opacity="0.85" />
-        <polygon points="4,26 32,4 60,4 32,26" fill="#fff" opacity="0.14" />
-      </g>
-      {/* D-pad, left grip */}
-      <rect x="11" y="24" width="10" height="4" rx="1" fill="currentColor" opacity="0.45" />
-      <rect x="14" y="21" width="4" height="10" rx="1" fill="currentColor" opacity="0.45" />
-      {/* face buttons, right grip */}
-      <circle cx="48" cy="21" r="1.8" fill="currentColor" opacity="0.45" />
-      <circle cx="48" cy="29" r="1.8" fill="currentColor" opacity="0.45" />
-      <circle cx="44" cy="25" r="1.8" fill="currentColor" opacity="0.45" />
-      <circle cx="52" cy="25" r="1.8" fill="currentColor" opacity="0.45" />
-    </svg>
+    <img
+      src="/ps5-console.png"
+      alt="Console"
+      className={`${sizeClass} ${className} object-contain ${glow ? 'drop-shadow-[0_0_8px_currentColor]' : ''}`}
+    />
   );
 }
 
@@ -254,22 +237,19 @@ const PcTile = memo(({ pc, walkinReq, isSelected, onSelect, onQuickStart, onRefr
 
       <div className={`relative flex items-center justify-center ${(walkinReq || pc.state === 'AwaitingBilling') ? 'animate-pulse' : ''}`}>
         {isConsole ? (
-          <ControllerGlyph className={style.icon} sizeClass={sizeStyle.glyph} glow={true} />
+          <ConsoleGlyph className={style.icon} sizeClass={sizeStyle.glyph} glow={true} />
         ) : (
         <MonitorGlyph className={style.icon} sizeClass={sizeStyle.glyph} glow={true}>
-          {/* What the customer is being charged on, said with a picture rather than a symbol. An
-              infinity glyph is accurate and means nothing from four metres away; a keyboard and
-              mouse reads as "playing, charged as they go", and a clock reads as "bought an hour". */}
+          {/* What the customer is being charged on, said with a picture rather than a symbol. A
+              black infinity mark on the screen reads as "no time limit, billed as they go";
+              an orange timer reads as "a fixed block of time, counting down". */}
           {(glyphIsPayAsYouGo || glyphIsPlanTime) && (
             <foreignObject x="14" y="12" width="36" height="24">
               <div className="flex items-center justify-center w-full h-full gap-0.5">
                 {glyphIsPayAsYouGo ? (
-                  <>
-                    <Keyboard className={`${sizeStyle.infinity} text-pc-active`} strokeWidth={2.5} />
-                    <Mouse className={`${sizeStyle.infinity} text-pc-active`} strokeWidth={2.5} />
-                  </>
+                  <InfinityIcon className={`${sizeStyle.infinity} text-black`} strokeWidth={2.5} />
                 ) : (
-                  <Clock className={`${sizeStyle.infinity} text-neon-orange`} strokeWidth={2.5} />
+                  <Timer className={`${sizeStyle.infinity} text-neon-orange`} strokeWidth={2.5} />
                 )}
               </div>
             </foreignObject>
