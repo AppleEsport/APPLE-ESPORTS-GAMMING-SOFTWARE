@@ -1,7 +1,5 @@
-﻿using System.Text.Json;
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using AppleEsportsErp.Application.DTOs.Eod;
-using AppleEsportsErp.Application.Exceptions;
 using AppleEsportsErp.Application.Interfaces;
 using AppleEsportsErp.Application.Services;
 using AppleEsportsErp.Domain.Entities;
@@ -12,65 +10,10 @@ namespace AppleEsportsErp.Infrastructure.Services;
 public class EodService : IEodService
 {
     private readonly IUnitOfWork _unitOfWork;
-    private readonly IAuditService _auditService;
 
-    public EodService(IUnitOfWork unitOfWork, IAuditService auditService)
+    public EodService(IUnitOfWork unitOfWork)
     {
         _unitOfWork = unitOfWork;
-        _auditService = auditService;
-    }
-
-    public async Task<ValidationStatusDto> GetValidationStatusAsync(Guid branchId, DateTimeOffset targetDate)
-    {
-        // startOfDay stays as the day's KEY - it is what a saved EOD snapshot is filed under,
-        // and changing it would orphan every snapshot already finalised.
-        var startOfDay = new DateTimeOffset(targetDate.UtcDateTime.Date, TimeSpan.Zero);
-        var endOfDay = startOfDay.AddDays(1);
-
-        // The window everything is actually counted over: midnight to midnight IST, the
-        // calendar day. This screen used to read midnight-to-midnight UTC, which is 05:30
-        // IST - so late-night takings landed on the wrong day here and the right day
-        // everywhere else, and the two screens disagreed about the same money.
-        var (dayStart, dayEnd) = IndiaTime.BusinessDayRange(DateOnly.FromDateTime(startOfDay.UtcDateTime.Date));
-
-        var blockers = new List<string>();
-
-        // 1. Check for unclosed Shifts
-        var unclosedShifts = await _unitOfWork.Repository<Shift>().Query()
-            .Where(s => s.BranchId == branchId && s.Status != ShiftStatus.Completed)
-            .CountAsync();
-            
-        if (unclosedShifts > 0)
-            blockers.Add($"{unclosedShifts} shift(s) are not yet Completed/Closed.");
-
-        // 2. Check for unclosed Cash Registers
-        var unclosedRegisters = await _unitOfWork.Repository<CashRegister>().Query()
-            .Where(r => r.BranchId == branchId && r.Status != CashRegisterStatus.Closed)
-            .CountAsync();
-
-        if (unclosedRegisters > 0)
-            blockers.Add($"{unclosedRegisters} cash register(s) have not finalized end-of-shift verification.");
-
-        // 3. Check for Pending/Unpaid Bills
-        var pendingBills = await _unitOfWork.Repository<Bill>().Query()
-            .Where(b => b.BranchId == branchId && b.CreatedAt >= dayStart && b.CreatedAt < dayEnd && b.Status != BillStatus.Completed)
-            .CountAsync();
-
-        if (pendingBills > 0)
-            blockers.Add($"{pendingBills} bill(s) are still pending/unpaid.");
-
-        // 4. Check if Snapshot already exists
-        var snapshotExists = await _unitOfWork.Repository<EodSnapshot>().Query()
-            .AnyAsync(e => e.BranchId == branchId && e.ReportDate == startOfDay);
-            
-        if (snapshotExists)
-            blockers.Add("End of Day has already been finalized for this date.");
-
-        return new ValidationStatusDto
-        {
-            IsReady = !blockers.Any(),
-            Blockers = blockers
-        };
     }
 
     public async Task<EodReportDto> GenerateEodReportAsync(Guid branchId, DateTimeOffset targetDate)
@@ -306,97 +249,5 @@ public class EodService : IEodService
         }).ToList();
 
         return report;
-    }
-
-    public async Task<EodSnapshotDto> FinalizeEodAsync(Guid branchId, Guid operatorId, DateTimeOffset targetDate)
-    {
-        await _unitOfWork.BeginTransactionAsync();
-        try
-        {
-            var startOfDay = new DateTimeOffset(targetDate.UtcDateTime.Date, TimeSpan.Zero);
-            
-            // 1. Verify Validation Status
-            var status = await GetValidationStatusAsync(branchId, startOfDay);
-            if (!status.IsReady)
-            {
-                throw new AppException("Cannot finalize EOD due to unresolved blockers: " + string.Join("; ", status.Blockers));
-            }
-
-            // 2. Generate dynamic report payload
-            var report = await GenerateEodReportAsync(branchId, startOfDay);
-
-            // 3. Serialize securely using JSON
-            var jsonData = JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = false });
-
-            // 4. Create immutable snapshot
-            var snapshot = new EodSnapshot
-            {
-                BranchId = branchId,
-                ReportDate = startOfDay,
-                GeneratedByOperatorId = operatorId,
-                SnapshotVersion = 1,
-                SchemaVersion = "B.8-v1",
-                SnapshotData = jsonData,
-                CreatedAt = DateTimeOffset.UtcNow,
-                UpdatedAt = DateTimeOffset.UtcNow
-            };
-
-            await _unitOfWork.Repository<EodSnapshot>().AddAsync(snapshot);
-
-            // 5. Audit Log
-            await _auditService.LogAsync(new AuditEntry
-            {
-                OperatorId = operatorId,
-                UserRole = "SuperAdmin", // Must be super admin
-                UserName = "System",
-                Action = "eod_finalize",
-                BranchId = branchId,
-                TargetType = "eod_snapshot",
-                TargetId = snapshot.Id,
-                Details = new { SchemaVersion = snapshot.SchemaVersion, Revenue = report.Revenue.NetRevenue }
-            });
-
-            await _unitOfWork.CommitTransactionAsync();
-
-            return new EodSnapshotDto
-            {
-                Id = snapshot.Id,
-                BranchId = snapshot.BranchId,
-                ReportDate = snapshot.ReportDate,
-                GeneratedByOperatorId = snapshot.GeneratedByOperatorId,
-                SnapshotVersion = snapshot.SnapshotVersion,
-                SchemaVersion = snapshot.SchemaVersion,
-                CreatedAt = snapshot.CreatedAt,
-                Data = report
-            };
-        }
-        catch
-        {
-            await _unitOfWork.RollbackTransactionAsync();
-            throw;
-        }
-    }
-
-    public async Task<EodSnapshotDto?> GetHistoricalEodAsync(Guid branchId, DateTimeOffset targetDate)
-    {
-        var startOfDay = new DateTimeOffset(targetDate.UtcDateTime.Date, TimeSpan.Zero);
-        var snapshot = await _unitOfWork.Repository<EodSnapshot>().Query()
-            .FirstOrDefaultAsync(e => e.BranchId == branchId && e.ReportDate == startOfDay);
-
-        if (snapshot == null) return null;
-
-        var deserializedData = JsonSerializer.Deserialize<EodReportDto>(snapshot.SnapshotData);
-
-        return new EodSnapshotDto
-        {
-            Id = snapshot.Id,
-            BranchId = snapshot.BranchId,
-            ReportDate = snapshot.ReportDate,
-            GeneratedByOperatorId = snapshot.GeneratedByOperatorId,
-            SnapshotVersion = snapshot.SnapshotVersion,
-            SchemaVersion = snapshot.SchemaVersion,
-            CreatedAt = snapshot.CreatedAt,
-            Data = deserializedData!
-        };
     }
 }

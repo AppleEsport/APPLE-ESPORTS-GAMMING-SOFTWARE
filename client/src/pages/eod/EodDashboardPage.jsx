@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from 'react';
-import { ShieldCheck, AlertTriangle, FileText, CheckCircle, Lock, Monitor, Utensils, Clock, Printer, Download, Wrench, ZapOff, Clock as ClockIcon } from 'lucide-react';
+import { AlertTriangle, FileText, Lock, Monitor, Utensils, Clock, Printer, Download, Wrench, ZapOff, Clock as ClockIcon } from 'lucide-react';
 import { printBill } from '../../utils/printBill';
 import { useAuth } from '../../contexts/AuthContext';
 import { useBranch } from '../../contexts/BranchContext';
@@ -64,10 +64,7 @@ export default function EodDashboardPage() {
   const [targetDate, setTargetDate] = useState(currentTradingDayIst()); // YYYY-MM-DD
   const [summaryBarHeight, setSummaryBarHeight] = useState(140);
   const [report, setReport] = useState(null);
-  const [validation, setValidation] = useState(null);
-  const [isHistorical, setIsHistorical] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const [isFinalizing, setIsFinalizing] = useState(false);
   const [error, setError] = useState(null);
 
   const [pcs, setPcs] = useState([]);
@@ -99,35 +96,13 @@ export default function EodDashboardPage() {
     setError(null);
 
     try {
-      // First try to fetch historical snapshot
-      try {
-        const { data: historyData } = await api.get('/eod/history', {
-          params: { date: targetDate, branchId: targetBranchId }
-        });
-
-        setReport(historyData.data.data); // historyData.data is EodSnapshotDto, .data is EodReportDto
-        setIsHistorical(true);
-      } catch (historyErr) {
-        if (historyErr.response?.status === 404) {
-          // No snapshot exists. It is either today or an unfinalized past date.
-          setIsHistorical(false);
-          setValidation(null);
-
-          // Fetch Preview
-          const { data: previewData } = await api.get('/eod/preview', {
-            params: { date: targetDate, branchId: targetBranchId }
-          });
-          setReport(previewData.data);
-
-          // Fetch Validation Status
-          const { data: validationData } = await api.get('/eod/validation', {
-            params: { date: targetDate, branchId: targetBranchId }
-          });
-          setValidation(validationData.data);
-        } else {
-          throw historyErr;
-        }
-      }
+      // Every date is computed live from current data - there is no saved snapshot to check
+      // first. An old trading day is not "locked"; it recomputes the same as today's, so it
+      // always reflects the current state of the records (a corrected bill, a cleared credit).
+      const { data: previewData } = await api.get('/eod/preview', {
+        params: { date: targetDate, branchId: targetBranchId }
+      });
+      setReport(previewData.data);
 
       // Also fetch range-report to get allBills and PCs for PC-Wise Grid, and maintenance logs.
       // Window must be the same 06:00-06:00 IST trading day /eod/preview uses above, not
@@ -175,6 +150,15 @@ export default function EodDashboardPage() {
 
     } catch (err) {
       setError(err.response?.data?.error || err.response?.data?.message || 'Failed to fetch EOD data.');
+      // A failed poll or a date switch that stumbles must not leave the previous date's full
+      // report sitting on screen under the error banner - that reads as live, current data
+      // when it is neither. Clear everything so the screen actually goes blank on failure.
+      setReport(null);
+      setPcs([]);
+      setAllBills([]);
+      setShifts([]);
+      setDowntime([]);
+      setMaintenanceLogs([]);
     } finally {
       setIsLoading(false);
       setIsUpdating(false);
@@ -203,8 +187,6 @@ export default function EodDashboardPage() {
   // the branch's own machine, not here, so Head Office was never going to be pushed anything
   // about a branch - the timer is the only thing that was ever updating those figures.
   useEffect(() => {
-    if (isHistorical) return;   // a finalised day cannot change; polling it is pure waste
-
     const REFRESH_EVERY_MS = 10000;
 
     const tick = () => {
@@ -221,11 +203,11 @@ export default function EodDashboardPage() {
       clearInterval(pollInterval);
       document.removeEventListener('visibilitychange', tick);
     };
-  }, [fetchEodData, isHistorical]);
+  }, [fetchEodData]);
 
   // Instant refresh when something actually happens on this machine, on top of the timer above.
   useEffect(() => {
-    if (!connected || isHistorical) return;
+    if (!connected) return;
 
     const unsubCash = subscribe(SIGNALR_HUBS.CASH, 'CashRegisterUpdated', fetchEodData);
     const unsubBill = subscribe(SIGNALR_HUBS.BILLING, 'BillUpdated', fetchEodData);
@@ -236,26 +218,12 @@ export default function EodDashboardPage() {
       unsubBill();
       unsubSession();
     };
-  }, [connected, subscribe, SIGNALR_HUBS.CASH, SIGNALR_HUBS.BILLING, SIGNALR_HUBS.SESSIONS, fetchEodData, isHistorical]);
-
-  const handleFinalize = async () => {
-    if (!window.confirm("Are you sure? This will generate a permanent immutable snapshot for this date. It cannot be undone.")) return;
-
-    setIsFinalizing(true);
-    try {
-      await api.post('/eod/finalize', { date: targetDate });
-      await fetchEodData(); // Re-fetch to show historical locked view
-    } catch (err) {
-      setError(err.response?.data?.error || err.response?.data?.message || 'Failed to finalize EOD.');
-    } finally {
-      setIsFinalizing(false);
-    }
-  };
+  }, [connected, subscribe, SIGNALR_HUBS.CASH, SIGNALR_HUBS.BILLING, SIGNALR_HUBS.SESSIONS, fetchEodData]);
 
   const handleDownloadPdf = () => {
     if (!report) return;
     const title = 'End of Day Report';
-    const subtitle = `${activeBranch?.name || 'All Branches'}  •  ${targetDate}  •  ${isHistorical ? 'Finalized (Immutable)' : 'Live Preview'}`;
+    const subtitle = `${activeBranch?.name || 'All Branches'}  •  ${targetDate}  •  Live Preview`;
     const { doc } = createReport({ title, subtitle });
     let y = 90;
 
@@ -431,37 +399,32 @@ export default function EodDashboardPage() {
     <>
     <div
       className="h-full flex flex-col max-w-6xl mx-auto space-y-6 overflow-y-auto"
-      style={{ paddingBottom: report ? summaryBarHeight + 24 : 40 }}
+      // The fixed bottom bar's actual rendered height is always exactly `summaryBarHeight`
+      // (that value is what sets its CSS height, not a guess) - so this padding, driven by the
+      // same variable plus a clearance margin, can never fall short of what it needs to clear,
+      // whatever height the bar is dragged to.
+      style={{ paddingBottom: report ? summaryBarHeight + 32 : 40 }}
     >
       <div className="flex justify-between items-center bg-bg-2 p-6 rounded-xl border border-border">
         <PageHeader
           title="End of Day Dashboard"
-          subtitle={isHistorical ? 'Immutable Financial Snapshot' : 'Live Preview & Real-Time Updates'}
+          subtitle="Live Preview & Real-Time Updates"
           icon="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
         />
-        <div className="flex flex-col items-end gap-2">
-          <div className="flex items-center gap-2">
-            <input
-              type="date"
-              value={targetDate}
-              onChange={(e) => setTargetDate(e.target.value)}
-              className="bg-bg-3 border border-border rounded-lg px-4 py-2 text-text outline-none focus:border-accent"
-            />
-            <button
-              onClick={handleDownloadPdf}
-              disabled={isLoading || !report}
-              className="btn-secondary py-2 px-3 flex items-center gap-1.5 text-xs font-bold disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <Download className="w-3.5 h-3.5" /> Download PDF
-            </button>
-          </div>
-          <div className="flex items-center gap-3">
-            {isHistorical && (
-              <span className="bg-neon-green/10 text-neon-green px-3 py-1 rounded border border-neon-green/30 text-xs font-bold uppercase tracking-widest flex items-center gap-2">
-                <ShieldCheck className="w-4 h-4" /> Finalized
-              </span>
-            )}
-          </div>
+        <div className="flex items-center gap-2">
+          <input
+            type="date"
+            value={targetDate}
+            onChange={(e) => setTargetDate(e.target.value)}
+            className="bg-bg-3 border border-border rounded-lg px-4 py-2 text-text outline-none focus:border-accent"
+          />
+          <button
+            onClick={handleDownloadPdf}
+            disabled={isLoading || !report}
+            className="btn-secondary py-2 px-3 flex items-center gap-1.5 text-xs font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Download className="w-3.5 h-3.5" /> Download PDF
+          </button>
         </div>
       </div>
 
@@ -635,29 +598,6 @@ export default function EodDashboardPage() {
         </div>
       ) : report ? (
         <>
-          {/* Validation Panel (Only if not historical) */}
-          {!isHistorical && validation && (
-            <div className={`p-6 rounded-xl border ${validation.isReady ? 'bg-neon-green/5 border-neon-green/20' : 'bg-neon-red/5 border-neon-red/20'}`}>
-              <h3 className={`text-sm uppercase font-bold tracking-widest mb-4 flex items-center gap-2 ${validation.isReady ? 'text-neon-green' : 'text-neon-red'}`}>
-                {validation.isReady ? <CheckCircle className="w-5 h-5" /> : <AlertTriangle className="w-5 h-5" />}
-                Financial Validation Status
-              </h3>
-              
-              {validation.isReady ? (
-                <p className="text-text-2 text-sm">All shifts are closed. All registers verified. Financials are balanced. You may proceed to finalize.</p>
-              ) : (
-                <ul className="space-y-2">
-                  {validation.blockers.map((blocker, idx) => (
-                    <li key={idx} className="text-sm text-neon-red flex items-start gap-2">
-                      <span className="text-neon-red/50 mt-0.5">•</span>
-                      {blocker}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          )}
-
           {/* Revenue & Operations Summary Grid */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="bg-bg-2 p-5 rounded-xl border border-border shadow-lg">
@@ -697,7 +637,7 @@ export default function EodDashboardPage() {
 
           {/* ── Power cuts & connection losses ──
               Deliberately above the billing log: it is the context for the numbers below. */}
-          <div className="card bg-bg-2 border border-border p-6 rounded-xl shadow-lg mt-8">
+          <div className="card bg-bg-2 border border-border p-6 rounded-xl shadow-lg">
             <div className="flex justify-between items-center mb-4">
               <h2 className="font-heading font-extrabold text-sm uppercase tracking-wider text-text flex items-center gap-2">
                 <ZapOff className="w-4.5 h-4.5 text-accent" />
@@ -760,7 +700,7 @@ export default function EodDashboardPage() {
           </div>
 
           {/* ── Complete Billing Audit Logs ── */}
-          <div className="card bg-bg-2 border border-border p-6 rounded-xl shadow-lg mt-8">
+          <div className="card bg-bg-2 border border-border p-6 rounded-xl shadow-lg">
             <div className="flex justify-between items-center mb-6">
               <h2 className="font-heading font-extrabold text-sm uppercase tracking-wider text-text flex items-center gap-2">
                 <Clock className="w-4.5 h-4.5 text-accent" />
@@ -872,7 +812,7 @@ export default function EodDashboardPage() {
           </div>
 
           {/* ── Credit Audit Logs ── */}
-          <div className="card bg-bg-2 border border-border p-6 rounded-xl shadow-lg mt-8">
+          <div className="card bg-bg-2 border border-border p-6 rounded-xl shadow-lg">
             <div className="flex justify-between items-center mb-6">
               <h2 className="font-heading font-extrabold text-sm uppercase tracking-wider text-text flex items-center gap-2">
                 <Clock className="w-4.5 h-4.5 text-accent" />
@@ -932,11 +872,11 @@ export default function EodDashboardPage() {
           </div>
 
           {/* ── Maintenance Audit Logs ── */}
-          <div className="card bg-bg-2 border border-border p-6 rounded-xl shadow-lg mt-8">
+          <div className="card bg-bg-2 border border-border p-6 rounded-xl shadow-lg">
             <div className="flex justify-between items-center mb-6">
               <h2 className="font-heading font-extrabold text-sm uppercase tracking-wider text-text flex items-center gap-2">
                 <Wrench className="w-4.5 h-4.5 text-neon-orange" />
-                Maintenance Logs (Last 30 Days)
+                Maintenance Logs ({targetDate})
               </h2>
             </div>
 
@@ -992,25 +932,6 @@ export default function EodDashboardPage() {
             </div>
           </div>
 
-          {/* Finalize Button */}
-          {!isHistorical && isSuperAdmin && (
-            <div className="mt-8">
-              <button
-                onClick={handleFinalize}
-                disabled={!validation?.isReady || isFinalizing}
-                className="w-full py-5 rounded-xl font-bold uppercase tracking-widest text-sm transition-all bg-accent hover:bg-accent-hover text-white shadow-lg shadow-accent/20 flex justify-center items-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isFinalizing ? (
-                  <div className="w-5 h-5 rounded-full border-2 border-white border-t-transparent animate-spin" />
-                ) : (
-                  <>
-                    <ShieldCheck className="w-5 h-5" />
-                    Finalize EOD & Create Immutable Snapshot
-                  </>
-                )}
-              </button>
-            </div>
-          )}
         </>
       ) : null}
     </div>

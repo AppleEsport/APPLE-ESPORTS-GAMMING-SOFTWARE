@@ -42,7 +42,6 @@ public class AppDbContext : DbContext
     public DbSet<Discount> Discounts => Set<Discount>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<SystemConfig> SystemConfigs => Set<SystemConfig>();
-    public DbSet<EodSnapshot> EodSnapshots => Set<EodSnapshot>();
 
     // Decentralized LAN Offline Architecture sync tables
     public DbSet<OfflineSyncSession> OfflineSyncSessions => Set<OfflineSyncSession>();

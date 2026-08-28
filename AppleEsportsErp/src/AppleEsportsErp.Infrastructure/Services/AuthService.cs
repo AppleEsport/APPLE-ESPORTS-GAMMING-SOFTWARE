@@ -671,20 +671,22 @@ public class AuthService : IAuthService
     /// <summary>
     /// The day's figures, emailed to the owner when the last shift closes.
     ///
-    /// Counted over the 06:00-06:00 trading day rather than the shift, because that is how
-    /// the money is counted everywhere else - a session that starts at 01:00 belongs to the
-    /// night before, whoever happened to be on duty.
+    /// Counted over the midnight-to-midnight trading day rather than the shift, because that is
+    /// how the money is counted everywhere else - a session that starts at 01:00 belongs to the
+    /// calendar day already under way when it started, whoever happened to be on duty.
     ///
     /// Never throws. A summary that cannot be emailed must not stop an operator going home.
     /// </summary>
     /// <summary>
-    /// Closes any trading day that is over and that nobody closed, and sends its report.
+    /// Closes any trading day that is genuinely over and that nobody closed, and sends its report.
+    /// A branch still trading past midnight is not closed here - see
+    /// <see cref="RolloverOpenRegisterAsync"/> for what happens to it instead.
     ///
     /// The end-of-day report used to depend entirely on an operator ticking "last shift of the
-    /// day". Ticking it wrongly costs one confusing email. Forgetting it costs the whole day's
-    /// report AND leaves the register open past 06:00 for good — which is where the thirty stale
-    /// registers already cleared off the live system came from. Forgetting is much the likelier,
-    /// because it takes doing nothing.
+    /// day". Ticking it wrongly costs one confusing email. Forgetting it used to leave the
+    /// register open indefinitely too - which is where the thirty stale registers already
+    /// cleared off the live system came from. Forgetting is much the likelier outcome, because
+    /// it takes doing nothing.
     ///
     /// So the day no longer depends on being remembered. The tick still works, and closes the day
     /// early when an operator uses it; this is what happens when nobody does.
@@ -692,12 +694,162 @@ public class AuthService : IAuthService
     /// Safe to call repeatedly: it only acts on registers still open from a day that has ended,
     /// and closing them is what stops it acting again.
     /// </summary>
+    /// <summary>
+    /// How long a branch must have gone without a session starting/stopping, a bill, or a
+    /// cash movement before it counts as "quiet" for <see cref="IsBranchGenuinelyClosedForTheNightAsync"/>.
+    ///
+    /// There is no fixed opening/closing schedule to fall back on - branches trade for however
+    /// long customers keep showing up, not to a timetable - so this window is the only safety
+    /// margin against a genuine lull mid-session. Kept longer than the 45 minutes first used for
+    /// exactly that reason: with no time-of-day floor underneath it, this alone has to be long
+    /// enough that nobody mid-café would ever plausibly go quiet for its whole length.
+    /// </summary>
+    private static readonly TimeSpan QuietWindow = TimeSpan.FromMinutes(90);
+
+    /// <summary>
+    /// Whether a branch is actually done trading for the night, not merely quiet for a moment
+    /// during a normal day - the real gate on force-closing anything still open from a
+    /// calendar-stale trading day.
+    ///
+    /// Now that the trading day ends at midnight (moved from the old 06:00-06:00 boundary),
+    /// midnight falls in the middle of real trading hours for any branch open past it - so
+    /// "the business day has ended" is no longer a safe signal on its own. Both of the
+    /// following must hold instead - purely activity-based, per the owner's own call: branches
+    /// have no fixed closing time, so there is no schedule to check against:
+    ///
+    ///  1. No PC at the branch is <see cref="PcState.Active"/> or <see cref="PcState.AwaitingBilling"/>
+    ///     - nobody is actually playing or waiting to be billed right now.
+    ///  2. Nothing has actually happened recently - no session starting or stopping, no bill,
+    ///     no cash movement - within <see cref="QuietWindow"/>. (1) alone is not enough: a
+    ///     branch can be between customers for a few quiet minutes at any hour.
+    /// </summary>
+    private async Task<bool> IsBranchGenuinelyClosedForTheNightAsync(
+        Guid branchId, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        // 1. Nobody currently playing or waiting to be billed.
+        var hasLivePc = await _db.Pcs.AnyAsync(
+            p => p.BranchId == branchId
+              && (p.State == PcState.Active || p.State == PcState.AwaitingBilling),
+            cancellationToken);
+        if (hasLivePc) return false;
+
+        // 2. Nothing real has happened at the branch inside the quiet window.
+        var quietSince = now - QuietWindow;
+
+        var recentSessionActivity = await _db.Sessions.AnyAsync(
+            s => s.BranchId == branchId && (s.StartTime >= quietSince || s.UpdatedAt >= quietSince),
+            cancellationToken);
+        if (recentSessionActivity) return false;
+
+        var recentBill = await _db.Bills.AnyAsync(
+            b => b.BranchId == branchId && (b.CreatedAt >= quietSince || b.UpdatedAt >= quietSince),
+            cancellationToken);
+        if (recentBill) return false;
+
+        var recentCashTransaction = await _db.CashTransactions.AnyAsync(
+            c => c.BranchId == branchId && c.CreatedAt >= quietSince,
+            cancellationToken);
+        if (recentCashTransaction) return false;
+
+        return true;
+    }
+
+    /// <summary>
+    /// Rolls a still-open drawer from a finished calendar day into today, without touching the
+    /// shift or the operator at all - the branch is still trading, so nothing about the login
+    /// should change, only which day's bucket the drawer belongs to from this moment on.
+    ///
+    /// Needed because EodService's Cash Summary section selects registers by an exact
+    /// BusinessDay match, while its Bills/Payments/Wallet figures are already selected by their
+    /// own timestamp falling in the calendar day. Without this, a register still open from last
+    /// night stays stamped with yesterday's BusinessDay indefinitely - so today's report shows
+    /// zero opening balance and zero cash activity even as real money moves, while yesterday's
+    /// report keeps absorbing tonight's takings under a day that is already over. The two
+    /// sections of the SAME report would disagree with each other, and a branch's own EOD would
+    /// disagree with what Head Office shows for the same day - exactly the "different data"
+    /// the owner was seeing.
+    ///
+    /// No physical count happens here - the cash never left the drawer, so there is nothing to
+    /// verify. The book figure (<see cref="CashRegister.ExpectedDrawerCash"/>) becomes both the
+    /// closing figure for the day that just ended and the opening figure for the one that just
+    /// started, exactly as an ordinary handover already does when an operator counts one drawer
+    /// out and starts the next from what was counted.
+    /// </summary>
+    private async Task RolloverOpenRegisterAsync(Guid branchId, DateOnly today, CancellationToken cancellationToken)
+    {
+        var openRegister = await _db.CashRegisters
+            .Where(r => r.BranchId == branchId && r.Status == CashRegisterStatus.Open)
+            .OrderByDescending(r => r.OpenedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        // Nothing open right now (a handover mid-count, or genuinely nothing) - nothing to
+        // roll. Also guards against rolling the very register this method just opened, if a
+        // branch has more than one calendar-stale day queued up in the same pass.
+        if (openRegister is null || openRegister.BusinessDay >= today) return;
+
+        var (todayStart, _) = IndiaTime.BusinessDayRange(today);
+
+        // Whoever is actually on duty right now inherits the new drawer - not necessarily
+        // whoever opened the one being closed, since a shift already runs across a handover
+        // with no register change at all (CashRegister.ShiftId is kept for accountability,
+        // not scoping - see that field's own comment).
+        var activeShift = await _db.Shifts
+            .Where(s => s.BranchId == branchId && s.Status == ShiftStatus.Active)
+            .OrderByDescending(s => s.LoginTime)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        openRegister.Status = CashRegisterStatus.Closed;
+        openRegister.ClosedAt = todayStart;
+        openRegister.PhysicalCashCounted = openRegister.ExpectedDrawerCash;
+        openRegister.CashDifference = 0;
+        openRegister.MismatchReason = string.IsNullOrWhiteSpace(openRegister.MismatchReason)
+            ? "Rolled over automatically at midnight - the branch was still trading, so the drawer was never physically recounted."
+            : openRegister.MismatchReason;
+
+        var newRegister = new CashRegister
+        {
+            BranchId = branchId,
+            OperatorId = activeShift?.OperatorId ?? openRegister.OperatorId,
+            ShiftId = activeShift?.Id ?? openRegister.ShiftId,
+            BusinessDay = today,
+            OpeningBalance = openRegister.ExpectedDrawerCash,
+            ExpectedDrawerCash = openRegister.ExpectedDrawerCash,
+            TotalCashSales = 0,
+            TotalSplitCash = 0,
+            Status = CashRegisterStatus.Open,
+            OpenedAt = todayStart,
+        };
+
+        _db.CashRegisters.Add(newRegister);
+        await _db.SaveChangesAsync(cancellationToken);
+
+        await _audit.LogAsync(new AuditEntry
+        {
+            OperatorId = newRegister.OperatorId,
+            UserRole = "Operator",
+            UserName = "System",
+            Action = "cash_register_midnight_rollover",
+            BranchId = branchId,
+            TargetType = "cash_register",
+            TargetId = newRegister.Id,
+            Details = new { closedRegisterId = openRegister.Id, carriedBalance = newRegister.OpeningBalance }
+        });
+
+        _logger.LogInformation(
+            "Rolled over branch {Branch}'s drawer at midnight: closed {Old} (Rs {Balance}), opened {New} for {Day}.",
+            branchId, openRegister.Id, newRegister.OpeningBalance, newRegister.Id, today);
+    }
+
     public async Task<int> CloseFinishedTradingDaysAsync(CancellationToken cancellationToken = default)
     {
         var today = IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow);
+        var now = DateTimeOffset.UtcNow;
 
-        // Strictly earlier than today's trading day, so a day still being traded is never touched.
-        // At 05:59 the previous day is still open for business and must be left alone.
+        // Calendar-stale candidates only - strictly earlier than today's trading day. Being
+        // calendar-stale is necessary but, since the boundary moved to midnight, no longer
+        // sufficient: a branch trading past midnight has calendar-stale registers every single
+        // night for as long as it keeps trading. IsBranchGenuinelyClosedForTheNightAsync below
+        // is the real gate on whether any of these are actually force-closed this pass.
         var stale = await _db.CashRegisters
             .Where(r => r.BusinessDay < today && r.Status != CashRegisterStatus.Closed)
             .ToListAsync(cancellationToken);
@@ -710,6 +862,16 @@ public class AuthService : IAuthService
         {
             try
             {
+                // Not yet genuinely closed for the night - still trading, so roll the day's
+                // open drawer forward into today instead of leaving it stuck under a day that
+                // is already over. The operator and their shift are untouched; only the
+                // register's own day-bucket moves.
+                if (!await IsBranchGenuinelyClosedForTheNightAsync(branchDay.Key.BranchId, now, cancellationToken))
+                {
+                    await RolloverOpenRegisterAsync(branchDay.Key.BranchId, today, cancellationToken);
+                    continue;
+                }
+
                 foreach (var register in branchDay)
                 {
                     register.Status = CashRegisterStatus.Closed;
@@ -770,8 +932,8 @@ public class AuthService : IAuthService
                     branchDay.Key.BusinessDay, branchDay.Key.BranchId,
                     branchDay.Count(), branchDay.Sum(r => r.ExpectedDrawerCash));
 
-                // Midday IST on the day being closed - unambiguously inside its 06:00-to-06:00
-                // window, whichever shift the report ends up attributed to. Passing this rather
+                // Midday IST on the day being closed - unambiguously inside its midnight-to-
+                // midnight window, whichever shift the report ends up attributed to. Passing this rather
                 // than letting the day be inferred from a logout time is the whole fix: the first
                 // version compared the two and sent nothing when they disagreed, which is exactly
                 // the case that needs a report.
@@ -834,9 +996,9 @@ public class AuthService : IAuthService
             {
                 ("Branch", branchName),
                 ("Day", $"{businessDay:dd MMM yyyy}"),
-                ("Counted from", "6 in the morning to 6 the next morning"),
+                ("Counted from", "midnight to midnight"),
                 ("Shop closed at", closedAutomatically
-                    ? "6 in the morning - closed by the system, not by an operator"
+                    ? "midnight - closed by the system, not by an operator"
                     : IndiaTime.Format(shift.LogoutTime ?? DateTimeOffset.UtcNow)),
                 ("", ""),
                 ("Total money taken", $"Rs {total:0.00}"),
@@ -868,16 +1030,16 @@ public class AuthService : IAuthService
                     AdminEmailTemplate.Green,
                     $"The shop has closed for the day. {branchName} took Rs {total:0.00} from {sessions} customer{(sessions == 1 ? "" : "s")} on {businessDay:dd MMM yyyy}."
                         + (closedAutomatically
-                            ? " Nobody marked the last shift of the day, so the system closed the day itself at 6 in the morning."
+                            ? " Nobody marked the last shift of the day, so the system closed the day itself once trading had genuinely stopped for the night."
                             : string.Empty),
                     rows,
                     headline: $"Rs {total:0.00}",
                     footnote: closedAutomatically
-                        ? "The day runs from 6 in the morning to 6 the next morning, so late-night play counts towards "
-                          + "the day it started on. No operator ticked \"last shift of the day\", so this was put "
-                          + "together automatically once the day was over. The figures are complete; the only thing "
-                          + "missing is a counted drawer, if nobody counted it before leaving."
-                        : "The day runs from 6 in the morning to 6 the next morning, so late-night play counts towards the day it started on. You are getting this because the operator ticked \"last shift of the day\" when they finished."));
+                        ? "The day runs from midnight to midnight, so late-night play before midnight still counts "
+                          + "towards the day it started on. No operator ticked \"last shift of the day\", so this was "
+                          + "put together automatically once the branch had gone quiet for the night. The figures are "
+                          + "complete; the only thing missing is a counted drawer, if nobody counted it before leaving."
+                        : "The day runs from midnight to midnight, so late-night play before midnight still counts towards the day it started on. You are getting this because the operator ticked \"last shift of the day\" when they finished."));
         }
         catch (Exception ex)
         {

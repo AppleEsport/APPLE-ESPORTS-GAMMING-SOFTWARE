@@ -845,6 +845,7 @@ public class SyncInboxController : ControllerBase
                 $"Head Office has no member {memberId}. The member.created event should arrive first.");
 
         var cash = ReadDecimal(root, "cashAmount") ?? 0m;
+        var online = ReadDecimal(root, "onlineAmount") ?? 0m;
         var bonus = ReadDecimal(root, "bonusAmount") ?? 0m;
         var credited = ReadDecimal(root, "totalCredit") ?? (cash + bonus);
         var gamingAfter = ReadDecimal(root, "gamingBalanceAfter") ?? 0m;
@@ -865,6 +866,7 @@ public class SyncInboxController : ControllerBase
             BalanceAfter = gamingAfter,
             PaymentType = ReadString(root, "paymentType"),
             CashAmount = cash,
+            OnlineAmount = online,
             BonusAmount = bonus,
             CreatedAt = occurredAt,
         });
