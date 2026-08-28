@@ -62,7 +62,9 @@ export default function EodDashboardPage() {
   // this screen at 1am IST while closing up must still default to tonight's
   // report, not tomorrow's UTC date.
   const [targetDate, setTargetDate] = useState(currentTradingDayIst()); // YYYY-MM-DD
-  const [summaryBarHeight, setSummaryBarHeight] = useState(140);
+  // Fully expanded by default (matches EodPaymentSummaryBar's own MAX_HEIGHT) so every row of
+  // Cash & Collection is visible the moment EOD opens, with nothing to drag first.
+  const [summaryBarHeight, setSummaryBarHeight] = useState(420);
   const [report, setReport] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
