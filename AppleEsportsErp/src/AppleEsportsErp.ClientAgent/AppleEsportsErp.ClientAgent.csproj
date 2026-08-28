@@ -10,6 +10,14 @@
     <RootNamespace>AppleEsportsErp.ClientAgent</RootNamespace>
     <ApplicationIcon>Assets\logo.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- The version this agent reports on its heartbeat, so Head Office's "N of M gaming PCs
+         up to date" means something. Bumped by hand alongside the other three version files
+         on every release (Api.csproj, Desktop.csproj, AppleEsportsBranch.iss) - a fourth place
+         to change, but this is what makes an agent's own version independently checkable
+         rather than assumed from whichever installer happened to run last. -->
+    <Version>3.1.16</Version>
+    <FileVersion>3.1.16.0</FileVersion>
+    <AssemblyVersion>3.1.16.0</AssemblyVersion>
   </PropertyGroup>
 
   <ItemGroup>

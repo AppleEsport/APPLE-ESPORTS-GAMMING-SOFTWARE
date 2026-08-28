@@ -76,6 +76,16 @@ public class Pc
     public DateTimeOffset? LastAgentHeartbeat { get; set; }
 
     /// <summary>
+    /// The version the gaming PC agent last reported on a heartbeat. Null until the agent's
+    /// first heartbeat after this field existed - not "out of date", just "hasn't said yet".
+    /// This is what "N of M gaming PCs up to date" is actually counted from
+    /// (BranchVersionReporterService compares it against the branch API's own running
+    /// version); before this field existed that count was hardcoded to zero, because nothing
+    /// anywhere recorded what a gaming PC was actually running.
+    /// </summary>
+    public string? AgentVersion { get; set; }
+
+    /// <summary>
     /// True once <see cref="AppleEsportsErp.Api.Hubs.PcStatusHub.SendShutdownCommand"/> or
     /// SendShutdownAllCommand has told this PC to power off, and not yet cleared by
     /// <see cref="AppleEsportsErp.Api.Hubs.PcOverlayHub.ConnectPc"/> seeing it come back.

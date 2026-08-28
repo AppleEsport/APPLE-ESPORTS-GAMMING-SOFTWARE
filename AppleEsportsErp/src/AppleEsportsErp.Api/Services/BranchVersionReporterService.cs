@@ -112,9 +112,14 @@ public class BranchVersionReporterService : BackgroundService
         }
 
         // How many of this branch's gaming PCs are on the current version. Counted from what the
-        // PCs themselves last reported rather than assumed, so "12 of 16 up to date" means
-        // twelve machines said so.
+        // PCs themselves last reported (Pc.AgentVersion, written by AgentHeartbeat on the
+        // PcStatusHub) rather than assumed, so "12 of 16 up to date" means twelve machines said
+        // so - not a hardcoded zero, which is what this used to read regardless of reality,
+        // because nothing before AgentVersion existed ever recorded what a gaming PC was
+        // actually running.
         var totalPcs = await db.Pcs.CountAsync(p => p.BranchId == branch.Id && !p.IsDeleted, ct);
+        var upToDatePcs = await db.Pcs.CountAsync(
+            p => p.BranchId == branch.Id && !p.IsDeleted && p.AgentVersion == RunningVersion, ct);
 
         // Written to the branch's OWN database first, before Head Office is even contacted.
         //
@@ -129,7 +134,7 @@ public class BranchVersionReporterService : BackgroundService
         var versions = scope.ServiceProvider.GetRequiredService<IVersionService>();
         try
         {
-            await versions.UpdateBranchVersionStatusAsync(branch.Id, RunningVersion, 0, totalPcs);
+            await versions.UpdateBranchVersionStatusAsync(branch.Id, RunningVersion, upToDatePcs, totalPcs);
         }
         catch (Exception ex)
         {
@@ -139,7 +144,7 @@ public class BranchVersionReporterService : BackgroundService
         var payload = JsonSerializer.Serialize(new
         {
             currentVersion = RunningVersion,
-            upToDateCount = 0,
+            upToDateCount = upToDatePcs,
             totalCount = totalPcs,
         });
 
