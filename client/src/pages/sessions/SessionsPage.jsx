@@ -62,9 +62,15 @@ export default function SessionsPage() {
     if (!silent) setIsLoading(true);
     try {
       const { data } = await api.get('/pcs', { params: { branchId: targetBranchId } });
-      const sorted = (data?.data || []).sort((a, b) =>
-        a.name.localeCompare(b.name, undefined, { numeric: true })
-      );
+      // PCs first, consoles (PS5/Xbox...) last - a name like "PS5-01" otherwise sorts ahead of
+      // "TEST-PC-01" purely alphabetically, scattering consoles in among the PCs instead of
+      // grouping them at the end of the grid where an operator expects to find them.
+      const sorted = (data?.data || []).sort((a, b) => {
+        const aIsConsole = a.zone === 'Console' ? 1 : 0;
+        const bIsConsole = b.zone === 'Console' ? 1 : 0;
+        if (aIsConsole !== bIsConsole) return aIsConsole - bIsConsole;
+        return a.name.localeCompare(b.name, undefined, { numeric: true });
+      });
       // Only update if data actually changed
       setPcs(prev => {
         const prevJson = JSON.stringify(prev?.map(p => ({ id: p.id, state: p.state, totalAmount: p.totalAmount })));

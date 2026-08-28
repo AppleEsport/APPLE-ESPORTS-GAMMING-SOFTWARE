@@ -219,9 +219,13 @@ export default function PcStatusPage() {
     }
     try {
       const { data } = await api.get('/pcs', { params: { branchId: activeBranch.id } });
-      const sorted = (data?.data || []).sort((a, b) =>
-        a.name.localeCompare(b.name, undefined, { numeric: true })
-      );
+      // PCs first, consoles (PS5/Xbox...) last - same ordering as SessionsPage.
+      const sorted = (data?.data || []).sort((a, b) => {
+        const aIsConsole = a.zone === 'Console' ? 1 : 0;
+        const bIsConsole = b.zone === 'Console' ? 1 : 0;
+        if (aIsConsole !== bIsConsole) return aIsConsole - bIsConsole;
+        return a.name.localeCompare(b.name, undefined, { numeric: true });
+      });
       setPcs(sorted);
     } catch (err) {
       console.error('Failed to load PCs', err);
