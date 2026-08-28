@@ -365,6 +365,9 @@ public class BranchHeartbeatService : BackgroundService
             case BranchCommands.SetPcState:
                 return await RunSetPcStateAsync(scoped, command.Payload, ct);
 
+            case BranchCommands.AddPc:
+                return await RunAddPcAsync(scoped, command.Payload, ct);
+
             case BranchCommands.TransferSession:
                 return await RunTransferSessionAsync(scoped, command.Payload, ct);
 
@@ -1019,6 +1022,70 @@ public class BranchHeartbeatService : BackgroundService
         await db.SaveChangesAsync(ct);
 
         return (true, $"{pc.PcNumber} is now {state.ToString().ToLowerInvariant()}.");
+    }
+
+    /// <summary>
+    /// Adds a PC or console because Head Office asked - mirrors PcsController.Create exactly
+    /// (duplicate check, pricing-profile fallback, console-vs-PC initial state), since that
+    /// controller action is the one this replaces when the caller is at Head Office rather
+    /// than at the branch itself.
+    /// </summary>
+    private static async Task<(bool, string)> RunAddPcAsync(
+        IServiceProvider scoped, string payload, CancellationToken ct)
+    {
+        AppleEsportsErp.Application.DTOs.Settings.CreatePcDto? dto;
+        try
+        {
+            dto = JsonSerializer.Deserialize<AppleEsportsErp.Application.DTOs.Settings.CreatePcDto>(payload);
+        }
+        catch
+        {
+            dto = null;
+        }
+
+        if (dto is null || string.IsNullOrWhiteSpace(dto.PcNumber))
+            return (false, "The add-PC command arrived without a readable PC to create.");
+
+        var db = scoped.GetRequiredService<AppDbContext>();
+
+        var exists = await db.Pcs.AnyAsync(
+            p => p.BranchId == dto.BranchId && p.PcNumber == dto.PcNumber && !p.IsDeleted, ct);
+        if (exists)
+            return (false, $"PC number {dto.PcNumber} already exists at this branch.");
+
+        var pricingProfile = dto.PricingProfileId.HasValue
+            ? await db.PricingProfiles.FirstOrDefaultAsync(
+                p => p.Id == dto.PricingProfileId.Value && p.BranchId == dto.BranchId, ct)
+            : await db.PricingProfiles.FirstOrDefaultAsync(
+                p => p.BranchId == dto.BranchId && p.IsActive, ct);
+
+        if (pricingProfile is null)
+            return (false, "This branch has no Pricing Profile yet - create one before adding a PC.");
+
+        var isConsole = string.Equals(dto.Zone, "Console", StringComparison.OrdinalIgnoreCase);
+
+        var pc = new Pc
+        {
+            Id = Guid.NewGuid(),
+            PcNumber = dto.PcNumber,
+            PcName = dto.PcName ?? dto.PcNumber,
+            BranchId = dto.BranchId,
+            IpAddress = isConsole ? null : dto.IpAddress,
+            Specs = dto.Specs ?? "{}",
+            Zone = dto.Zone ?? "Standard",
+            HardwareNotes = dto.HardwareNotes,
+            PricingProfileId = pricingProfile.Id,
+            State = isConsole ? PcState.Idle : PcState.AwaitingSetup,
+            IsActive = true,
+            IsDeleted = false,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+
+        db.Pcs.Add(pc);
+        await db.SaveChangesAsync(ct);
+
+        return (true, $"{pc.PcNumber} added to the fleet.");
     }
 
     private static async Task<(bool, string)> RunStopSessionAsync(

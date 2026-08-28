@@ -334,8 +334,11 @@ export default function SettingsPage() {
         await updatePc(pcDrawer.data.id, payload);
         toast.success('PC updated successfully');
       } else {
-        await createPc(payload);
-        toast.success('PC created successfully');
+        const result = await createPc(payload);
+        // From Head Office this is queued for the branch to carry out rather than created on
+        // the spot - real message from the server rather than a flat "created", since the new
+        // PC will not actually show up in the list below until the branch has processed it.
+        toast.success(result?.data?.queued ? result.data.message : 'PC created successfully');
       }
       // Capture branchId before closing the drawer (avoids stale closure)
       const branchId = pcModal.branch?.id;
