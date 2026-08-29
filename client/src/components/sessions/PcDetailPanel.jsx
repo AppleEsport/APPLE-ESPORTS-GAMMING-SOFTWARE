@@ -226,6 +226,19 @@ export default function PcDetailPanel({
       </div>
 
       <div className="p-4 space-y-3 overflow-y-auto">
+        {/* Agent version - the one place an operator can actually check "has this PC taken the
+            update yet" instead of trusting the branch-wide count alone. Consoles have no agent
+            at all (see PcsController.Create's isConsole handling), so this is skipped for them
+            rather than showing a permanent, meaningless "not reported yet". */}
+        {pc.zone !== 'Console' && (
+          <div className="flex justify-between items-center text-[10px] font-mono text-text-3">
+            <span>Agent version</span>
+            <span className={pc.agentVersion ? 'text-text-2' : 'italic'}>
+              {pc.agentVersion || 'not reported yet'}
+            </span>
+          </div>
+        )}
+
         {/* ── PENDING WALK-IN ── */}
         {walkinReq && (
           <>
