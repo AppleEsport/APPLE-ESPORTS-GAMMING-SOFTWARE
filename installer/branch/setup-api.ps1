@@ -84,6 +84,22 @@ try {
     [Environment]::SetEnvironmentVariable('ASPNETCORE_ENVIRONMENT', 'Production', 'Machine')
     Write-Step "Configured to listen on port $ApiPort."
 
+    # Binding to every interface above is only half of what a gaming PC needs - Windows
+    # Firewall blocks an unsolicited inbound connection to this service by default, and
+    # there is no desktop session here for the usual "allow this app through the firewall?"
+    # prompt a foreground exe would get, so nothing ever asks and nothing ever opens it.
+    # The verification a few lines down tests http://localhost, which never touches the
+    # firewall at all - so this passed setup every time while every gaming PC's own setup
+    # wizard timed out testing the branch LAN address, with nothing here to explain why.
+    $fwRuleName = 'Apple Esports Branch API'
+    if (-not (Get-NetFirewallRule -DisplayName $fwRuleName -ErrorAction SilentlyContinue)) {
+        New-NetFirewallRule -DisplayName $fwRuleName -Direction Inbound -Action Allow `
+            -Protocol TCP -LocalPort $ApiPort -Profile Any | Out-Null
+        Write-Step "Opened port $ApiPort in Windows Firewall so gaming PCs on the branch LAN can reach it."
+    } else {
+        Write-Step "Firewall rule for port $ApiPort already present."
+    }
+
     Write-Step 'Starting the API...'
     Start-Service $ServiceName -ErrorAction Stop
 
