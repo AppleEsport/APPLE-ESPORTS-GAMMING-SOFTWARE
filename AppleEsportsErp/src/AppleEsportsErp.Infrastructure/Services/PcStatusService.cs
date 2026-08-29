@@ -92,6 +92,7 @@ public class PcStatusService : IPcStatusService
                 BufferMinutes = bufferMinutes,
                 IsAgentOnline = pc.IsAgentOnline,
                 ConnectionMode = pc.ConnectionMode,
+                AgentVersion = pc.AgentVersion,
                 PoweredOff = pc.PoweredOff
             };
 

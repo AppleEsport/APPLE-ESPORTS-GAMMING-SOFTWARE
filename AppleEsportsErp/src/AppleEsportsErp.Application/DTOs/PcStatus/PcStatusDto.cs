@@ -14,6 +14,11 @@ public class PcStatusDto
     public bool IsAgentOnline { get; set; }
     public string? ConnectionMode { get; set; }
 
+    /// <summary>The version this PC's own agent last reported on a heartbeat. Null means it has
+    /// never reported one - either it has not connected since this field existed, or (for a
+    /// console) it has no agent to report one at all.</summary>
+    public string? AgentVersion { get; set; }
+
     /// <summary>
     /// True if PcStatusHub's shutdown command was sent to this PC and it has not reconnected
     /// since (see Pc.PoweredOff). Combined on the frontend with State being Active/AwaitingBilling

@@ -101,7 +101,15 @@ public class BranchVersionReporterService : BackgroundService
         // A branch holds exactly one branch row — its own — once it has been adopted. Before
         // adoption it holds none, and there is nothing to report yet: an unadopted branch has no
         // identity Head Office would recognise.
+        //
+        // Ordered, the same way BranchHeartbeatService.BeatAsync already is and for the same
+        // reason: a branch whose local database somehow holds more than one row must still
+        // report the same one every time. Unordered, this and BeatAsync are free to pick
+        // different rows from each other on the same branch - which is exactly how a PC count
+        // taken against one row (35, here) ended up disagreeing with the Sessions grid, built
+        // from the other (16, the real one).
         var branch = await db.Branches.AsNoTracking()
+            .OrderBy(b => b.Id)
             .Select(b => new { b.Id, b.Name })
             .FirstOrDefaultAsync(ct);
 
