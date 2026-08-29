@@ -240,7 +240,16 @@ public class BranchHeartbeatService : BackgroundService
         // going quiet - so the next time this happens, the result message says what broke.
         try
         {
-            await ApplyConfigFromReplyAsync(db, body, ct);
+            // Its own scope, not the beat's shared one - see RunCommandsFromReplyAsync's own
+            // comment for why. A settings/member sync that fails partway (a genuine username
+            // collision, say) leaves its half-applied Operator/Member entities still tracked as
+            // Added on whatever DbContext it used; on the shared beat-level one, the very next
+            // SaveChangesAsync - which could belong to an unrelated start_session command - would
+            // try to flush them too and fail with the same error, misreported against a command
+            // that never touched a Member at all.
+            using var configScope = _serviceProvider.CreateAsyncScope();
+            var configDb = configScope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await ApplyConfigFromReplyAsync(configDb, body, ct);
         }
         catch (Exception ex)
         {
@@ -251,7 +260,7 @@ public class BranchHeartbeatService : BackgroundService
 
         try
         {
-            await RunCommandsFromReplyAsync(scope.ServiceProvider, client, headOffice, body, ct);
+            await RunCommandsFromReplyAsync(_serviceProvider, client, headOffice, body, ct);
         }
         catch (Exception ex)
         {
@@ -271,9 +280,22 @@ public class BranchHeartbeatService : BackgroundService
     /// remote stop is billed, logged and synced upward exactly like a local one. Head Office
     /// asking and Head Office writing are not the same thing, and only the first is safe: the
     /// second is what put an unbillable ₹60 session on ADJ-PC-01 in the first place.
+    ///
+    /// Takes the root provider, not an existing scope, and opens a fresh one per command inside
+    /// the loop below - never one scope shared across the whole batch. A batch is any number of
+    /// unrelated commands; sharing one DbContext across all of them means a failed insert in
+    /// command 1 stays tracked as Added after its own SaveChanges throws, and command 2's own
+    /// SaveChanges - or CommitTransactionAsync, same thing underneath - tries to flush it right
+    /// alongside whatever command 2 actually did, and fails for command 1's reason with no
+    /// mention of command 1 anywhere. This already happened once (the 2.4.11 stock-delivery /
+    /// audit-log fault) and reappeared in a different shape (a start_session command failing on
+    /// IX_members_Username - a table StartSessionAsync never touches - because an earlier member
+    /// sync's failed insert was still sitting in the same shared DbContext). Fixing the specific
+    /// insert each time treats the symptom; a fresh scope per command removes the cross-talk
+    /// itself.
     /// </summary>
     private async Task RunCommandsFromReplyAsync(
-        IServiceProvider scoped, HttpClient client, string headOffice, string body, CancellationToken ct)
+        IServiceProvider serviceProvider, HttpClient client, string headOffice, string body, CancellationToken ct)
     {
         List<BranchCommandDto>? commands;
         try
@@ -300,7 +322,8 @@ public class BranchHeartbeatService : BackgroundService
             string message;
             try
             {
-                (succeeded, message) = await RunOneCommandAsync(scoped, command, ct);
+                using var commandScope = serviceProvider.CreateAsyncScope();
+                (succeeded, message) = await RunOneCommandAsync(commandScope.ServiceProvider, command, ct);
             }
             catch (Exception ex)
             {
