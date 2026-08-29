@@ -393,6 +393,9 @@ builder.Services.AddHostedService<AppleEsportsErp.Api.Services.OpenSessionMonito
 // Closes a trading day that has ended when nobody ticked "last shift of the day", so the report
 // no longer depends on being remembered at 3am.
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.TradingDayCloserService>();
+// Puts a PC back to "Not Set Up" once its agent has gone quiet for good (uninstalled, retired),
+// instead of it reading Idle/Free forever with no physical machine behind it.
+builder.Services.AddHostedService<AppleEsportsErp.Api.Services.PcAgentWatchdogService>();
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.FixedDurationSessionMonitorService>();
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.DeferredBillingMonitorService>();
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.SessionActivityCleanupService>();
