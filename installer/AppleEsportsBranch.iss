@@ -12,7 +12,7 @@
 ; ============================================================================
 
 #define AppName        "Apple Esports"
-#define AppVersion     "3.1.22"
+#define AppVersion     "3.1.23"
 #define AppPublisher   "Apple Esports"
 #define Staging        "branch\staging"
 
@@ -89,11 +89,23 @@ Source: "branch\setup-api.ps1";      DestDir: "{app}"; Components: server; Check
 Source: "branch\quit-app.ps1"; DestDir: "{app}"; Components: server; Check: InstallServerParts; Flags: ignoreversion
 
 ; -- Customer gaming PC --
-Source: "..\AppleEsportsErp\src\AppleEsportsErp.ClientAgent\publish\AppleEsportsAgent.exe"; DestDir: "{app}"; Components: agent; Check: InstallAgentParts; Flags: ignoreversion
+; In its own subfolder, not directly under {app}: {app}\agent is the ONLY place on a gaming PC
+; that gets Permissions: users-modify below, so the customer account that is logged in when the
+; agent self-updates can replace this one exe and nothing else under Program Files - AppleEsports.exe
+; and the setup scripts alongside it stay admin-only, same as an operator PC. See
+; AgentSelfUpdater.cs and ReleasesController.AgentLatest/UploadAgent for the other half of this.
+Source: "..\AppleEsportsErp\src\AppleEsportsErp.ClientAgent\publish\AppleEsportsAgent.exe"; DestDir: "{app}\agent"; Components: agent; Check: InstallAgentParts; Flags: ignoreversion; Permissions: users-modify
 
 [Dirs]
 ; Created up front so the setup scripts are never the first thing to touch them.
 Name: "{app}\backups"; Components: server
+
+; Modify (not just write) because the agent's self-update swaps this exe by renaming the running
+; file aside and moving a freshly-downloaded, hash-verified one into its place - both of which
+; need write+delete on the folder, not only on the file that already exists in it. Scoped to this
+; one subfolder rather than the whole {app} tree: a gaming PC's logged-in account is a customer
+; seat, and nothing else installed here should be writable by whoever is sitting at it.
+Name: "{app}\agent"; Components: agent; Check: InstallAgentParts; Permissions: users-modify
 
 [Registry]
 ; Starts the app when Windows starts, which nothing did before this. A gaming PC that lost
@@ -125,6 +137,12 @@ Name: "{group}\{#AppName}";              Filename: "{app}\AppleEsports.exe"
 Name: "{group}\Keyboard shortcuts";      Filename: "{app}\SHORTCUT_KEYS.md"
 Name: "{group}\Uninstall {#AppName}";    Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}";        Filename: "{app}\AppleEsports.exe"
+; Nothing has ever shipped a way to launch the agent - it has only ever been started by hand, from
+; whatever shortcut a technician made pointing at wherever the exe happened to be. Now that it
+; lives under {app}\agent (see [Files]/[Dirs] above), that hand-made shortcut is exactly what
+; would silently stop working; these replace it with one the installer keeps correct.
+Name: "{group}\Apple Esports Agent";     Filename: "{app}\agent\AppleEsportsAgent.exe"; Components: agent
+Name: "{autodesktop}\Apple Esports Agent"; Filename: "{app}\agent\AppleEsportsAgent.exe"; Components: agent
 
 [Run]
 ; The branch setup is NOT run from here. A [Run] step that fails is ignored, and the
@@ -198,7 +216,7 @@ end;
 { Likewise for a gaming PC: the screen-lock agent being present says what this machine is. }
 function IsExistingAgentInstall(): Boolean;
 begin
-  Result := FileExists(ExpandConstant('{app}\AppleEsportsAgent.exe'));
+  Result := FileExists(ExpandConstant('{app}\agent\AppleEsportsAgent.exe'));
 end;
 
 { Used by Check: on every server file, so they are copied when the component is selected OR
@@ -385,6 +403,15 @@ begin
 
   { Both kinds of PC need this, so it runs before the operator-only work below. }
   WriteClientConfig();
+
+  (* Cleans up the pre-3.1.23 location. The agent exe used to sit directly in the install folder;
+     it now lives one level down, in its own "agent" subfolder, so the Dirs section's
+     users-modify permission can be scoped to just that one subfolder instead of loosening the
+     whole install directory a customer's own account can reach. Best-effort: if the old copy is
+     still running as a machine's only way of showing a lock screen, deleting it fails harmlessly
+     and it is cleaned up on the next update instead. *)
+  if FileExists(ExpandConstant('{app}\AppleEsportsAgent.exe')) then
+    DeleteFile(ExpandConstant('{app}\AppleEsportsAgent.exe'));
 
   { The guard that took a real branch offline.
 

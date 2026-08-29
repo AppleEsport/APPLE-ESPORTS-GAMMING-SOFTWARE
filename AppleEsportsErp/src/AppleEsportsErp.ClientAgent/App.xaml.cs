@@ -52,6 +52,13 @@ public partial class App : Application
         // instead and nothing that calls RequirePin has to change.
         Services.AdminPinService.Current = new Services.AdminPinService(() => AgentConfig.AdminPinHash);
 
+        // Started unconditionally, before the role check below, and independent of the LAN/Cloud
+        // hub connection those windows open. A gaming PC with a broken machine token (see
+        // DualConnectionService's swallowed auth failure, tracked separately) still needs to be
+        // able to update itself - this only ever talks to the branch's plain HTTP releases
+        // endpoint, the same one apply-update.ps1 already uses for the counter PC.
+        new Services.AgentSelfUpdater().Start();
+
         // Launch the appropriate window based on role
         if (string.IsNullOrEmpty(AgentConfig.AssignedRole))
         {
@@ -106,9 +113,23 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
-        _mutex?.ReleaseMutex();
+        try { _mutex?.ReleaseMutex(); } catch { /* already released by ReleaseSingleInstanceMutexForRestart */ }
         _mutex?.Dispose();
         base.OnExit(e);
+    }
+
+    /// <summary>
+    /// Called by <see cref="Services.AgentSelfUpdater"/> immediately before it launches the newly
+    /// downloaded exe and exits this process.
+    ///
+    /// Without this, the mutex is still held for the brief window between starting the new
+    /// process and this one actually terminating - and the new process's own single-instance
+    /// check (<see cref="OnStartup"/>) would lose that race, report "already running", and quit,
+    /// leaving nothing on screen at all until someone manually launches it.
+    /// </summary>
+    public static void ReleaseSingleInstanceMutexForRestart()
+    {
+        try { _mutex?.ReleaseMutex(); } catch { /* not held by this process - fine, just being sure */ }
     }
 }
 
@@ -133,4 +154,7 @@ public class AgentConfig
     public string CloudUrl { get; set; } = "https://api.appleesports.com";
     public int HealthCheckIntervalSeconds { get; set; } = 10;
     public int FailoverThresholdSeconds { get; set; } = 30;
+
+    /// <summary>How often AgentSelfUpdater asks the branch for a newer agent exe.</summary>
+    public int UpdateCheckIntervalSeconds { get; set; } = 600;
 }

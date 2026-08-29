@@ -27,7 +27,8 @@ Write-Host "== 1. Staging the branch package ==" -ForegroundColor Cyan
 & (Join-Path $here 'branch\build-branch-package.ps1')
 
 Write-Host "`n== 2. Publishing the gaming PC agent ==" -ForegroundColor Cyan
-Push-Location (Join-Path $repoRoot 'AppleEsportsErp\src\AppleEsportsErp.ClientAgent')
+$agentDir = Join-Path $repoRoot 'AppleEsportsErp\src\AppleEsportsErp.ClientAgent'
+Push-Location $agentDir
 try {
     dotnet publish -c Release -r win-x64 --self-contained true `
         -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
@@ -35,6 +36,19 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'The agent publish failed' }
 }
 finally { Pop-Location }
+
+# Staged next to the branch installer under its own version-suffixed name, so it can be
+# published to Head Office as a second, much smaller artifact - see ReleasesController.UploadAgent.
+# A gaming PC's own AgentSelfUpdater fetches only this file, never the ~165MB branch installer,
+# because it has no database, API or Windows service to replace - only this one exe.
+$issContent = Get-Content (Join-Path $here 'AppleEsportsBranch.iss') -Raw
+if ($issContent -notmatch '#define AppVersion\s+"([^"]+)"') { throw 'Could not read AppVersion from AppleEsportsBranch.iss' }
+$agentVersion = $Matches[1]
+
+New-Item -ItemType Directory -Force $distDir | Out-Null
+$agentExe = Join-Path $agentDir 'publish\AppleEsportsAgent.exe'
+$agentDist = Join-Path $distDir "AppleEsportsAgent-$agentVersion.exe"
+Copy-Item $agentExe $agentDist -Force
 
 Write-Host "`n== 3. Compiling the installer ==" -ForegroundColor Cyan
 New-Item -ItemType Directory -Force $distDir | Out-Null
@@ -49,3 +63,5 @@ $setup = Get-ChildItem $distDir -Filter 'AppleEsports-Branch-Setup-*.exe' |
 Write-Host "`n== Done ==" -ForegroundColor Green
 Write-Host ("   {0}  ({1:N0} MB)" -f $setup.Name, ($setup.Length / 1MB))
 Write-Host "   $($setup.FullName)"
+Write-Host ("   {0}  ({1:N0} MB)" -f (Split-Path $agentDist -Leaf), ((Get-Item $agentDist).Length / 1MB))
+Write-Host "   $agentDist"

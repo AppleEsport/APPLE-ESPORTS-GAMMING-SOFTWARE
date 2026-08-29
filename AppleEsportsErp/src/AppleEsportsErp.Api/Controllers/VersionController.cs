@@ -140,10 +140,12 @@ public class VersionController : ControllerBase
     [Authorize(Policy = "SuperAdminOnly")]
     public async Task<IActionResult> DeleteVersion(int id)
     {
-        var fileName = await _versionService.DeleteVersionAsync(id);
+        var (installerFileName, agentFileName) = await _versionService.DeleteVersionAsync(id);
 
-        if (!string.IsNullOrWhiteSpace(fileName))
+        foreach (var fileName in new[] { installerFileName, agentFileName })
         {
+            if (string.IsNullOrWhiteSpace(fileName)) continue;
+
             var path = Path.Combine(ReleasesController.ResolveReleaseFolder(_env), fileName);
             try { if (System.IO.File.Exists(path)) System.IO.File.Delete(path); }
             catch { /* the record is gone either way; a leftover file on disk harms nothing */ }
