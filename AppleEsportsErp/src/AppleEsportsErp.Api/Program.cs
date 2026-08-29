@@ -501,6 +501,11 @@ using (var scope = app.Services.CreateScope())
             if (!AppleEsportsErp.Infrastructure.Configuration.DeploymentRole.IsHeadOffice(app.Configuration))
             {
                 AppleEsportsErp.Api.AutoUpdateTaskGuard.EnsureRegistered(app.Logger);
+
+                // Same reasoning, same fix shape: an already-running branch never gets the
+                // installer's setup steps re-run, only new binaries - so a branch live before
+                // this existed would stay unreachable from the LAN forever without this.
+                AppleEsportsErp.Api.FirewallGuard.EnsureOpen(app.Logger);
             }
         }
         else
