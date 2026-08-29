@@ -38,4 +38,22 @@ public class VersionInfo
     public string? InstallerSha256 { get; set; }
 
     public long InstallerSizeBytes { get; set; }
+
+    // ── The gaming-PC agent artifact this version refers to ──
+    //
+    // A separate file from the installer above, deliberately. The branch installer is ~165MB and
+    // needs an elevated run to replace Program Files and Windows services; a gaming PC only ever
+    // needs to replace its own single exe, and nothing on a gaming PC is elevated once it is
+    // installed (see AppleEsportsAgent's AgentSelfUpdater and AppleEsportsBranch.iss's
+    // Permissions: users-modify on {app}\agent). Publishing the two artifacts separately is what
+    // lets a gaming PC update itself without ever downloading the installer or asking for
+    // elevation again.
+
+    /// <summary>File name of the standalone agent exe held by Head Office, e.g. "AppleEsportsAgent-3.1.23.exe".</summary>
+    public string? AgentFileName { get; set; }
+
+    /// <summary>SHA-256 of that exe, checked by the agent itself before it ever overwrites its own file.</summary>
+    public string? AgentSha256 { get; set; }
+
+    public long AgentSizeBytes { get; set; }
 }
