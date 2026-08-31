@@ -151,6 +151,8 @@ public static class BranchCommands
     public const string StartSession = "start_session";
     public const string SetPcState = "set_pc_state";
     public const string AddPc = "add_pc";
+    public const string UpdatePc = "update_pc";
+    public const string DeletePc = "delete_pc";
     public const string TransferSession = "transfer_session";
 
     /// <summary>

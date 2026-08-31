@@ -179,13 +179,34 @@ public class PcsController : ControllerBase
 
     [HttpPut("{id}")]
     [Authorize(Policy = "SuperAdminOnly")]
-    public async Task<IActionResult> Update(Guid id, [FromBody] AppleEsportsErp.Application.DTOs.Settings.UpdatePcDto dto)
+    public async Task<IActionResult> Update(Guid id, [FromBody] AppleEsportsErp.Application.DTOs.Settings.UpdatePcDto dto, CancellationToken ct)
     {
         var pc = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.Pc>()
             .Query()
             .FirstOrDefaultAsync(p => p.Id == id && !p.IsDeleted);
 
         if (pc == null) return NotFound(ApiResponse<object>.Fail("PC not found"));
+
+        // Same fault Create had until it was fixed: this endpoint only ever wrote to whichever
+        // database the caller is connected to. From Head Office that is its own mirror only -
+        // a PC edited there kept showing the old name/zone/IP at the branch forever, since
+        // nothing about a PC ever travelled down the config-sync channel (that carries
+        // operators, menu items and members, never PCs).
+        if (_remote.MustTravel)
+        {
+            var receipt = await _remote.SendAsync(
+                pc.BranchId, BranchCommands.UpdatePc,
+                new { Id = id, dto.PcNumber, dto.PcName, dto.IpAddress, dto.Specs, dto.Zone, dto.HardwareNotes },
+                Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!), ct);
+
+            return Accepted(ApiResponse<object>.Ok(new
+            {
+                queued = true,
+                commandId = receipt.CommandId,
+                branchIsReporting = receipt.BranchIsReporting,
+                message = receipt.Message,
+            }));
+        }
 
         var exists = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.Pc>()
             .Query()
@@ -211,13 +232,33 @@ public class PcsController : ControllerBase
 
     [HttpDelete("{id}")]
     [Authorize(Policy = "SuperAdminOnly")]
-    public async Task<IActionResult> Delete(Guid id)
+    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
         var pc = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.Pc>()
             .Query()
             .FirstOrDefaultAsync(p => p.Id == id && !p.IsDeleted);
 
         if (pc == null) return NotFound(ApiResponse<object>.Fail("PC not found"));
+
+        // Same reasoning as Update above: deleting here only ever touched Head Office's own
+        // mirror. This is the confirmed cause of a branch reporting far more PCs than are
+        // physically real - Head Office's own list had been cleaned up, the branch's local
+        // copy never heard about it, and kept counting every one of the old rows in its own
+        // heartbeat forever.
+        if (_remote.MustTravel)
+        {
+            var receipt = await _remote.SendAsync(
+                pc.BranchId, BranchCommands.DeletePc, new { Id = id },
+                Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!), ct);
+
+            return Accepted(ApiResponse<object>.Ok(new
+            {
+                queued = true,
+                commandId = receipt.CommandId,
+                branchIsReporting = receipt.BranchIsReporting,
+                message = receipt.Message,
+            }));
+        }
 
         pc.IsDeleted = true;
         pc.UpdatedAt = DateTimeOffset.UtcNow;

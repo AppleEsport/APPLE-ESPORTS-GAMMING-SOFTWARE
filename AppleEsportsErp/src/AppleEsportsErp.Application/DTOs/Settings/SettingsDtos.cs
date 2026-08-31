@@ -118,3 +118,15 @@ public class UpdatePcDto
     public string? Zone { get; set; }
     public string? HardwareNotes { get; set; }
 }
+
+/// <summary>UpdatePcDto plus the id of the PC being edited, for the branch_commands payload - see BranchCommands.UpdatePc.</summary>
+public class UpdatePcCommandDto : UpdatePcDto
+{
+    public Guid Id { get; set; }
+}
+
+/// <summary>For BranchCommands.DeletePc's payload - nothing else about the PC needs to travel, only which one.</summary>
+public class DeletePcCommandDto
+{
+    public Guid Id { get; set; }
+}

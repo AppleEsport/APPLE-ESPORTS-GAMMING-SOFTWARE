@@ -16,18 +16,13 @@ public class EodService : IEodService
         _unitOfWork = unitOfWork;
     }
 
-    public async Task<EodReportDto> GenerateEodReportAsync(Guid branchId, DateTimeOffset targetDate)
+    public async Task<EodReportDto> GenerateEodReportAsync(Guid branchId, DateOnly businessDay)
     {
-        // startOfDay stays as the day's KEY - it is what a saved EOD snapshot is filed under,
-        // and changing it would orphan every snapshot already finalised.
-        var startOfDay = new DateTimeOffset(targetDate.UtcDateTime.Date, TimeSpan.Zero);
-        var endOfDay = startOfDay.AddDays(1);
-
         // The window everything is actually counted over: midnight to midnight IST, the
         // calendar day. This screen used to read midnight-to-midnight UTC, which is 05:30
         // IST - so late-night takings landed on the wrong day here and the right day
         // everywhere else, and the two screens disagreed about the same money.
-        var (dayStart, dayEnd) = IndiaTime.BusinessDayRange(DateOnly.FromDateTime(startOfDay.UtcDateTime.Date));
+        var (dayStart, dayEnd) = IndiaTime.BusinessDayRange(businessDay);
 
         // Fetch Bills
         var bills = await _unitOfWork.Repository<Bill>().Query()
@@ -50,8 +45,6 @@ public class EodService : IEodService
         // live system that was 21 registers going back three weeks, and the day's opening
         // balance read Rs 5,500 against a drawer that had Rs 100 in it. A register left open
         // by a crash is a problem for the day it belongs to, never for today.
-        var businessDay = DateOnly.FromDateTime(startOfDay.UtcDateTime.Date);
-
         var registers = await _unitOfWork.Repository<CashRegister>().Query()
             .Include(r => r.Operator)
             .Include(r => r.CashTransactions)
@@ -66,7 +59,7 @@ public class EodService : IEodService
         var report = new EodReportDto
         {
             BranchId = branchId,
-            ReportDate = startOfDay,
+            ReportDate = dayStart,
             GeneratedAt = DateTimeOffset.UtcNow
         };
 
