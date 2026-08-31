@@ -3,7 +3,7 @@ import {
   User, Phone, Home, Briefcase, Landmark, Users,
   Search, Plus, ChevronDown, ChevronUp, Printer,
   CheckCircle2, ArrowLeft, Eye, EyeOff, FileText, Shield, Store,
-  UploadCloud, X, CreditCard
+  UploadCloud, X, CreditCard, Trash2
 } from 'lucide-react';
 import api from '../../config/api';
 import PageHeader from '../../components/layout/PageHeader';
@@ -326,6 +326,75 @@ function EmployeeDetailView({ employee, onBack }) {
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// DeleteEmployeeModal
+//
+// A real delete, not a status toggle - the record disappears from this list. If its own
+// joining form created an operator account (Employee.operatorId), the backend suspends that
+// account in the same request, so a removed HR record can never leave a working login behind.
+// ═══════════════════════════════════════════════════════════════════════════════
+function DeleteEmployeeModal({ employee, onClose, onDeleted }) {
+  const [loading, setLoading] = useState(false);
+  const toast = useToast();
+
+  const handleDelete = async () => {
+    setLoading(true);
+    try {
+      const res = await api.delete(`/employees/${employee.id}`);
+      const { operatorSuspended, operatorName } = res.data?.data || {};
+      toast.success(
+        operatorSuspended
+          ? `${employee.fullName} removed — the linked operator account (${operatorName}) has been suspended`
+          : `${employee.fullName} removed`
+      );
+      onDeleted();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to delete employee record');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+      <div className="w-full max-w-sm bg-bg-2 border border-neon-red/30 rounded-xl shadow-2xl overflow-hidden">
+        <div className="p-5 space-y-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-neon-red/10 border border-neon-red/30 flex items-center justify-center shrink-0">
+              <Trash2 className="w-5 h-5 text-neon-red" />
+            </div>
+            <div>
+              <h3 className="font-bold text-text">Delete Employee Record?</h3>
+              <p className="text-xs text-text-3 mt-0.5">
+                This will remove <span className="text-text-2 font-bold">{employee.fullName}</span>
+              </p>
+            </div>
+          </div>
+          <p className="text-sm text-text-3">
+            {employee.operatorId
+              ? 'This record has a linked system account. Deleting it will also suspend that operator login — nobody will be able to sign in with it until an admin reactivates it from Settings.'
+              : 'This will remove the HR record. No linked system account was found for it, so nothing else is affected.'}
+          </p>
+        </div>
+        <div className="p-4 border-t border-border bg-bg-3 flex gap-3">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-lg border border-border text-text-2 text-sm font-bold uppercase tracking-wider hover:bg-bg-2 transition-colors">
+            Cancel
+          </button>
+          <button
+            onClick={handleDelete} disabled={loading}
+            className="flex-[2] py-2.5 rounded-lg bg-neon-red/10 border border-neon-red/50 text-neon-red text-sm font-bold uppercase tracking-wider flex items-center justify-center gap-2 hover:bg-neon-red/20 transition-colors disabled:opacity-50"
+          >
+            {loading
+              ? <div className="w-4 h-4 rounded-full border-2 border-current border-t-transparent animate-spin" />
+              : <><Trash2 className="w-4 h-4" /> Delete</>
+            }
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function EmployeeFormsPage() {
   const { isSuperAdmin, user } = useAuth();
   const { activeBranch, branches, switchBranch } = useBranch();
@@ -336,6 +405,7 @@ export default function EmployeeFormsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [selectedEmployee, setSelectedEmployee] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const [form, setForm] = useState(emptyForm());
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -491,9 +561,18 @@ export default function EmployeeFormsPage() {
                           }`}>{emp.status}</span>
                         </td>
                         <td className="p-4 text-right">
-                          <button onClick={() => setSelectedEmployee(emp)} className="px-3 py-1.5 bg-accent/10 hover:bg-accent text-accent hover:text-white border border-accent/30 rounded-lg text-[11px] font-bold uppercase tracking-wider transition-all">
-                            View
-                          </button>
+                          <div className="flex items-center justify-end gap-2">
+                            <button onClick={() => setSelectedEmployee(emp)} className="px-3 py-1.5 bg-accent/10 hover:bg-accent text-accent hover:text-white border border-accent/30 rounded-lg text-[11px] font-bold uppercase tracking-wider transition-all">
+                              View
+                            </button>
+                            <button
+                              onClick={() => setDeleteTarget(emp)}
+                              title="Delete this record"
+                              className="p-1.5 bg-neon-red/10 hover:bg-neon-red text-neon-red hover:text-white border border-neon-red/30 rounded-lg transition-all"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -712,6 +791,14 @@ export default function EmployeeFormsPage() {
           )
         )}
       </div>
+
+      {deleteTarget && (
+        <DeleteEmployeeModal
+          employee={deleteTarget}
+          onClose={() => setDeleteTarget(null)}
+          onDeleted={() => { setDeleteTarget(null); fetchEmployees(); }}
+        />
+      )}
     </div>
   );
 }
