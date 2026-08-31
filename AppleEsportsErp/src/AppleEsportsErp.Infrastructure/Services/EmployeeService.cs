@@ -24,7 +24,7 @@ public class EmployeeService : IEmployeeService
         var query = _db.Employees
             .Include(e => e.Branch)
             .Include(e => e.SubmittedByOperator)
-            .Where(e => e.BranchId == branchId);
+            .Where(e => e.BranchId == branchId && !e.IsDeleted);
 
         if (!string.IsNullOrWhiteSpace(search))
             query = query.Where(e => e.FullName.ToLower().Contains(search.ToLower()) ||
@@ -47,7 +47,7 @@ public class EmployeeService : IEmployeeService
         var emp = await _db.Employees
             .Include(e => e.Branch)
             .Include(e => e.SubmittedByOperator)
-            .FirstOrDefaultAsync(e => e.Id == id)
+            .FirstOrDefaultAsync(e => e.Id == id && !e.IsDeleted)
             ?? throw new NotFoundException("Employee not found");
         return MapToDto(emp);
     }
@@ -148,6 +148,11 @@ public class EmployeeService : IEmployeeService
             };
 
             _db.Operators.Add(op);
+
+            // Set here, not read back after SaveChanges — this is what lets DeleteEmployeeAsync
+            // later find the right account to suspend without guessing from a name or phone
+            // number that might not even be unique.
+            employee.OperatorId = op.Id;
         }
 
         await _db.SaveChangesAsync();
@@ -163,6 +168,37 @@ public class EmployeeService : IEmployeeService
         emp.UpdatedAt = DateTimeOffset.UtcNow;
         await _db.SaveChangesAsync();
         return await GetEmployeeByIdAsync(id);
+    }
+
+    public async Task<(bool OperatorSuspended, string? OperatorName)> DeleteEmployeeAsync(Guid id)
+    {
+        var emp = await _db.Employees.FindAsync(id)
+            ?? throw new NotFoundException("Employee not found");
+
+        emp.IsDeleted = true;
+        emp.UpdatedAt = DateTimeOffset.UtcNow;
+
+        var suspended = false;
+        string? operatorName = null;
+
+        if (emp.OperatorId is { } operatorId)
+        {
+            var op = await _db.Operators.FindAsync(operatorId);
+
+            // Never overwrite Disabled - that is the deliberate, permanent admin action from
+            // Settings, and this is only ever the automatic side effect of removing the HR
+            // record that created the account.
+            if (op is not null && op.Status is not (OperatorStatus.Suspended or OperatorStatus.Disabled))
+            {
+                op.Status = OperatorStatus.Suspended;
+                op.UpdatedAt = DateTimeOffset.UtcNow;
+                suspended = true;
+                operatorName = op.FullName;
+            }
+        }
+
+        await _db.SaveChangesAsync();
+        return (suspended, operatorName);
     }
 
     private static EmployeeDto MapToDto(Employee e) => new()
@@ -202,5 +238,6 @@ public class EmployeeService : IEmployeeService
         Status            = e.Status,
         SubmittedByName   = e.SubmittedByOperator?.FullName,
         CreatedAt         = e.CreatedAt,
+        OperatorId        = e.OperatorId,
     };
 }
