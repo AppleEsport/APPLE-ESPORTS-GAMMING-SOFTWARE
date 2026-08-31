@@ -96,10 +96,13 @@
                       FontFamily="Segoe UI" Visibility="Collapsed"/>
         </StackPanel>
 
-        <!-- Bottom bar -->
-        <TextBlock Text="© Apple Esports ERP — Gaming PC Agent v1.0" 
+        <!-- Bottom bar. Text set in code-behind from the running assembly - this used to read a
+             literal "v1.0" that never changed no matter what was actually installed, which is
+             exactly the kind of thing that made "did this PC actually take the update?"
+             impossible to answer just by looking at the machine. -->
+        <TextBlock x:Name="VersionText" Text="© Apple Esports ERP — Gaming PC Agent"
                   FontSize="11" Foreground="#303048"
-                  HorizontalAlignment="Center" VerticalAlignment="Bottom" 
+                  HorizontalAlignment="Center" VerticalAlignment="Bottom"
                   Margin="0,0,0,20" FontFamily="Segoe UI"/>
     </Grid>
 </Window>

@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text.Json;
 using System.Windows;
 using Microsoft.Extensions.Configuration;
 
@@ -38,14 +39,30 @@ public partial class App : Application
 
         base.OnStartup(e);
 
-        // Load configuration
+        // Load configuration. optional: true, deliberately - the installer did not, until now,
+        // ship this file to a gaming PC at all (only AppleEsportsAgent.exe itself, per
+        // AppleEsportsBranch.iss's [Files] entry), so a file that was never there must not
+        // crash the agent before it can even show a lock screen. The built-in defaults on
+        // AgentConfig below are what a machine runs on until the file exists.
         var configPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "appsettings.agent.json");
         Configuration = new ConfigurationBuilder()
-            .AddJsonFile(configPath, optional: false, reloadOnChange: true)
+            .AddJsonFile(configPath, optional: true, reloadOnChange: true)
             .Build();
 
         AgentConfig = new AgentConfig();
         Configuration.GetSection("Agent").Bind(AgentConfig);
+
+        // The counter PC's real address, read from the SAME file the setup wizard already
+        // correctly maintains - never a second, separate address of this agent's own to drift
+        // out of sync with it. Before this, appsettings.agent.json's own OperatorLanUrl was the
+        // only address this agent ever used, and nothing anywhere ever wrote the real counter
+        // address into it: the wizard only ever confirmed it into AppleEsports.config.json (for
+        // the desktop client). So every gaming PC that had actually been walked through setup
+        // still had its agent silently pointed at whatever the installer happened to bake in -
+        // never the real counter - and both the LAN hub connection and the update check failed
+        // with no visible error anywhere. If overridden here, this always wins.
+        if (ReadCounterServerUrl() is { } counterUrl)
+            AgentConfig.OperatorLanUrl = counterUrl;
 
         // Every way out of a locked PC asks this one object. It reads the hash from the config
         // file for now; when the local SQLite database exists it reads pc_identity.admin_pin_hash
@@ -77,6 +94,44 @@ public partial class App : Application
             var lockScreen = new Views.LockScreen();
             lockScreen.Show();
         }
+    }
+
+    /// <summary>
+    /// The counter PC's address, exactly as AppConfig.cs (desktop-client) itself resolves it:
+    /// the installer-written deployment copy next to AppleEsports.exe first, then the
+    /// per-machine override in %APPDATA%\AppleEsports\config.json that the setup wizard writes
+    /// to when someone actually confirms the address - the later one wins if both exist, same
+    /// as it does for the desktop client. Returns null (leave the built-in default alone) if
+    /// neither file exists or neither names a ServerUrl - a machine mid-setup, or one running
+    /// outside a real install for local testing, is not treated as a failure.
+    /// </summary>
+    private static string? ReadCounterServerUrl()
+    {
+        string? serverUrl = null;
+
+        // {app}\AppleEsports.config.json - one level up from this agent's own {app}\agent folder.
+        TryReadServerUrl(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "AppleEsports.config.json"), ref serverUrl);
+
+        TryReadServerUrl(Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "AppleEsports", "config.json"), ref serverUrl);
+
+        return serverUrl;
+    }
+
+    private static void TryReadServerUrl(string path, ref string? serverUrl)
+    {
+        try
+        {
+            if (!File.Exists(path)) return;
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            if (doc.RootElement.TryGetProperty("ServerUrl", out var prop) && prop.ValueKind == JsonValueKind.String)
+            {
+                var value = prop.GetString();
+                if (!string.IsNullOrWhiteSpace(value)) serverUrl = value.Trim();
+            }
+        }
+        catch { /* A malformed or unreadable config file must never stop the agent from starting. */ }
     }
 
     /// <summary>

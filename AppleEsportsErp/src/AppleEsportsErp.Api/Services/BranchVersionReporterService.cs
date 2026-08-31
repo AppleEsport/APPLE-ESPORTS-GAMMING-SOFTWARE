@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using AppleEsportsErp.Application.Interfaces;
+using AppleEsportsErp.Domain.Enums;
 using AppleEsportsErp.Infrastructure.Configuration;
 using AppleEsportsErp.Infrastructure.Data;
 
@@ -125,9 +126,17 @@ public class BranchVersionReporterService : BackgroundService
         // so - not a hardcoded zero, which is what this used to read regardless of reality,
         // because nothing before AgentVersion existed ever recorded what a gaming PC was
         // actually running.
-        var totalPcs = await db.Pcs.CountAsync(p => p.BranchId == branch.Id && !p.IsDeleted, ct);
+        //
+        // AwaitingSetup rows are excluded from the denominator too. Those are seats nobody has
+        // physically claimed yet - a bulk-created placeholder, not a real machine - and counting
+        // them here is why this page could read "0 of 35 up to date" against a branch that only
+        // has sixteen real gaming PCs on the floor: the other nineteen were never going to report
+        // a version because there is no agent running on them to report one.
+        var totalPcs = await db.Pcs.CountAsync(
+            p => p.BranchId == branch.Id && !p.IsDeleted && p.State != PcState.AwaitingSetup, ct);
         var upToDatePcs = await db.Pcs.CountAsync(
-            p => p.BranchId == branch.Id && !p.IsDeleted && p.AgentVersion == RunningVersion, ct);
+            p => p.BranchId == branch.Id && !p.IsDeleted && p.State != PcState.AwaitingSetup
+                 && p.AgentVersion == RunningVersion, ct);
 
         // Written to the branch's OWN database first, before Head Office is even contacted.
         //

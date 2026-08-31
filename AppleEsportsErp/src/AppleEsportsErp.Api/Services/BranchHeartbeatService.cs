@@ -65,6 +65,14 @@ public class BranchHeartbeatService : BackgroundService
     private static readonly TimeSpan ComplainAtMost = TimeSpan.FromMinutes(15);
     private DateTimeOffset _lastComplaint = DateTimeOffset.MinValue;
 
+    /// <summary>
+    /// Own throttle, separate from <see cref="_lastComplaint"/> above - that one is about
+    /// losing the line to Head Office; this one is about a specific row (an operator, a menu
+    /// item, a member) that keeps failing to apply every single beat. Sharing one timer would
+    /// let either kind of problem silence the other's log line.
+    /// </summary>
+    private DateTimeOffset _lastConfigRowComplaint = DateTimeOffset.MinValue;
+
     public BranchHeartbeatService(
         ILogger<BranchHeartbeatService> logger,
         IConfiguration configuration,
@@ -240,22 +248,22 @@ public class BranchHeartbeatService : BackgroundService
         // going quiet - so the next time this happens, the result message says what broke.
         try
         {
-            // Its own scope, not the beat's shared one - see RunCommandsFromReplyAsync's own
-            // comment for why. A settings/member sync that fails partway (a genuine username
-            // collision, say) leaves its half-applied Operator/Member entities still tracked as
-            // Added on whatever DbContext it used; on the shared beat-level one, the very next
-            // SaveChangesAsync - which could belong to an unrelated start_session command - would
-            // try to flush them too and fail with the same error, misreported against a command
-            // that never touched a Member at all.
-            using var configScope = _serviceProvider.CreateAsyncScope();
-            var configDb = configScope.ServiceProvider.GetRequiredService<AppDbContext>();
-            await ApplyConfigFromReplyAsync(configDb, body, ct);
+            // No shared scope is passed in at all any more - see ApplyConfigFromReplyAsync's own
+            // comment for why. It used to take one DbContext for the whole config (every
+            // operator, every menu item, every member on one SaveChangesAsync), which meant a
+            // single colliding row anywhere in that batch failed everything else in it too - and
+            // did so on every beat forever, since Head Office resends the same batch until the
+            // branch's reported fingerprint changes, which it never did while the save kept
+            // throwing. Now each row gets its own scope and its own save, isolated the same way
+            // RunCommandsFromReplyAsync already isolates one command from the next.
+            await ApplyConfigFromReplyAsync(body, ct);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex,
-                "Applying Head Office's settings failed. Nothing else this beat is affected by " +
-                "this alone, but the branch keeps whatever settings it already had.");
+                "Applying Head Office's settings failed outside the per-row handling that would " +
+                "normally have caught it and reported back why. Nothing else this beat is affected " +
+                "by this alone, but the branch keeps whatever settings it already had.");
         }
 
         try
@@ -390,6 +398,12 @@ public class BranchHeartbeatService : BackgroundService
 
             case BranchCommands.AddPc:
                 return await RunAddPcAsync(scoped, command.Payload, ct);
+
+            case BranchCommands.UpdatePc:
+                return await RunUpdatePcAsync(scoped, command.Payload, ct);
+
+            case BranchCommands.DeletePc:
+                return await RunDeletePcAsync(scoped, command.Payload, ct);
 
             case BranchCommands.TransferSession:
                 return await RunTransferSessionAsync(scoped, command.Payload, ct);
@@ -1111,6 +1125,92 @@ public class BranchHeartbeatService : BackgroundService
         return (true, $"{pc.PcNumber} added to the fleet.");
     }
 
+    /// <summary>
+    /// Edits a PC's details on this branch's own database, carried out here so a change made
+    /// from Head Office actually reaches the machine that shows it - see the comment on
+    /// PcsController.Update for the fault this replaces.
+    /// </summary>
+    private static async Task<(bool, string)> RunUpdatePcAsync(
+        IServiceProvider scoped, string payload, CancellationToken ct)
+    {
+        AppleEsportsErp.Application.DTOs.Settings.UpdatePcCommandDto? dto;
+        try
+        {
+            dto = JsonSerializer.Deserialize<AppleEsportsErp.Application.DTOs.Settings.UpdatePcCommandDto>(payload);
+        }
+        catch
+        {
+            dto = null;
+        }
+
+        if (dto is null || string.IsNullOrWhiteSpace(dto.PcNumber))
+            return (false, "The update-PC command arrived without a readable PC to update.");
+
+        var db = scoped.GetRequiredService<AppDbContext>();
+        var pc = await db.Pcs.FirstOrDefaultAsync(p => p.Id == dto.Id && !p.IsDeleted, ct);
+
+        if (pc is null)
+            return (false, "No such PC exists at this branch to update.");
+
+        var exists = await db.Pcs.AnyAsync(
+            p => p.BranchId == pc.BranchId && p.PcNumber == dto.PcNumber && p.Id != dto.Id && !p.IsDeleted, ct);
+        if (exists)
+            return (false, $"PC number {dto.PcNumber} already exists at this branch.");
+
+        var isConsole = string.Equals(dto.Zone, "Console", StringComparison.OrdinalIgnoreCase);
+
+        pc.PcNumber = dto.PcNumber;
+        pc.PcName = dto.PcName ?? dto.PcNumber;
+        pc.IpAddress = isConsole ? null : dto.IpAddress;
+        pc.Specs = dto.Specs ?? "{}";
+        pc.Zone = dto.Zone ?? "Standard";
+        pc.HardwareNotes = dto.HardwareNotes;
+        pc.UpdatedAt = DateTimeOffset.UtcNow;
+
+        await db.SaveChangesAsync(ct);
+
+        return (true, $"{pc.PcNumber} updated.");
+    }
+
+    /// <summary>
+    /// Soft-deletes a PC on this branch's own database - the other half of the same fault:
+    /// removing a PC from Head Office's Settings page used to only ever remove it from Head
+    /// Office's own mirror. The branch's own copy, and its own heartbeat's PcsTotal count, kept
+    /// counting the row forever, which is the confirmed root cause of a branch reporting far
+    /// more PCs than are physically real.
+    /// </summary>
+    private static async Task<(bool, string)> RunDeletePcAsync(
+        IServiceProvider scoped, string payload, CancellationToken ct)
+    {
+        AppleEsportsErp.Application.DTOs.Settings.DeletePcCommandDto? dto;
+        try
+        {
+            dto = JsonSerializer.Deserialize<AppleEsportsErp.Application.DTOs.Settings.DeletePcCommandDto>(payload);
+        }
+        catch
+        {
+            dto = null;
+        }
+
+        if (dto is null || dto.Id == Guid.Empty)
+            return (false, "The delete-PC command arrived without a readable PC to remove.");
+
+        var db = scoped.GetRequiredService<AppDbContext>();
+        var pc = await db.Pcs.FirstOrDefaultAsync(p => p.Id == dto.Id && !p.IsDeleted, ct);
+
+        // Already gone locally - not a failure. Nothing left to do, which is exactly what was
+        // asked for.
+        if (pc is null)
+            return (true, "Already removed from this branch - nothing to do.");
+
+        pc.IsDeleted = true;
+        pc.UpdatedAt = DateTimeOffset.UtcNow;
+
+        await db.SaveChangesAsync(ct);
+
+        return (true, $"{pc.PcNumber} removed from the fleet.");
+    }
+
     private static async Task<(bool, string)> RunStopSessionAsync(
         IServiceProvider scoped, string payload, CancellationToken ct)
     {
@@ -1538,7 +1638,7 @@ public class BranchHeartbeatService : BackgroundService
     /// Head Office sends nothing at all when this branch is already correct, so the usual case
     /// is a few hundred bytes and this method does nothing.
     /// </summary>
-    private async Task ApplyConfigFromReplyAsync(AppDbContext db, string body, CancellationToken ct)
+    private async Task ApplyConfigFromReplyAsync(string body, CancellationToken ct)
     {
         BranchConfigDto? config;
         try
@@ -1560,76 +1660,161 @@ public class BranchHeartbeatService : BackgroundService
         if (config is null) return;
         if (config.Operators.Count == 0 && config.MenuItems.Count == 0 && config.Members.Count == 0) return;
 
-        var known = await db.Operators.ToDictionaryAsync(o => o.Id, ct);
-        var changed = 0;
+        // Every row gets its own scope and its own SaveChangesAsync - deliberately, and this is
+        // the fix for a real, silent, permanent failure mode found on Citylight. All of an
+        // update's operators, menu items and members used to be tracked on ONE shared DbContext
+        // and flushed with ONE SaveChangesAsync at the end. A single colliding row - a leftover,
+        // orphaned Operator sharing a Username with a brand new one Head Office was pushing down,
+        // exactly the kind of debris an old, heavily-used branch accumulates over years - made
+        // that one call throw, which meant NOTHING in the batch was applied: not the colliding
+        // operator, not the other nine perfectly fine ones, not that beat's menu or member
+        // changes either. And because the fingerprint this branch reports is only updated after
+        // a successful save (below), Head Office kept resending the exact same batch every beat,
+        // which kept failing on the exact same row, forever - a branch permanently stuck unable
+        // to learn of ANY new operator, permission change, menu item or member, with nothing
+        // anywhere telling the owner why, because the only trace was one log line on that one
+        // branch's own machine. Isolating each row means the one that keeps colliding keeps
+        // failing on its own, loudly, while everything else lands normally on every beat.
+        var anyFailed = false;
+        var opsAdded = 0;
+        var menuAdded = 0;
+        var membersAdded = 0;
 
         foreach (var incoming in config.Operators)
         {
-            if (!known.TryGetValue(incoming.Id, out var op))
+            try
             {
-                // Somebody hired at Head Office who has never existed here. Created with the
-                // same id, so everything they later do lines up on both sides rather than
-                // arriving as a stranger.
-                op = new Operator
-                {
-                    Id = incoming.Id,
-                    BranchId = _branchId,
-                    Status = OperatorStatus.LoggedOut,
-                    CreatedAt = DateTimeOffset.UtcNow,
-                };
-                db.Operators.Add(op);
-                changed++;
+                using var scope = _serviceProvider.CreateAsyncScope();
+                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                if (await ApplyOneOperatorAsync(db, _branchId, incoming, ct)) opsAdded++;
+                if (db.ChangeTracker.HasChanges()) await db.SaveChangesAsync(ct);
             }
-
-            op.FullName = incoming.FullName;
-            op.Username = incoming.Username;
-            op.Email = incoming.Email;
-            op.PasswordHash = incoming.PasswordHash;
-            op.MobileNumber = incoming.MobileNumber;
-            op.AccessPin = incoming.AccessPin;
-            op.IsGlobalAdmin = incoming.IsGlobalAdmin;
-            op.DashboardPermissions = incoming.DashboardPermissions;
-            op.UpdatedAt = DateTimeOffset.UtcNow;
-
-            // Only the barred/not-barred decision comes down. Active and LoggedOut say whether
-            // somebody is standing at this counter, which Head Office cannot know and must
-            // never overwrite - doing so would sign out the operator halfway through a shift.
-            if (incoming.IsBlocked)
+            catch (Exception ex)
             {
-                if (op.Status is not (OperatorStatus.Suspended or OperatorStatus.Disabled))
-                    op.Status = OperatorStatus.Suspended;
-            }
-            else if (op.Status is OperatorStatus.Suspended or OperatorStatus.Disabled)
-            {
-                op.Status = OperatorStatus.LoggedOut;   // unbarred; duty is decided here
+                anyFailed = true;
+                LogConfigRowFailure("operator", incoming.Username, incoming.Id, ex);
             }
         }
 
-        var menuChanged = await ApplyMenuItemsAsync(db, _branchId, config.MenuItems, ct);
-        var membersChanged = await ApplyMembersAsync(db, config.Members, ct);
-
-        if (db.ChangeTracker.HasChanges())
+        foreach (var item in config.MenuItems)
         {
-            await db.SaveChangesAsync(ct);
+            try
+            {
+                using var scope = _serviceProvider.CreateAsyncScope();
+                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                if (await ApplyOneMenuItemAsync(db, _branchId, item, ct)) menuAdded++;
+                if (db.ChangeTracker.HasChanges()) await db.SaveChangesAsync(ct);
+            }
+            catch (Exception ex)
+            {
+                anyFailed = true;
+                LogConfigRowFailure("menu item", item.ItemName, item.Id, ex);
+            }
+        }
 
-            // Recorded once, not every beat: the fingerprint now matches so Head Office stops
-            // sending it. Worth a line in the log, because "the shop suddenly behaves
-            // differently" should always have something to point at.
+        foreach (var item in config.Members)
+        {
+            try
+            {
+                using var scope = _serviceProvider.CreateAsyncScope();
+                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                if (await ApplyOneMemberAsync(db, item, ct)) membersAdded++;
+                if (db.ChangeTracker.HasChanges()) await db.SaveChangesAsync(ct);
+            }
+            catch (Exception ex)
+            {
+                anyFailed = true;
+                LogConfigRowFailure("member", item.FullName, item.Id, ex);
+            }
+        }
+
+        if (opsAdded + menuAdded + membersAdded > 0)
+        {
             _logger.LogInformation(
                 "Settings updated from Head Office: {OpCount} operator(s), {OpNew} new; " +
                 "{MenuCount} menu item(s), {MenuNew} new; {MemberCount} member(s), {MemberNew} new. " +
                 "Version {Version}.",
-                config.Operators.Count, changed,
-                config.MenuItems.Count, menuChanged,
-                config.Members.Count, membersChanged,
+                config.Operators.Count, opsAdded,
+                config.MenuItems.Count, menuAdded,
+                config.Members.Count, membersAdded,
                 config.Version);
         }
 
-        _configVersion = config.Version;
+        // Advanced only when every row landed cleanly. A row that keeps failing means Head
+        // Office keeps resending this same batch next beat too - which is exactly what should
+        // happen, since that row still needs fixing - but every OTHER row in it lands again
+        // regardless (harmlessly; every apply here is an idempotent upsert), so a single bad
+        // row no longer holds the rest of the branch's settings hostage.
+        if (!anyFailed) _configVersion = config.Version;
+    }
+
+    /// <summary>Logged at most every <see cref="ComplainAtMost"/> - the same row fails on the same schedule as the beat itself otherwise, which is every three seconds forever.</summary>
+    private void LogConfigRowFailure(string kind, string? label, Guid id, Exception ex)
+    {
+        if (DateTimeOffset.UtcNow - _lastConfigRowComplaint <= ComplainAtMost) return;
+        _lastConfigRowComplaint = DateTimeOffset.UtcNow;
+
+        _logger.LogError(ex,
+            "Could not apply the {Kind} Head Office sent ({Label}, {Id}). Every other operator, " +
+            "menu item and member in this update is applied independently and is not affected - " +
+            "only this one row is stuck, and will keep being retried every beat until whatever is " +
+            "colliding with it locally (most likely a leftover row sharing the same name/username) " +
+            "is found and removed.",
+            kind, label, id);
     }
 
     /// <summary>
-    /// Makes this branch's menu match Head Office's catalog for it.
+    /// One operator, one row. Returns true when it was newly created here.
+    ///
+    /// Somebody hired at Head Office who has never existed here is created with the same id, so
+    /// everything they later do lines up on both sides rather than arriving as a stranger.
+    /// </summary>
+    private static async Task<bool> ApplyOneOperatorAsync(
+        AppDbContext db, Guid branchId, BranchOperatorConfigDto incoming, CancellationToken ct)
+    {
+        var op = await db.Operators.FirstOrDefaultAsync(o => o.Id == incoming.Id, ct);
+        var isNew = op is null;
+
+        if (op is null)
+        {
+            op = new Operator
+            {
+                Id = incoming.Id,
+                BranchId = branchId,
+                Status = OperatorStatus.LoggedOut,
+                CreatedAt = DateTimeOffset.UtcNow,
+            };
+            db.Operators.Add(op);
+        }
+
+        op.FullName = incoming.FullName;
+        op.Username = incoming.Username;
+        op.Email = incoming.Email;
+        op.PasswordHash = incoming.PasswordHash;
+        op.MobileNumber = incoming.MobileNumber;
+        op.AccessPin = incoming.AccessPin;
+        op.IsGlobalAdmin = incoming.IsGlobalAdmin;
+        op.DashboardPermissions = incoming.DashboardPermissions;
+        op.UpdatedAt = DateTimeOffset.UtcNow;
+
+        // Only the barred/not-barred decision comes down. Active and LoggedOut say whether
+        // somebody is standing at this counter, which Head Office cannot know and must
+        // never overwrite - doing so would sign out the operator halfway through a shift.
+        if (incoming.IsBlocked)
+        {
+            if (op.Status is not (OperatorStatus.Suspended or OperatorStatus.Disabled))
+                op.Status = OperatorStatus.Suspended;
+        }
+        else if (op.Status is OperatorStatus.Suspended or OperatorStatus.Disabled)
+        {
+            op.Status = OperatorStatus.LoggedOut;   // unbarred; duty is decided here
+        }
+
+        return isNew;
+    }
+
+    /// <summary>
+    /// Makes this branch's menu match Head Office's catalog for it, one item at a time.
     ///
     /// This is the fix for a super admin adding a food item at Head Office and it never
     /// appearing at the counter - the Menu Editor is branch-scoped storage, and an item added
@@ -1643,70 +1828,64 @@ public class BranchHeartbeatService : BackgroundService
     /// trading state and change at the counter, not at Head Office. A shop that just sold its
     /// last plate of fries must not have Head Office silently restock it on the next beat.
     /// </summary>
-    private static async Task<int> ApplyMenuItemsAsync(
-        AppDbContext db, Guid branchId, List<BranchMenuItemConfigDto> incoming, CancellationToken ct)
+    private static async Task<bool> ApplyOneMenuItemAsync(
+        AppDbContext db, Guid branchId, BranchMenuItemConfigDto item, CancellationToken ct)
     {
-        if (incoming.Count == 0) return 0;
+        var row = await db.Set<InventoryItem>().FirstOrDefaultAsync(i => i.Id == item.Id, ct);
+        var isNew = row is null;
 
-        var known = await db.Set<InventoryItem>().ToDictionaryAsync(i => i.Id, ct);
-        var added = 0;
-
-        foreach (var item in incoming)
+        if (row is null)
         {
-            if (!known.TryGetValue(item.Id, out var row))
+            row = new InventoryItem
             {
-                row = new InventoryItem
-                {
-                    Id = item.Id,
-                    BranchId = branchId,
-                    CreatedAt = DateTimeOffset.UtcNow,
-                };
-                db.Add(row);
-                added++;
-            }
-
-            // Compared before writing, and this matters more than it looks now that the menu
-            // also travels upward. Assigning the same value still marks the row Modified, which
-            // SyncCapture would faithfully record as a change and send back to Head Office -
-            // every item, every time a config arrived, describing nothing that had happened.
-            var differs =
-                row.ItemName != item.ItemName
-                || row.Category != item.Category
-                || row.Price != item.Price
-                || row.ImageUrl != item.ImageUrl;
-
-            if (differs)
-            {
-                row.ItemName = item.ItemName;
-                row.Category = item.Category;
-                row.Price = item.Price;
-                row.ImageUrl = item.ImageUrl;
-            }
-
-            // A branch marking something Out of Stock is its own call and stays exactly as it
-            // is; only Head Office's Disabled/not-Disabled decision moves this needle, and only
-            // when it actually says something - "disabled" pulls an item from sale everywhere,
-            // "not disabled" must not silently un-hide something the branch itself paused.
-            if (item.IsDisabled && row.Status != FoodAvailability.Disabled)
-            {
-                row.Status = FoodAvailability.Disabled;
-                differs = true;
-            }
-            else if (!item.IsDisabled && row.Status == FoodAvailability.Disabled)
-            {
-                row.Status = FoodAvailability.Available;
-                differs = true;
-            }
-
-            if (differs) row.UpdatedAt = DateTimeOffset.UtcNow;
+                Id = item.Id,
+                BranchId = branchId,
+                CreatedAt = DateTimeOffset.UtcNow,
+            };
+            db.Add(row);
         }
 
-        return added;
+        // Compared before writing, and this matters more than it looks now that the menu
+        // also travels upward. Assigning the same value still marks the row Modified, which
+        // SyncCapture would faithfully record as a change and send back to Head Office -
+        // every item, every time a config arrived, describing nothing that had happened.
+        var differs =
+            row.ItemName != item.ItemName
+            || row.Category != item.Category
+            || row.Price != item.Price
+            || row.ImageUrl != item.ImageUrl;
+
+        if (differs)
+        {
+            row.ItemName = item.ItemName;
+            row.Category = item.Category;
+            row.Price = item.Price;
+            row.ImageUrl = item.ImageUrl;
+        }
+
+        // A branch marking something Out of Stock is its own call and stays exactly as it
+        // is; only Head Office's Disabled/not-Disabled decision moves this needle, and only
+        // when it actually says something - "disabled" pulls an item from sale everywhere,
+        // "not disabled" must not silently un-hide something the branch itself paused.
+        if (item.IsDisabled && row.Status != FoodAvailability.Disabled)
+        {
+            row.Status = FoodAvailability.Disabled;
+            differs = true;
+        }
+        else if (!item.IsDisabled && row.Status == FoodAvailability.Disabled)
+        {
+            row.Status = FoodAvailability.Available;
+            differs = true;
+        }
+
+        if (differs) row.UpdatedAt = DateTimeOffset.UtcNow;
+
+        return isNew;
     }
 
     /// <summary>
-    /// Makes this branch recognise every member Head Office knows about, with the wallet
-    /// balance Head Office currently holds for them.
+    /// Makes this branch recognise one member Head Office knows about, with the wallet balance
+    /// Head Office currently holds for them.
     ///
     /// This is what lets someone who joined at Adajan spend their wallet at Katargam: without
     /// it, a branch that has never seen a member locally has no row for them at all. Balance is
@@ -1715,56 +1894,50 @@ public class BranchHeartbeatService : BackgroundService
     /// branch that just took a top-up of its own must not have that top-up erased because Head
     /// Office's reply, built moments earlier, has not caught up yet.
     /// </summary>
-    private static async Task<int> ApplyMembersAsync(
-        AppDbContext db, List<BranchMemberConfigDto> incoming, CancellationToken ct)
+    private static async Task<bool> ApplyOneMemberAsync(
+        AppDbContext db, BranchMemberConfigDto item, CancellationToken ct)
     {
-        if (incoming.Count == 0) return 0;
+        var member = await db.Members.FirstOrDefaultAsync(m => m.Id == item.Id, ct);
+        var isNew = member is null;
 
-        var known = await db.Members.ToDictionaryAsync(m => m.Id, ct);
-        var added = 0;
-
-        foreach (var item in incoming)
+        if (member is null)
         {
-            if (!known.TryGetValue(item.Id, out var member))
+            member = new Member
             {
-                member = new Member
-                {
-                    Id = item.Id,
-                    GamingBalance = item.GamingBalance,
-                    FoodBalance = item.FoodBalance,
-                    BalanceAsOf = item.BalanceAsOf,
-                    Status = item.IsBlocked ? MemberStatus.Suspended : MemberStatus.Active,
-                    JoinDate = DateTimeOffset.UtcNow,
-                    CreatedAt = DateTimeOffset.UtcNow,
-                };
-                db.Members.Add(member);
-                added++;
-            }
-            else if (item.BalanceAsOf is { } incomingAsOf
-                     && (member.BalanceAsOf is not { } localAsOf || incomingAsOf > localAsOf))
-            {
-                member.GamingBalance = item.GamingBalance;
-                member.FoodBalance = item.FoodBalance;
-                member.BalanceAsOf = incomingAsOf;
-            }
-
-            member.FullName = item.FullName;
-            member.MemberNumber = item.MemberNumber;
-            member.MobileNumber = item.MobileNumber;
-            member.Email = item.Email;
-            member.Username = item.Username;
-            member.UpdatedAt = DateTimeOffset.UtcNow;
-
-            // Same rule as operators: only the barred decision comes down. There is no local
-            // "on shift" equivalent for a member to protect, but Active/Vip is still this
-            // branch's own read on a member's standing and is left alone either way.
-            if (item.IsBlocked && member.Status is not MemberStatus.Suspended)
-                member.Status = MemberStatus.Suspended;
-            else if (!item.IsBlocked && member.Status is MemberStatus.Suspended)
-                member.Status = MemberStatus.Active;
+                Id = item.Id,
+                GamingBalance = item.GamingBalance,
+                FoodBalance = item.FoodBalance,
+                BalanceAsOf = item.BalanceAsOf,
+                Status = item.IsBlocked ? MemberStatus.Suspended : MemberStatus.Active,
+                JoinDate = DateTimeOffset.UtcNow,
+                CreatedAt = DateTimeOffset.UtcNow,
+            };
+            db.Members.Add(member);
+        }
+        else if (item.BalanceAsOf is { } incomingAsOf
+                 && (member.BalanceAsOf is not { } localAsOf || incomingAsOf > localAsOf))
+        {
+            member.GamingBalance = item.GamingBalance;
+            member.FoodBalance = item.FoodBalance;
+            member.BalanceAsOf = incomingAsOf;
         }
 
-        return added;
+        member.FullName = item.FullName;
+        member.MemberNumber = item.MemberNumber;
+        member.MobileNumber = item.MobileNumber;
+        member.Email = item.Email;
+        member.Username = item.Username;
+        member.UpdatedAt = DateTimeOffset.UtcNow;
+
+        // Same rule as operators: only the barred decision comes down. There is no local
+        // "on shift" equivalent for a member to protect, but Active/Vip is still this
+        // branch's own read on a member's standing and is left alone either way.
+        if (item.IsBlocked && member.Status is not MemberStatus.Suspended)
+            member.Status = MemberStatus.Suspended;
+        else if (!item.IsBlocked && member.Status is MemberStatus.Suspended)
+            member.Status = MemberStatus.Active;
+
+        return isNew;
     }
 
     /// <summary>

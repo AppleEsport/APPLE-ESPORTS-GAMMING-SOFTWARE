@@ -12,7 +12,7 @@
 ; ============================================================================
 
 #define AppName        "Apple Esports"
-#define AppVersion     "3.1.24"
+#define AppVersion     "3.1.25"
 #define AppPublisher   "Apple Esports"
 #define Staging        "branch\staging"
 
@@ -95,6 +95,12 @@ Source: "branch\quit-app.ps1"; DestDir: "{app}"; Components: server; Check: Inst
 ; and the setup scripts alongside it stay admin-only, same as an operator PC. See
 ; AgentSelfUpdater.cs and ReleasesController.AgentLatest/UploadAgent for the other half of this.
 Source: "..\AppleEsportsErp\src\AppleEsportsErp.ClientAgent\publish\AppleEsportsAgent.exe"; DestDir: "{app}\agent"; Components: agent; Check: InstallAgentParts; Flags: ignoreversion; Permissions: users-modify
+; Never shipped before this - the agent had no admin PIN, no health-check/failover timing, no
+; cloud URL, nothing, on any machine actually installed through this installer, and would only
+; run at all on one where somebody had copied the file in by hand. Deliberately NOT given
+; Permissions: users-modify like the exe above: it holds AdminPinHash, and a customer able to
+; rewrite that could clear the PIN gate protecting the lock screen's own escape hatch.
+Source: "..\AppleEsportsErp\src\AppleEsportsErp.ClientAgent\publish\appsettings.agent.json"; DestDir: "{app}\agent"; Components: agent; Check: InstallAgentParts; Flags: onlyifdoesntexist
 
 [Dirs]
 ; Created up front so the setup scripts are never the first thing to touch them.

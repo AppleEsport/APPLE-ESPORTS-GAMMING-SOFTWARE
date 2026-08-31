@@ -26,6 +26,13 @@ public partial class LockScreen : Window
         // Set PC number from config
         PcNumberText.Text = App.AgentConfig.PcNumber;
 
+        // Read straight from the assembly, never a hand-typed string - see the comment on
+        // VersionText in the XAML for what this replaces.
+        var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+        VersionText.Text = version is null
+            ? "© Apple Esports ERP — Gaming PC Agent"
+            : $"© Apple Esports ERP — Gaming PC Agent v{version.Major}.{version.Minor}.{version.Build}";
+
         // Start glow animation
         var storyboard = (Storyboard)FindResource("PulseAnimation");
         storyboard.Begin();

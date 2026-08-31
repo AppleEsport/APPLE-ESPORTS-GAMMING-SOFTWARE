@@ -303,27 +303,27 @@ public class EodController : ControllerBase
     [HttpGet("preview")]
     public async Task<IActionResult> GetPreview([FromQuery] string? date)
     {
-        DateTimeOffset targetDate;
+        // A plain DateOnly, never a DateTimeOffset built from this string. The bug this
+        // replaces: DateTimeOffset.Parse("2026-09-01") has no offset in the input, so .NET
+        // silently assumes the CURRENT PROCESS's own local timezone - India Standard Time on
+        // a branch's own Windows machine, UTC in Head Office's Linux container. Converting
+        // that through .ToUniversalTime() then shifted the date itself, not just the clock
+        // time: "2026-09-01" entered on a branch became 2026-08-31T18:30Z, and every "today"
+        // downstream truncated that back down to 31 August - the report for the date typed
+        // in was silently the previous day's, and only on a branch's own machine.
+        DateOnly businessDay;
 
         if (string.IsNullOrWhiteSpace(date))
         {
-            targetDate = DateTimeOffset.UtcNow.ToUniversalTime();
+            businessDay = IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow);
         }
-        else if (DateTimeOffset.TryParse(date, null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsed))
+        else if (!DateOnly.TryParse(date, System.Globalization.CultureInfo.InvariantCulture,
+                     System.Globalization.DateTimeStyles.None, out businessDay))
         {
-            targetDate = parsed.ToUniversalTime();
-        }
-        else if (DateTime.TryParse(date, out var dateOnly))
-        {
-            // Handle "YYYY-MM-DD" format from React component
-            targetDate = new DateTimeOffset(dateOnly.Date, TimeSpan.Zero);
-        }
-        else
-        {
-            return BadRequest(ApiResponse<object>.Fail("Invalid date format. Use ISO 8601 format or YYYY-MM-DD."));
+            return BadRequest(ApiResponse<object>.Fail("Invalid date format. Use YYYY-MM-DD."));
         }
 
-        var result = await _eodService.GenerateEodReportAsync(GetBranchId(), targetDate);
+        var result = await _eodService.GenerateEodReportAsync(GetBranchId(), businessDay);
         return Ok(ApiResponse<EodReportDto>.Ok(result));
     }
 

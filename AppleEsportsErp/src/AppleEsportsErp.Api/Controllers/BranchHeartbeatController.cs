@@ -157,7 +157,16 @@ public class BranchHeartbeatController : ControllerBase
         beat.OperatorsOnDutyCount = dto.OperatorsOnDuty.Count;
         beat.ActiveSessions = dto.ActiveSessions;
         beat.PcsTotal = dto.Pcs.Count;
-        beat.PcsBusy = dto.Pcs.Count(p => !string.Equals(p.State, "idle", StringComparison.OrdinalIgnoreCase));
+
+        // "Not idle" used to mean busy, which also counted every never-configured placeholder
+        // row (State: awaitingsetup) and every machine down for repair (undermaintenance) as if
+        // a customer were sitting there. A branch with 35 PC rows and only a handful actually
+        // set up read as almost entirely full on this dashboard while its own Sessions page
+        // correctly showed one active session - the two screens disagreed about the same shop.
+        // Busy now means what the word says: a customer is actually using or about to use the
+        // seat.
+        var busyStates = new[] { "active", "reserved", "awaitingbilling" };
+        beat.PcsBusy = dto.Pcs.Count(p => busyStates.Contains(p.State?.ToLowerInvariant()));
         beat.DrawerExpected = dto.DrawerExpected;
         beat.TakingsToday = dto.TakingsToday;
         beat.UndeliveredRecords = dto.UndeliveredRecords;
