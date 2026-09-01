@@ -396,6 +396,10 @@ builder.Services.AddHostedService<AppleEsportsErp.Api.Services.TradingDayCloserS
 // Puts a PC back to "Not Set Up" once its agent has gone quiet for good (uninstalled, retired),
 // instead of it reading Idle/Free forever with no physical machine behind it.
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.PcAgentWatchdogService>();
+// Re-queues a fresh sync attempt for any shift, cash register or pending credit that is still
+// open right now but has no delivery attempt waiting in the outbox - the safety net for a
+// capture that was missed for any reason. Branch-only; see the class remarks.
+builder.Services.AddHostedService<AppleEsportsErp.Api.Services.SyncReconciliationService>();
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.FixedDurationSessionMonitorService>();
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.DeferredBillingMonitorService>();
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.SessionActivityCleanupService>();

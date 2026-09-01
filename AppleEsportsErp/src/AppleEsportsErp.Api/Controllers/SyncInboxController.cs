@@ -186,7 +186,14 @@ public class SyncInboxController : ControllerBase
     /// </summary>
     public async Task<int> RetryUnappliedEntriesAsync(CancellationToken ct)
     {
-        var pending = await _db.SyncInboxEntries.Where(e => !e.Applied).ToListAsync(ct);
+        // Applied=true only ever gets set alongside ApplyError=null (see the two success paths
+        // above) — so a row holding both is a state current code cannot produce and never a
+        // false alarm to retry again. It is how one specific entry got stuck for good in the
+        // past: it was inconsistently left Applied=true with a real ApplyError already recorded,
+        // which is invisible to a query that only looks for Applied=false. Catching that shape
+        // here as well means a stale row like that heals itself the moment this sweep next
+        // finds its missing dependency, instead of staying stuck forever.
+        var pending = await _db.SyncInboxEntries.Where(e => !e.Applied || e.ApplyError != null).ToListAsync(ct);
         var appliedCount = 0;
 
         foreach (var entry in pending.OrderBy(e => SyncApplyPriority(e.EventType)).ThenBy(e => e.OccurredAt))
