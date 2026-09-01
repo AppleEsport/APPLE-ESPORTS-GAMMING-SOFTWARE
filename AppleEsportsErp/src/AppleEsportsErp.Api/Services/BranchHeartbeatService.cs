@@ -173,6 +173,7 @@ public class BranchHeartbeatService : BackgroundService
                 CurrentSessionId = p.CurrentSessionId,
                 SessionStartTime = p.CurrentSession != null ? p.CurrentSession.StartTime : (DateTimeOffset?)null,
                 SessionEndTime = p.CurrentSession != null ? p.CurrentSession.EndTime : null,
+                PoweredOff = p.PoweredOff,
             })
             .ToListAsync(ct);
 

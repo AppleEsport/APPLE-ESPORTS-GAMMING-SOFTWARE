@@ -76,6 +76,14 @@ const SUMMARIES = {
   force_close: (d) => `force-closed a shift${d?.reason ? ` (${d.reason})` : ''}`,
   settings_change: (d) => `changed a setting${d?.Key ? `: ${d.Key}` : ''}`,
 
+  // Written by Head Office itself, from the branch's own heartbeat - not by anyone taking an
+  // action. If a PC's own "pc_shutdown" row (written at the branch, by whoever pressed the
+  // button) has no matching row like this one for the same PC around the same time, that gap
+  // is the sync problem itself: the branch said it, and Head Office never heard it.
+  pc_powered_off_synced: (d) => d?.poweredOff
+    ? `Head Office confirmed ${d?.pcNumber ?? 'a PC'} is shut down (via the branch's heartbeat)`
+    : `Head Office confirmed ${d?.pcNumber ?? 'a PC'} powered back on (via the branch's heartbeat)`,
+
   remote_command_issued: (d) => {
     const label = REMOTE_COMMAND_LABELS[d?.commandType] ?? d?.commandType ?? 'do something';
 
