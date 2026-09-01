@@ -24,7 +24,7 @@ import InterruptedSessionsBanner from '../../components/sessions/InterruptedSess
 export default function SessionsPage() {
   const { isSuperAdmin, user } = useAuth();
   const { activeBranch } = useBranch();
-  const { subscribe, connected, emit, SIGNALR_HUBS } = useSocket();
+  const { subscribe, isHubUp, emit, SIGNALR_HUBS } = useSocket();
   const toast = useToast();
   const navigate = useNavigate();
 
@@ -71,10 +71,17 @@ export default function SessionsPage() {
         if (aIsConsole !== bIsConsole) return aIsConsole - bIsConsole;
         return a.name.localeCompare(b.name, undefined, { numeric: true });
       });
-      // Only update if data actually changed
+      // Only update if data actually changed - but on the WHOLE row, not a hand-picked
+      // subset of fields. This used to compare only id/state/totalAmount, so a change to
+      // anything else (poweredOff, isAgentOnline, customerName, sessionEndTime...) looked
+      // identical to no change at all and the freshly-fetched, correct data was thrown away
+      // in favour of stale state - a PC shut down or powered back on with no session change
+      // could sit showing the wrong colour forever, since every future poll hit the exact
+      // same blind spot. Comparing the full snapshot means nothing on this DTO can be added
+      // later and silently fall into that same gap again.
       setPcs(prev => {
-        const prevJson = JSON.stringify(prev?.map(p => ({ id: p.id, state: p.state, totalAmount: p.totalAmount })));
-        const newJson = JSON.stringify(sorted?.map(p => ({ id: p.id, state: p.state, totalAmount: p.totalAmount })));
+        const prevJson = JSON.stringify(prev);
+        const newJson = JSON.stringify(sorted);
         return prevJson !== newJson ? sorted : prev;
       });
     } catch (err) {
@@ -213,9 +220,14 @@ export default function SessionsPage() {
     return () => clearInterval(interval);
   }, [targetBranchId]);
 
-  // SignalR realtime PC state updates & immediate walk-in notification
+  // SignalR realtime PC state updates. Gated on the pc-status hub's own health, not the
+  // all-four `connected` badge - a blip on notifications, sessions or billing used to tear
+  // this down along with everything else, and it stayed torn down until every one of those
+  // recovered together, even though the pc-status hub itself never went anywhere. A PC shut
+  // down or started during that window got no live push at all, only whatever the 20s poll
+  // fallback could still catch (see fetchPcs).
   useEffect(() => {
-    if (!connected || !targetBranchId) return;
+    if (!isHubUp(SIGNALR_HUBS.PC_STATUS) || !targetBranchId) return;
     const unsubPcStatus = subscribe(SIGNALR_HUBS.PC_STATUS, 'PcStatusChanged', (payload) => {
       console.log('[SessionsPage] PcStatusChanged received. Refetching PCs...');
       const data = payload.payload || payload.Payload || payload.data || payload.Data || payload;
@@ -235,6 +247,17 @@ export default function SessionsPage() {
       fetchPcs();
     });
 
+    return () => {
+      unsubPcStatus();
+      unsubPricing();
+    };
+  }, [isHubUp, subscribe, SIGNALR_HUBS.PC_STATUS, targetBranchId, fetchPcs]);
+
+  // Immediate walk-in notification. Its own effect, gated on the notifications hub's own
+  // health rather than bundled with pc-status above - the two have nothing to do with each
+  // other, and neither should be able to take the other one down.
+  useEffect(() => {
+    if (!isHubUp(SIGNALR_HUBS.NOTIFICATIONS) || !targetBranchId) return;
     // Immediate delivery via SignalR (polling above provides the fallback)
     const unsubNotification = subscribe(SIGNALR_HUBS.NOTIFICATIONS, 'Alert', (alert) => {
       console.log('[SessionsPage] Received Alert:', alert);
@@ -265,11 +288,9 @@ export default function SessionsPage() {
     });
 
     return () => {
-      unsubPcStatus();
-      unsubPricing();
       unsubNotification();
     };
-  }, [connected, subscribe, SIGNALR_HUBS.PC_STATUS, SIGNALR_HUBS.NOTIFICATIONS, targetBranchId]);
+  }, [isHubUp, subscribe, SIGNALR_HUBS.NOTIFICATIONS, targetBranchId]);
 
   const handleApproveWalkin = async (req) => {
     try {
