@@ -239,4 +239,26 @@ public static class SyncCapture
         var property = entity.Properties.FirstOrDefault(p => p.Metadata.Name == propertyName);
         return property?.CurrentValue is Guid g && g != Guid.Empty ? g : null;
     }
+
+    /// <summary>
+    /// A short, stable fingerprint of a row's current snapshot - the same JSON <see cref="Collect"/>
+    /// would send, hashed rather than sent whole. Lets two databases ask "do we still agree
+    /// about this row" by exchanging a few bytes instead of the row itself; only a row that
+    /// actually disagrees needs its full snapshot sent.
+    /// </summary>
+    public static string ComputeChecksum(EntityEntry entity)
+    {
+        var json = Snapshot(entity);
+        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(json));
+        return Convert.ToHexString(hash);
+    }
+
+    /// <summary>
+    /// The watched CLR type behind an aggregate's event-name string, for a caller that received
+    /// only the string - over the wire, or read back off an outbox row - and needs to load the
+    /// actual entity. Kept as the reverse of <see cref="Watched"/> rather than a second list of
+    /// the same names, so the two can never go out of sync with each other.
+    /// </summary>
+    public static Type? TypeForAggregate(string aggregateType) =>
+        Watched.FirstOrDefault(kv => kv.Value == aggregateType).Key;
 }

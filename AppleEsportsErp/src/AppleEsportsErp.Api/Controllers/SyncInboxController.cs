@@ -174,6 +174,75 @@ public class SyncInboxController : ControllerBase
     }
 
     /// <summary>
+    /// The other half of "make sure both sides are the same": everything above this line only
+    /// ever asks "did a delivery attempt happen for this row". It says nothing about whether a
+    /// row that was already delivered and applied still agrees with what the branch holds right
+    /// now - a later correction to an already-closed register, or any future code path that
+    /// changes a watched row without going through whatever SyncCapture is hooked into, would
+    /// leave this side holding a stale copy forever with nothing anywhere flagging it.
+    ///
+    /// A branch periodically fingerprints every row it has recently cared about and sends the
+    /// fingerprints here (see SyncManifestReconcilerService). This compares each one against
+    /// Head Office's own copy of the same row and hands back exactly the rows that disagree -
+    /// missing entirely, or present but different - so the branch can resend just those, in
+    /// full, without either side ever transmitting rows that already match.
+    /// </summary>
+    [HttpPost("reconcile")]
+    [AllowAnonymous]
+    public async Task<IActionResult> ReconcileManifest([FromBody] ReconcileManifestDto dto)
+    {
+        if (dto?.Entries == null || dto.Entries.Count == 0)
+            return Ok(ApiResponse<ReconcileResultDto>.Ok(new ReconcileResultDto()));
+
+        var mismatched = new List<ReconcileMismatchDto>();
+
+        foreach (var entry in dto.Entries)
+        {
+            var type = SyncCapture.TypeForAggregate(entry.AggregateType ?? "");
+            if (type is null) continue;
+
+            var current = await _db.FindAsync(type, entry.AggregateId);
+            if (current is null)
+            {
+                mismatched.Add(new ReconcileMismatchDto
+                {
+                    AggregateType = entry.AggregateType!,
+                    AggregateId = entry.AggregateId,
+                    Reason = "missing",
+                });
+                continue;
+            }
+
+            var ourChecksum = SyncCapture.ComputeChecksum(_db.Entry(current));
+            if (!string.Equals(ourChecksum, entry.Checksum, StringComparison.OrdinalIgnoreCase))
+            {
+                mismatched.Add(new ReconcileMismatchDto
+                {
+                    AggregateType = entry.AggregateType!,
+                    AggregateId = entry.AggregateId,
+                    Reason = "different",
+                });
+            }
+        }
+
+        if (mismatched.Count > 0)
+        {
+            _logger.LogWarning(
+                "Reconciliation with branch {BranchId}: checked {Checked}, {Count} row(s) disagree: {Rows}",
+                dto.BranchId, dto.Entries.Count, mismatched.Count,
+                string.Join(", ", mismatched.Select(m => $"{m.AggregateType}:{m.AggregateId} ({m.Reason})")));
+        }
+        else
+        {
+            _logger.LogInformation(
+                "Reconciliation with branch {BranchId}: checked {Checked} row(s), all agree.",
+                dto.BranchId, dto.Entries.Count);
+        }
+
+        return Ok(ApiResponse<ReconcileResultDto>.Ok(new ReconcileResultDto { Mismatched = mismatched }));
+    }
+
+    /// <summary>
     /// Re-attempts every currently unapplied entry, from any branch, regardless of when it
     /// arrived.
     ///
@@ -1187,4 +1256,29 @@ public class SyncEntryDto
     public string? EventType { get; set; }
     public object? EventData { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
+}
+
+public class ReconcileManifestDto
+{
+    public Guid BranchId { get; set; }
+    public List<ReconcileManifestEntryDto> Entries { get; set; } = new();
+}
+
+public class ReconcileManifestEntryDto
+{
+    public string? AggregateType { get; set; }
+    public Guid AggregateId { get; set; }
+    public string? Checksum { get; set; }
+}
+
+public class ReconcileResultDto
+{
+    public List<ReconcileMismatchDto> Mismatched { get; set; } = new();
+}
+
+public class ReconcileMismatchDto
+{
+    public string AggregateType { get; set; } = "";
+    public Guid AggregateId { get; set; }
+    public string Reason { get; set; } = "";
 }

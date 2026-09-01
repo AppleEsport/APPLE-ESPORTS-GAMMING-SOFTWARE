@@ -400,6 +400,11 @@ builder.Services.AddHostedService<AppleEsportsErp.Api.Services.PcAgentWatchdogSe
 // open right now but has no delivery attempt waiting in the outbox - the safety net for a
 // capture that was missed for any reason. Branch-only; see the class remarks.
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.SyncReconciliationService>();
+// The actual cross-check: fingerprints every watched row this branch has recently cared about
+// and asks Head Office whether it still agrees, resending only whatever does not match. This is
+// what actually guarantees the two databases stay the same, rather than just guaranteeing a
+// delivery attempt happened once. Branch-only; see the class remarks.
+builder.Services.AddHostedService<AppleEsportsErp.Api.Services.SyncManifestReconcilerService>();
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.FixedDurationSessionMonitorService>();
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.DeferredBillingMonitorService>();
 builder.Services.AddHostedService<AppleEsportsErp.Api.Services.SessionActivityCleanupService>();
