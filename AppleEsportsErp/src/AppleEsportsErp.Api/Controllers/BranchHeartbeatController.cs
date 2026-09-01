@@ -28,6 +28,7 @@ public class BranchHeartbeatController : ControllerBase
 {
     private readonly AppDbContext _db;
     private readonly IAuditService _audit;
+    private readonly IHubNotificationService _hubNotifier;
     private readonly ILogger<BranchHeartbeatController> _logger;
 
     /// <summary>
@@ -64,10 +65,12 @@ public class BranchHeartbeatController : ControllerBase
     /// </summary>
     public static readonly TimeSpan CommandGivenUpAfter = TimeSpan.FromMinutes(5);
 
-    public BranchHeartbeatController(AppDbContext db, IAuditService audit, ILogger<BranchHeartbeatController> logger)
+    public BranchHeartbeatController(
+        AppDbContext db, IAuditService audit, IHubNotificationService hubNotifier, ILogger<BranchHeartbeatController> logger)
     {
         _db = db;
         _audit = audit;
+        _hubNotifier = hubNotifier;
         _logger = logger;
     }
 
@@ -172,9 +175,22 @@ public class BranchHeartbeatController : ControllerBase
         beat.UndeliveredRecords = dto.UndeliveredRecords;
 
         await ApplyOperatorsOnDutyAsync(dto, ct);
-        await ApplyPcStatesAsync(dto, ct);
+        var changedPcIds = await ApplyPcStatesAsync(dto, ct);
 
         await _db.SaveChangesAsync(ct);
+
+        // Broadcast after saving successfully, same rule everything else that touches a PC
+        // follows - see ReservationBackgroundService. Without this, Head Office's own dashboard
+        // never heard about a heartbeat-driven change at all: it had no live push wired to this
+        // endpoint, only its own 20-second poll (or a manual refresh, once the data itself is
+        // actually there to refresh into). A PC shut down at the counter, or simply started a
+        // session, could sit showing the wrong colour at Head Office for up to 20 seconds even
+        // after this fix made the data correct.
+        foreach (var pcId in changedPcIds)
+        {
+            try { await _hubNotifier.BroadcastPcStatusChangeAsync(dto.BranchId, pcId); }
+            catch { /* best effort - the next poll picks up the change regardless */ }
+        }
 
         // The reply carries this branch's settings back down, which is the half of sync that
         // never existed. Null when the branch already has them, so almost every beat stays a
@@ -467,9 +483,10 @@ public class BranchHeartbeatController : ControllerBase
     /// three of Adajan's PCs sat on "awaiting billing" from early August against sessions that
     /// no longer existed.
     /// </summary>
-    private async Task ApplyPcStatesAsync(BranchHeartbeatDto dto, CancellationToken ct)
+    private async Task<List<Guid>> ApplyPcStatesAsync(BranchHeartbeatDto dto, CancellationToken ct)
     {
-        if (dto.Pcs.Count == 0) return;
+        var changed = new List<Guid>();
+        if (dto.Pcs.Count == 0) return changed;
 
         var ids = dto.Pcs.Select(p => p.PcId).ToList();
         var pcs = await _db.Pcs
@@ -548,21 +565,48 @@ public class BranchHeartbeatController : ControllerBase
             if (pc.State == state
                 && pc.CurrentSessionId == reported.CurrentSessionId
                 && pc.CurrentSessionStartTime == reported.SessionStartTime
-                && pc.CurrentSessionEndTime == reported.SessionEndTime)
+                && pc.CurrentSessionEndTime == reported.SessionEndTime
+                && pc.PoweredOff == reported.PoweredOff)
                 continue;
 
             _logger.LogInformation(
-                "PC {PcNumber} ({PcId}) on branch {BranchId} moving {OldState}/{OldSession} -> " +
-                "{NewState}/{NewSession} from heartbeat.",
-                pc.PcNumber, pc.Id, dto.BranchId, pc.State, pc.CurrentSessionId, state, reported.CurrentSessionId);
+                "PC {PcNumber} ({PcId}) on branch {BranchId} moving {OldState}/{OldSession}/poweredOff={OldPoweredOff} -> " +
+                "{NewState}/{NewSession}/poweredOff={NewPoweredOff} from heartbeat.",
+                pc.PcNumber, pc.Id, dto.BranchId, pc.State, pc.CurrentSessionId, pc.PoweredOff,
+                state, reported.CurrentSessionId, reported.PoweredOff);
+
+            // Written on the Audit Trail specifically for PoweredOff, not for every routine
+            // Idle/Active/Reserved churn a busy shop produces dozens of times an hour - this is
+            // the one field that used to never arrive at all (see PcStateDto.PoweredOff), so it
+            // is the one worth a visible row confirming Head Office actually got it. If the
+            // branch's own "pc_shutdown" row exists but this one never shows up for the same PC
+            // around the same time, that gap IS the problem - the heartbeat left the branch
+            // reporting one thing and Head Office never heard it.
+            if (pc.PoweredOff != reported.PoweredOff)
+            {
+                await _audit.LogAsync(new AuditEntry
+                {
+                    UserRole = "System",
+                    UserName = "System",
+                    Action = "pc_powered_off_synced",
+                    BranchId = dto.BranchId,
+                    TargetType = "pc",
+                    TargetId = pc.Id,
+                    Details = new { pcNumber = pc.PcNumber, poweredOff = reported.PoweredOff },
+                });
+            }
 
             pc.State = state;
             pc.CurrentSessionId = reported.CurrentSessionId;
             pc.CurrentSessionStartTime = reported.SessionStartTime;
             pc.CurrentSessionEndTime = reported.SessionEndTime;
+            pc.PoweredOff = reported.PoweredOff;
             pc.LastActiveAt = DateTimeOffset.UtcNow;
             pc.UpdatedAt = DateTimeOffset.UtcNow;
+            changed.Add(pc.Id);
         }
+
+        return changed;
     }
 
     /// <summary>
