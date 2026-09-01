@@ -7,6 +7,7 @@ using AppleEsportsErp.Infrastructure.Data;
 using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
 using AppleEsportsErp.Application.Interfaces;
+using AppleEsportsErp.Application.Services;
 
 namespace AppleEsportsErp.Api.Controllers;
 
@@ -240,6 +241,66 @@ public class SyncInboxController : ControllerBase
         }
 
         return Ok(ApiResponse<ReconcileResultDto>.Ok(new ReconcileResultDto { Mismatched = mismatched }));
+    }
+
+    /// <summary>
+    /// The row-level checks above answer "does the data agree". This answers the question one
+    /// layer up: "would the two screens actually show the same thing" - the exact headline
+    /// numbers a branch's own dashboard displays (PC states, who is on duty, today's EOD
+    /// totals), computed here from Head Office's own mirrored copy of this branch's data using
+    /// the same EOD service the branch itself calls.
+    ///
+    /// A branch compares this against its own local answer to the same question. If the two
+    /// disagree even though ReconcileManifest finds no row-level mismatch, the underlying data
+    /// genuinely agrees and something in how one side is computing or displaying it does not -
+    /// a real bug to go looking for, not something more syncing will fix. If ReconcileManifest
+    /// also found a mismatch, this is just that fix still working its way through.
+    /// </summary>
+    [HttpGet("parity-snapshot")]
+    [AllowAnonymous]
+    public async Task<IActionResult> ParitySnapshot([FromQuery] Guid branchId, [FromServices] IEodService eodService)
+    {
+        var snapshot = await BuildParitySnapshotAsync(_db, eodService, branchId);
+        return Ok(ApiResponse<ParitySnapshotDto>.Ok(snapshot));
+    }
+
+    /// <summary>
+    /// Shared by <see cref="ParitySnapshot"/> so this is never a second, subtly different
+    /// formula from whichever one actually ends up wrong - a branch calls the equivalent local
+    /// version of this exact method, not a hand-rolled comparison shaped for this endpoint alone.
+    /// </summary>
+    public static async Task<ParitySnapshotDto> BuildParitySnapshotAsync(
+        AppDbContext db, IEodService eodService, Guid branchId)
+    {
+        var pcCounts = await db.Pcs.AsNoTracking()
+            .Where(p => p.BranchId == branchId && !p.IsDeleted && p.State != PcState.AwaitingSetup)
+            .GroupBy(p => p.State)
+            .Select(g => new { State = g.Key, Count = g.Count() })
+            .ToListAsync();
+
+        int CountOf(PcState s) => pcCounts.FirstOrDefault(x => x.State == s)?.Count ?? 0;
+
+        var operatorsOnDuty = await db.Shifts.AsNoTracking()
+            .CountAsync(s => s.BranchId == branchId && s.Status == ShiftStatus.Active);
+
+        var today = IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow);
+        var eod = await eodService.GenerateEodReportAsync(branchId, today);
+
+        return new ParitySnapshotDto
+        {
+            TotalPcs = pcCounts.Sum(x => x.Count),
+            PcsActive = CountOf(PcState.Active),
+            PcsAwaitingBilling = CountOf(PcState.AwaitingBilling),
+            PcsIdle = CountOf(PcState.Idle),
+            PcsMaintenance = CountOf(PcState.UnderMaintenance),
+            OperatorsOnDuty = operatorsOnDuty,
+            EodNetRevenue = eod.Revenue.NetRevenue,
+            EodGamingRevenue = eod.Revenue.TotalGamingRevenue,
+            EodFoodRevenue = eod.Revenue.TotalFoodRevenue,
+            EodCashTotal = eod.PaymentMethods.TotalCash,
+            EodOnlineTotal = eod.PaymentMethods.TotalOnline,
+            ExpectedDrawerCash = eod.Cash.ExpectedCashInDrawer,
+        };
     }
 
     /// <summary>
@@ -1281,4 +1342,20 @@ public class ReconcileMismatchDto
     public string AggregateType { get; set; } = "";
     public Guid AggregateId { get; set; }
     public string Reason { get; set; } = "";
+}
+
+public class ParitySnapshotDto
+{
+    public int TotalPcs { get; set; }
+    public int PcsActive { get; set; }
+    public int PcsAwaitingBilling { get; set; }
+    public int PcsIdle { get; set; }
+    public int PcsMaintenance { get; set; }
+    public int OperatorsOnDuty { get; set; }
+    public decimal EodNetRevenue { get; set; }
+    public decimal EodGamingRevenue { get; set; }
+    public decimal EodFoodRevenue { get; set; }
+    public decimal EodCashTotal { get; set; }
+    public decimal EodOnlineTotal { get; set; }
+    public decimal ExpectedDrawerCash { get; set; }
 }
