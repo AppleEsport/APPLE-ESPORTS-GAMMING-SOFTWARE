@@ -99,6 +99,16 @@ public class AuditLogDto
 
 public class CreatePcDto
 {
+    /// <summary>
+    /// Set by Head Office itself when queuing a remote add (see PcsController.Create), so the
+    /// row it creates in its own mirror and the row the branch creates locally share the same
+    /// identity from the start - without this, the branch's own row got a fresh id nothing at
+    /// Head Office had ever seen, and its heartbeat reports on that id were silently ignored
+    /// forever (ApplyPcStatesAsync only ever updates an id it already recognises, never creates
+    /// one). Left null for a PC added locally at a branch's own Settings page, which has no
+    /// mirror to keep in step with.
+    /// </summary>
+    public Guid? Id { get; set; }
     public string PcNumber { get; set; } = null!;
     public string? PcName { get; set; }
     public Guid BranchId { get; set; }

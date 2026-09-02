@@ -1104,7 +1104,14 @@ public class BranchHeartbeatService : BackgroundService
 
         var pc = new Pc
         {
-            Id = Guid.NewGuid(),
+            // Head Office's own id when this command came from there (see CreatePcDto.Id), so
+            // its mirror and this branch's own row are the same row from the start, not two
+            // that happen to share a PcNumber. Without this the branch generated its own fresh
+            // id, Head Office's heartbeat-apply never learns a fresh id (it only ever updates
+            // one it already recognises), and every state change on this PC was silently
+            // ignored at Head Office forever. A fresh id only for a PC added locally at a
+            // branch's own Settings page, which has no mirror to match.
+            Id = dto.Id ?? Guid.NewGuid(),
             PcNumber = dto.PcNumber,
             PcName = dto.PcName ?? dto.PcNumber,
             BranchId = dto.BranchId,

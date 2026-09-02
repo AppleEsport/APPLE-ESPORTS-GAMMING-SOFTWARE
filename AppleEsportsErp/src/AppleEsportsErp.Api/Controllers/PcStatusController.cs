@@ -89,27 +89,6 @@ public class PcsController : ControllerBase
     [Authorize(Policy = "SuperAdminOnly")]
     public async Task<IActionResult> Create([FromBody] AppleEsportsErp.Application.DTOs.Settings.CreatePcDto dto, CancellationToken ct)
     {
-        // Head Office holds a mirrored copy of every branch's PCs, not the real one - writing a
-        // new row here the way this endpoint used to would create it only in that mirror, never
-        // on the branch's own database the counter and the gaming PCs actually read from. It
-        // looked like it worked (Head Office's own Settings page showed the new PC immediately)
-        // and did nothing an operator at the branch could ever see, the same fault RemoteBranchControl
-        // exists to fix for every other PC action.
-        if (_remote.MustTravel)
-        {
-            var receipt = await _remote.SendAsync(
-                dto.BranchId, BranchCommands.AddPc, dto,
-                Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!), ct);
-
-            return Accepted(ApiResponse<object>.Ok(new
-            {
-                queued = true,
-                commandId = receipt.CommandId,
-                branchIsReporting = receipt.BranchIsReporting,
-                message = receipt.Message,
-            }));
-        }
-
         var exists = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.Pc>()
             .Query()
             .AnyAsync(p => p.BranchId == dto.BranchId && p.PcNumber == dto.PcNumber && !p.IsDeleted);
@@ -143,6 +122,64 @@ public class PcsController : ControllerBase
         // mean it could never be started on, forever - nothing would ever flip it to Idle. It
         // is trusted to be ready the moment Super Admin registers it instead.
         var isConsole = string.Equals(dto.Zone, "Console", StringComparison.OrdinalIgnoreCase);
+
+        // Head Office holds a mirrored copy of every branch's PCs, not the real one - writing a
+        // new row here the way this endpoint used to and stopping there would create it only in
+        // that mirror, never on the branch's own database the counter and the gaming PCs
+        // actually read from. It looked like it worked (Head Office's own Settings page showed
+        // the new PC immediately) and did nothing an operator at the branch could ever see, the
+        // same fault RemoteBranchControl exists to fix for every other PC action.
+        if (_remote.MustTravel)
+        {
+            // Created here too, not only queued - a row that only ever existed as a pending
+            // command had no identity for a heartbeat to ever match against. The branch's own
+            // ApplyPcStatesAsync only updates a PcId it already recognises; it can never create
+            // one. Without this, the id the branch eventually generates for its own local row
+            // was one Head Office had never seen, so every heartbeat reporting it was silently
+            // ignored forever - exactly how a PS5 added from Head Office landed only in Head
+            // Office's own database and never reached the branch at all, found live on Testing.
+            //
+            // AwaitingSetup regardless of zone - even a console, which the local branch below
+            // defaults straight to Idle - because nothing here is confirmed real yet; the
+            // branch has not answered. Whatever it actually decides arrives on its own very next
+            // heartbeat and corrects this the normal way, the same as any other PC's state does.
+            var mirror = new AppleEsportsErp.Domain.Entities.Pc
+            {
+                Id = Guid.NewGuid(),
+                PcNumber = dto.PcNumber,
+                PcName = dto.PcName ?? dto.PcNumber,
+                BranchId = dto.BranchId,
+                IpAddress = isConsole ? null : dto.IpAddress,
+                Specs = dto.Specs ?? "{}",
+                Zone = dto.Zone ?? "Standard",
+                HardwareNotes = dto.HardwareNotes,
+                PricingProfileId = pricingProfile?.Id,
+                State = AppleEsportsErp.Domain.Enums.PcState.AwaitingSetup,
+                IsActive = true,
+                IsDeleted = false,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow
+            };
+
+            await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.Pc>().AddAsync(mirror);
+            await _unitOfWork.SaveChangesAsync();
+
+            dto.Id = mirror.Id;
+
+            var receipt = await _remote.SendAsync(
+                dto.BranchId, BranchCommands.AddPc, dto,
+                Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!), ct);
+
+            return Accepted(ApiResponse<object>.Ok(new
+            {
+                queued = true,
+                commandId = receipt.CommandId,
+                branchIsReporting = receipt.BranchIsReporting,
+                message = receipt.Message,
+                mirror.Id,
+                mirror.PcNumber,
+            }));
+        }
 
         var pc = new AppleEsportsErp.Domain.Entities.Pc
         {
