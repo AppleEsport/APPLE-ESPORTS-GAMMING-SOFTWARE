@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Common;
+using AppleEsportsErp.Application.DTOs.Settings;
 using AppleEsportsErp.Application.DTOs.Sync;
 using AppleEsportsErp.Application.Interfaces;
 using AppleEsportsErp.Domain.Entities;
@@ -176,6 +177,7 @@ public class BranchHeartbeatController : ControllerBase
 
         await ApplyOperatorsOnDutyAsync(dto, ct);
         var changedPcIds = await ApplyPcStatesAsync(dto, ct);
+        await QueueMissingPcsAsync(dto, ct);
 
         await _db.SaveChangesAsync(ct);
 
@@ -610,6 +612,96 @@ public class BranchHeartbeatController : ControllerBase
         }
 
         return changed;
+    }
+
+    /// <summary>
+    /// Heals a PC that exists at Head Office for this branch but that this branch's own
+    /// heartbeat never mentions - meaning the branch's local database genuinely does not have
+    /// it, not that this one beat happened to omit it (every PC is reported on every beat, see
+    /// BranchHeartbeatDto.Pcs). Found live: a PS5 added from Head Office landed only in Head
+    /// Office's own database and stayed invisible to Testing branch indefinitely, because
+    /// nothing was ever watching for exactly this gap - the add command that should have
+    /// created it there predates this reconciliation entirely and was simply never queued.
+    ///
+    /// Skips a PC that already has an add-PC command in flight, so this does not queue a fresh
+    /// copy every three seconds while the first one is still working its way to the branch.
+    /// </summary>
+    private async Task QueueMissingPcsAsync(BranchHeartbeatDto dto, CancellationToken ct)
+    {
+        if (dto.Pcs.Count == 0) return;   // an empty report is a branch with no PCs at all, not one missing everything
+
+        var reportedIds = dto.Pcs.Select(p => p.PcId).ToHashSet();
+
+        var ourPcs = await _db.Pcs.AsNoTracking()
+            .Where(p => p.BranchId == dto.BranchId && !p.IsDeleted)
+            .ToListAsync(ct);
+
+        var missing = ourPcs.Where(p => !reportedIds.Contains(p.Id)).ToList();
+        if (missing.Count == 0) return;
+
+        var openAddCommands = await _db.Set<BranchCommand>().AsNoTracking()
+            .Where(c => c.BranchId == dto.BranchId
+                && c.CommandType == AppleEsportsErp.Api.Services.BranchCommands.AddPc
+                && (c.Status == BranchCommandStatus.Pending || c.Status == BranchCommandStatus.Sent))
+            .Select(c => c.Payload)
+            .ToListAsync(ct);
+
+        var alreadyQueuedIds = new HashSet<Guid>();
+        foreach (var payload in openAddCommands)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(payload);
+                if (doc.RootElement.TryGetProperty("id", out var idProp) && idProp.TryGetGuid(out var id))
+                    alreadyQueuedIds.Add(id);
+            }
+            catch (JsonException) { /* an unreadable payload is a different problem; skip it here */ }
+        }
+
+        foreach (var pc in missing)
+        {
+            if (alreadyQueuedIds.Contains(pc.Id)) continue;
+
+            var payload = new CreatePcDto
+            {
+                Id = pc.Id,
+                PcNumber = pc.PcNumber,
+                PcName = pc.PcName,
+                BranchId = pc.BranchId,
+                IpAddress = pc.IpAddress,
+                Specs = pc.Specs,
+                Zone = pc.Zone,
+                HardwareNotes = pc.HardwareNotes,
+                PricingProfileId = pc.PricingProfileId,
+            };
+
+            _db.Add(new BranchCommand
+            {
+                Id = Guid.NewGuid(),
+                BranchId = dto.BranchId,
+                CommandType = AppleEsportsErp.Api.Services.BranchCommands.AddPc,
+                Payload = JsonSerializer.Serialize(payload),
+                Status = BranchCommandStatus.Pending,
+                RequestedByUserId = Guid.Empty,
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+
+            _logger.LogWarning(
+                "PC {PcNumber} ({PcId}) exists at Head Office for branch {BranchId} but was " +
+                "missing from its own heartbeat - queuing a fresh add so it reaches the branch.",
+                pc.PcNumber, pc.Id, dto.BranchId);
+
+            await _audit.LogAsync(new AuditEntry
+            {
+                UserRole = "System",
+                UserName = "System",
+                Action = "pc_resync_queued",
+                BranchId = dto.BranchId,
+                TargetType = "pc",
+                TargetId = pc.Id,
+                Details = new { pcNumber = pc.PcNumber, reason = "missing from the branch's own heartbeat" },
+            });
+        }
     }
 
     /// <summary>
