@@ -615,6 +615,19 @@ public class BranchHeartbeatController : ControllerBase
     }
 
     /// <summary>
+    /// How long to leave a failed (or still-open) add-PC attempt alone before trying again for
+    /// the same PC. Found live, the hard way: a branch running a build old enough not to
+    /// understand CreatePcDto.Id creates its own row with a fresh id every time, which can
+    /// never satisfy the "is Head Office's id in the reported list" check below - so without a
+    /// cooldown this re-queued a doomed retry every single heartbeat, forever, three seconds
+    /// apart, for as long as that branch stayed on the old build. Matches the pace of the other
+    /// self-healing sweeps in this codebase rather than the three-second beat, on purpose: this
+    /// is a safety net for something rare (a PC Head Office thinks exists that a branch has
+    /// genuinely never heard of), not a routine sync path that needs to be fast.
+    /// </summary>
+    private static readonly TimeSpan MissingPcRetryEvery = TimeSpan.FromMinutes(15);
+
+    /// <summary>
     /// Heals a PC that exists at Head Office for this branch but that this branch's own
     /// heartbeat never mentions - meaning the branch's local database genuinely does not have
     /// it, not that this one beat happened to omit it (every PC is reported on every beat, see
@@ -623,8 +636,10 @@ public class BranchHeartbeatController : ControllerBase
     /// nothing was ever watching for exactly this gap - the add command that should have
     /// created it there predates this reconciliation entirely and was simply never queued.
     ///
-    /// Skips a PC that already has an add-PC command in flight, so this does not queue a fresh
-    /// copy every three seconds while the first one is still working its way to the branch.
+    /// Skips a PC that already has an add-PC command in flight or attempted recently (see
+    /// MissingPcRetryEvery), so this does not hammer the branch with a fresh copy every three
+    /// seconds while an attempt is either still working its way there or has already failed for
+    /// a reason that resending the identical command will not fix on its own.
     /// </summary>
     private async Task QueueMissingPcsAsync(BranchHeartbeatDto dto, CancellationToken ct)
     {
@@ -639,10 +654,13 @@ public class BranchHeartbeatController : ControllerBase
         var missing = ourPcs.Where(p => !reportedIds.Contains(p.Id)).ToList();
         if (missing.Count == 0) return;
 
+        var recentCutoff = DateTimeOffset.UtcNow - MissingPcRetryEvery;
         var openAddCommands = await _db.Set<BranchCommand>().AsNoTracking()
             .Where(c => c.BranchId == dto.BranchId
                 && c.CommandType == AppleEsportsErp.Api.Services.BranchCommands.AddPc
-                && (c.Status == BranchCommandStatus.Pending || c.Status == BranchCommandStatus.Sent))
+                && (c.Status == BranchCommandStatus.Pending
+                    || c.Status == BranchCommandStatus.Sent
+                    || c.CreatedAt > recentCutoff))
             .Select(c => c.Payload)
             .ToListAsync(ct);
 
