@@ -245,8 +245,11 @@ public class BranchHeartbeatController : ControllerBase
 
             // The one outcome that has no branch to report it, because the branch is exactly
             // what never answered - so Head Office writes this closing entry itself, the only
-            // case anywhere in this file where that happens.
-            await LogCommandOutcomeAsync(c, succeeded: false, ct);
+            // case anywhere in this file where that happens. ResultMessage was just set above
+            // and is the whole reason this row is worth reading - without passing it through,
+            // the Audit Trail said only "failed" with no way to tell a stale build apart from
+            // any other kind of failure.
+            await LogCommandOutcomeAsync(c, succeeded: false, ct, c.ResultMessage);
         }
 
         var pending = open.Except(abandoned).ToList();

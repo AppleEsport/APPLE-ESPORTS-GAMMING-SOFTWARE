@@ -24,6 +24,7 @@ public class EmployeeService : IEmployeeService
         var query = _db.Employees
             .Include(e => e.Branch)
             .Include(e => e.SubmittedByOperator)
+            .Include(e => e.Operator)
             .Where(e => e.BranchId == branchId && !e.IsDeleted);
 
         if (!string.IsNullOrWhiteSpace(search))
@@ -47,6 +48,7 @@ public class EmployeeService : IEmployeeService
         var emp = await _db.Employees
             .Include(e => e.Branch)
             .Include(e => e.SubmittedByOperator)
+            .Include(e => e.Operator)
             .FirstOrDefaultAsync(e => e.Id == id && !e.IsDeleted)
             ?? throw new NotFoundException("Employee not found");
         return MapToDto(emp);
@@ -235,9 +237,36 @@ public class EmployeeService : IEmployeeService
         RefAddress      = e.RefAddress,
         PhotoDataUrl  = e.PhotoDataUrl,
         AadharDataUrl = e.AadharDataUrl,
-        Status            = e.Status,
+        Status            = DisplayStatus(e),
         SubmittedByName   = e.SubmittedByOperator?.FullName,
         CreatedAt         = e.CreatedAt,
         OperatorId        = e.OperatorId,
     };
+
+    /// <summary>
+    /// Employee.Status is set once, at creation, and nothing has ever updated it since - so an
+    /// operator suspended or disabled from Settings (not by removing this HR record) left this
+    /// screen showing "Active" forever no matter what actually happened to the account. The
+    /// operator record is the one place that state genuinely changes, so it is read fresh here
+    /// instead of trusting the employee's own frozen copy.
+    ///
+    /// LoggedOut deliberately still reads as Active: it flips on every ordinary shift-end and
+    /// every heartbeat that finds nobody on duty, and showing "inactive" for someone simply not
+    /// clocked in right now would make this column read wrong the moment anyone goes home.
+    /// Only Suspended and Disabled are genuine "this person is not working here" facts.
+    /// </summary>
+    private static string DisplayStatus(Employee e)
+    {
+        if (e.Operator is { } op)
+        {
+            return op.Status switch
+            {
+                OperatorStatus.Suspended => "Suspended",
+                OperatorStatus.Disabled => "Disabled",
+                _ => "Active",
+            };
+        }
+
+        return e.Status;
+    }
 }
