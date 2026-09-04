@@ -17,9 +17,14 @@ export default function ResetPasswordPage() {
   const [success, setSuccess] = useState(false);
 
   useEffect(() => {
-    // Extract from URL and store securely in sessionStorage
-    const urlEmail = searchParams.get('email');
-    const urlToken = searchParams.get('token');
+    // The link now carries email/token in the URL fragment (#...), not the query string
+    // (?...) - a fragment is never sent to the server at all, so it can never end up in an
+    // access log the way a query string does. Read the fragment first; fall back to the query
+    // string only so a reset email already sitting in someone's inbox from before this change
+    // still works instead of breaking outright.
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    const urlEmail = hashParams.get('email') || searchParams.get('email');
+    const urlToken = hashParams.get('token') || searchParams.get('token');
 
     if (!urlEmail || !urlToken) {
       // Try to get from sessionStorage as fallback
