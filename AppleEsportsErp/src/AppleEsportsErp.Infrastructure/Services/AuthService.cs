@@ -1763,10 +1763,29 @@ public class AuthService : IAuthService
 
     public async Task CompletePasswordResetAsync(ResetPasswordDto dto)
     {
+        // No time cutoff on purpose - the link is one-time-use, not one-hour-use. A token is
+        // valid until it is actually spent (the three ResetToken = null lines below, the moment
+        // this method finishes) or superseded by a newer request for the same account
+        // (InitiatePasswordResetAsync overwrites it), never by a clock. ResetTokenExpiry is
+        // still stamped when a token is issued - WalletService reads it to avoid re-sending a
+        // welcome email while one is already outstanding - but nothing here treats it as a
+        // deadline any more.
+        //
+        // What removing that clock check took with it: ResetPasswordDto.Token has no [Required]
+        // attribute, so a request that omits it (or sends it explicitly as null) arrives here as
+        // dto.Token == null. ResetToken defaults to null on every account until a reset is
+        // actually requested, so "ResetToken == dto.Token" alone would then match the first
+        // account it found that had never requested one - in effect, unauthenticated access to
+        // any untouched account. The expiry comparison used to block this by accident (EF
+        // translates a null-vs-timestamp comparison to SQL's three-valued NULL, which a WHERE
+        // clause never treats as a match) - this replaces that accident with the real guard.
+        if (string.IsNullOrWhiteSpace(dto.Token))
+            throw new AuthorizationException("Invalid or expired reset token.");
+
         var email = dto.Email.Trim().ToLowerInvariant();
-        var user = await _db.Users.FirstOrDefaultAsync(u => u.Email == email && u.ResetToken == dto.Token && u.ResetTokenExpiry > DateTimeOffset.UtcNow);
-        var op = await _db.Operators.FirstOrDefaultAsync(o => o.Email == email && o.ResetToken == dto.Token && o.ResetTokenExpiry > DateTimeOffset.UtcNow);
-        var member = await _db.Members.FirstOrDefaultAsync(m => m.Email == email && m.ResetToken == dto.Token && m.ResetTokenExpiry > DateTimeOffset.UtcNow);
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.Email == email && u.ResetToken == dto.Token);
+        var op = await _db.Operators.FirstOrDefaultAsync(o => o.Email == email && o.ResetToken == dto.Token);
+        var member = await _db.Members.FirstOrDefaultAsync(m => m.Email == email && m.ResetToken == dto.Token);
 
         if (user == null && op == null && member == null) throw new AuthorizationException("Invalid or expired reset token.");
 
