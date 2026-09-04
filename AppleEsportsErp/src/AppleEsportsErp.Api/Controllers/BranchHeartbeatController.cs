@@ -66,6 +66,8 @@ public class BranchHeartbeatController : ControllerBase
     /// </summary>
     public static readonly TimeSpan CommandGivenUpAfter = TimeSpan.FromMinutes(5);
 
+    private static readonly JsonSerializerOptions CaseInsensitiveJson = new() { PropertyNameCaseInsensitive = true };
+
     public BranchHeartbeatController(
         AppDbContext db, IAuditService audit, IHubNotificationService hubNotifier, ILogger<BranchHeartbeatController> logger)
     {
@@ -664,14 +666,20 @@ public class BranchHeartbeatController : ControllerBase
             .Select(c => c.Payload)
             .ToListAsync(ct);
 
+        // Deserialized as the real DTO, not hand-parsed, specifically so this cannot go wrong on
+        // casing again - JsonSerializer.Serialize(payload) wrote this with the C# property names
+        // verbatim ("Id", not "id"), and a manual TryGetProperty("id", ...) lookup against that
+        // is case-sensitive and simply never matches. It looked like a working de-dup guard and
+        // was not: every retry queued a fresh one, confirmed live at one every three seconds for
+        // several minutes straight before this was caught. Case-insensitive here so however any
+        // payload in this codebase happens to be cased, this cannot silently stop matching again.
         var alreadyQueuedIds = new HashSet<Guid>();
         foreach (var payload in openAddCommands)
         {
             try
             {
-                using var doc = JsonDocument.Parse(payload);
-                if (doc.RootElement.TryGetProperty("id", out var idProp) && idProp.TryGetGuid(out var id))
-                    alreadyQueuedIds.Add(id);
+                var parsed = JsonSerializer.Deserialize<CreatePcDto>(payload, CaseInsensitiveJson);
+                if (parsed?.Id is { } id) alreadyQueuedIds.Add(id);
             }
             catch (JsonException) { /* an unreadable payload is a different problem; skip it here */ }
         }
