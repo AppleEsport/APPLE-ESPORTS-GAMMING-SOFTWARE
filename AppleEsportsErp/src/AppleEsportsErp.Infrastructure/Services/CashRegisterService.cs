@@ -1,4 +1,5 @@
 ﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Cash;
 using AppleEsportsErp.Application.Exceptions;
@@ -15,17 +16,23 @@ public class CashRegisterService : ICashRegisterService
     private readonly IAuditService _auditService;
     private readonly IHubNotificationService _hubNotification;
     private readonly IEmailService _emailService;
+    private readonly IAdminNotifier _adminNotifier;
+    private readonly ILogger<CashRegisterService> _logger;
 
     public CashRegisterService(
         IUnitOfWork unitOfWork,
         IAuditService auditService,
         IHubNotificationService hubNotification,
-        IEmailService emailService)
+        IEmailService emailService,
+        IAdminNotifier adminNotifier,
+        ILogger<CashRegisterService> logger)
     {
         _unitOfWork = unitOfWork;
         _auditService = auditService;
         _hubNotification = hubNotification;
         _emailService = emailService;
+        _adminNotifier = adminNotifier;
+        _logger = logger;
     }
 
     /// <summary>
@@ -80,11 +87,30 @@ public class CashRegisterService : ICashRegisterService
 
         return new RegisterOpeningDto
         {
+            IsFirstOfDay = await WasLastShiftCloseAsync(lastRegister),
             InheritedBalance = lastRegister.PhysicalCashCounted ?? lastRegister.ExpectedDrawerCash,
         };
     }
 
-    public async Task<CashRegisterDto> OpenRegisterAsync(Guid branchId, Guid operatorId, Guid shiftId, OpenRegisterDto dto)
+    /// <summary>
+    /// Whether the shift this register belonged to was closed on a "last shift of the day" tick
+    /// - the point at which the day's cash is normally taken out and handed to the owner, so
+    /// nothing about what was in the drawer then says anything about what is in it now. Read
+    /// straight off Shift.ClosedTradingDay rather than guessed at from timing, because that flag
+    /// is the one place the operator actually said "the day is over" - a long gap since the last
+    /// close is just as consistent with the shop having simply been quiet.
+    /// </summary>
+    private async Task<bool> WasLastShiftCloseAsync(CashRegister lastRegister)
+    {
+        var shift = await _unitOfWork.Repository<Shift>().Query()
+            .Where(s => s.Id == lastRegister.ShiftId)
+            .Select(s => new { s.ClosedTradingDay })
+            .FirstOrDefaultAsync();
+
+        return shift?.ClosedTradingDay == true;
+    }
+
+    public async Task<OpenRegisterResultDto> OpenRegisterAsync(Guid branchId, Guid operatorId, Guid shiftId, OpenRegisterDto dto)
     {
         var today = IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow);
 
@@ -111,15 +137,42 @@ public class CashRegisterService : ICashRegisterService
 
         // Still open: hand back the same drawer rather than opening a rival to it.
         if (lastRegister != null && lastRegister.Status == CashRegisterStatus.Open)
-            return MapToDto(lastRegister);
+            return new OpenRegisterResultDto { Opened = true, Register = MapToDto(lastRegister) };
 
-        // A branch has ONE drawer and it runs through the trading day. Only the first shift
-        // puts money in; a later one inherits what the last shift left. What was counted is
-        // preferred over what was expected - the count is what is physically there.
-        var openingBalance = lastRegister is null
-            ? dto.OpeningBalance
-            : (lastRegister.PhysicalCashCounted ?? lastRegister.ExpectedDrawerCash);
+        // A branch has ONE drawer and it runs through the trading day, but "inherit what the
+        // last shift left" is only ever a fact worth trusting when nothing has happened to the
+        // drawer since - the same physical till, still in the shop, still nobody's had reason to
+        // touch it. Two things break that: no previous register at all (there is nothing to
+        // inherit), and the last one closing on a "last shift of the day" tick, which is normally
+        // exactly when the cash comes out and goes to the owner. Either way there is nothing
+        // honest to suggest, so the operator counts from nothing instead of being handed a number
+        // that used to be true.
+        var needsFreshCount = lastRegister is null || await WasLastShiftCloseAsync(lastRegister);
 
+        decimal? expected = needsFreshCount
+            ? null
+            : (lastRegister!.PhysicalCashCounted ?? lastRegister.ExpectedDrawerCash);
+
+        // A real count that disagrees with what was expected is not opened silently - the
+        // operator is handed the difference back and has to say why before the drawer opens.
+        // Sent back rather than thrown, the same shape ShiftTakeoverService.SubmitCountAsync
+        // already uses for the identical situation: this is not an error, it is a question that
+        // has not been answered yet.
+        if (expected.HasValue && expected.Value != dto.OpeningBalance && string.IsNullOrWhiteSpace(dto.Reason))
+        {
+            return new OpenRegisterResultDto
+            {
+                Opened = false,
+                ExpectedBalance = expected.Value,
+                CountedBalance = dto.OpeningBalance,
+                Difference = dto.OpeningBalance - expected.Value,
+            };
+        }
+
+        // Always what the operator actually counted, never what was merely expected - the
+        // opposite of what this used to do, and the entire point of asking.
+        var openingBalance = dto.OpeningBalance;
+        var mismatch = expected.HasValue && expected.Value != openingBalance;
 
         var register = new CashRegister
         {
@@ -132,11 +185,14 @@ public class CashRegisterService : ICashRegisterService
             TotalCashSales = 0,
             TotalSplitCash = 0,
             Status = CashRegisterStatus.Open,
-            OpenedAt = DateTimeOffset.UtcNow
+            OpenedAt = DateTimeOffset.UtcNow,
+            MismatchReason = mismatch
+                ? $"Opening count did not match what was expected (₹{expected:0.00} expected, ₹{openingBalance:0.00} counted). {dto.Reason}"
+                : null,
         };
 
         await _unitOfWork.Repository<CashRegister>().AddAsync(register);
-        
+
         await _auditService.LogAsync(new AuditEntry
         {
             OperatorId = operatorId,
@@ -146,13 +202,65 @@ public class CashRegisterService : ICashRegisterService
             BranchId = branchId,
             TargetType = "cash_register",
             TargetId = register.Id,
-            Details = new { OpeningBalance = dto.OpeningBalance }
+            Details = mismatch
+                ? new { OpeningBalance = openingBalance, ExpectedBalance = expected, Reason = dto.Reason }
+                : new { OpeningBalance = openingBalance }
         });
 
         await _unitOfWork.CommitTransactionAsync();
         await _hubNotification.BroadcastCashRegisterUpdateAsync(branchId, register.Id);
 
-        return MapToDto(register);
+        if (mismatch)
+            await NotifyOwnerOfOpeningMismatchAsync(branchId, operatorId, expected!.Value, openingBalance, dto.Reason!);
+
+        return new OpenRegisterResultDto { Opened = true, Register = MapToDto(register) };
+    }
+
+    /// <summary>
+    /// Tells the owner the same way ShiftTakeoverService does for an abandoned handover - who,
+    /// where, expected vs counted, and their own words for the gap. Never allowed to undo the
+    /// register actually opening: the drawer is real and the operator is waiting on it.
+    /// </summary>
+    private async Task NotifyOwnerOfOpeningMismatchAsync(
+        Guid branchId, Guid operatorId, decimal expected, decimal counted, string reason)
+    {
+        try
+        {
+            var operatorName = await _unitOfWork.Repository<Operator>().Query()
+                .Where(o => o.Id == operatorId).Select(o => o.FullName).FirstOrDefaultAsync() ?? "Unknown operator";
+            var branchName = await _unitOfWork.Repository<Branch>().Query()
+                .Where(b => b.Id == branchId).Select(b => b.Name).FirstOrDefaultAsync() ?? "Unknown branch";
+
+            var difference = counted - expected;
+            var isShort = difference < 0;
+            var amount = Math.Abs(difference);
+
+            await _adminNotifier.NotifyAsync(
+                $"Cash {(isShort ? "short" : "over")} at opening by ₹{amount:N0} - {operatorName} at {branchName}",
+                AdminEmailTemplate.Compose(
+                    heading: "An opening count did not match what was expected",
+                    accent: AdminEmailTemplate.Red,
+                    summary: $"{operatorName} opened the drawer at {branchName} and counted a different amount " +
+                              "than the system expected from the last shift.",
+                    rows: new List<(string, string)>
+                    {
+                        ("Branch", branchName),
+                        ("Opened by", operatorName),
+                        ("", ""),
+                        ("Expected in the drawer", $"₹{expected:N2}"),
+                        ("Actually counted", $"₹{counted:N2}"),
+                        (isShort ? "Missing" : "Extra", $"₹{amount:N2}"),
+                        ("", ""),
+                        ("Reason given", reason),
+                    },
+                    headline: $"₹{amount:N2} {(isShort ? "short" : "over")}",
+                    footnote: "The register has been opened with the counted figure, not the expected one - " +
+                               "what is actually in the drawer is what the shift starts from."));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Could not send the opening-mismatch email for branch {BranchId}.", branchId);
+        }
     }
 
     public async Task<CashRegisterDto> AddTransactionAsync(Guid branchId, Guid operatorId, Guid shiftId, AddCashTransactionDto dto)
