@@ -295,7 +295,7 @@ export default function Topbar({ onToggleSidebar, sidebarOpen, onLogoutClick }) 
             drawer goes unexplained. */}
         {!isSuperAdmin && (
           <button
-            onClick={() => navigate('/app/cash-desk?endShift=1')}
+            onClick={() => navigate('/app/cash-register?endShift=1')}
             className="flex items-center gap-1.5 px-2.5 py-1.5 bg-neon-red/10 border border-neon-red/30 rounded-sm text-xs text-neon-red font-semibold hover:bg-neon-red/20 transition-colors"
           >
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -398,7 +398,7 @@ export default function Topbar({ onToggleSidebar, sidebarOpen, onLogoutClick }) 
                 </button>
               ) : (
                 <button
-                  onClick={() => { setShowUserMenu(false); navigate('/app/cash-desk?endShift=1'); }}
+                  onClick={() => { setShowUserMenu(false); navigate('/app/cash-register?endShift=1'); }}
                   className="w-full text-left px-3 py-2 text-xs text-neon-red hover:bg-neon-red/5 transition-colors flex items-center gap-2"
                 >
                   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
