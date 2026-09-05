@@ -88,7 +88,8 @@ public class ReservationsController : ControllerBase
                     reservationTime = dto.ReservationTime,
                     durationMin = dto.DurationMin,
                     notes = dto.Notes,
-                    advanceDeposit = dto.AdvanceDeposit,
+                    advanceDepositCash = dto.AdvanceDepositCash,
+                    advanceDepositOnline = dto.AdvanceDepositOnline,
                     gracePeriodMin = dto.GracePeriodMin,
                 }, ct);
             }
