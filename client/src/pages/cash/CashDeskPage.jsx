@@ -167,7 +167,7 @@ export default function CashDeskPage() {
       <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
         <Lock className="w-12 h-12 text-text-3 mb-4" />
         <h2 className="text-xl font-heading font-bold text-text mb-2">Select a Branch</h2>
-        <p className="text-text-2">You must select a branch to access the Cash Register.</p>
+        <p className="text-text-2">You must select a branch to access the Cash Desk.</p>
       </div>
     );
   }
@@ -206,7 +206,7 @@ export default function CashDeskPage() {
         )}
         <div className="flex-1">
           <PageHeader
-            title="Cash Register"
+            title="Cash Desk"
             subtitle="End of Shift Reconciliation"
             icon="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
             badge="SECURE"

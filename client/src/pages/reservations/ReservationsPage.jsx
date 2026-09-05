@@ -60,6 +60,7 @@ export default function ReservationsPage() {
       time,
       durationMin: null,
       advanceDeposit: 0,
+      depositMethod: 'cash',
       gracePeriodMin: 15,
       notes: '',
       selectedTier: ''
@@ -273,13 +274,16 @@ export default function ReservationsPage() {
       const utcDate = new Date(istMs);
       const reservationTime = utcDate.toISOString();
 
+      const depositAmount = isMemberBooking || form.durationMin === null ? 0 : Number(form.advanceDeposit);
+
       await createReservation({
         pcId: form.pcId,
         customerName: form.customerName.trim(),
         memberId: selectedMember?.id || null,
         reservationTime: reservationTime,
         durationMin: isMemberBooking ? null : (form.durationMin !== null ? Number(form.durationMin) : null),
-        advanceDeposit: isMemberBooking || form.durationMin === null ? 0 : Number(form.advanceDeposit),
+        advanceDepositCash: form.depositMethod === 'online' ? 0 : depositAmount,
+        advanceDepositOnline: form.depositMethod === 'online' ? depositAmount : 0,
         gracePeriodMin: Number(form.gracePeriodMin),
         notes: form.notes.trim()
       });
@@ -294,6 +298,7 @@ export default function ReservationsPage() {
         time,
         notes: '',
         advanceDeposit: 0,
+        depositMethod: 'cash',
         durationMin: null,
         selectedTier: ''
       }));
@@ -555,14 +560,41 @@ export default function ReservationsPage() {
                 <label className="text-[10px] font-mono font-semibold text-text-2 uppercase tracking-wider flex items-center gap-1">
                   <IndianRupee className="w-3 h-3 text-text-3" /> Deposit (₹)
                 </label>
-                <input
-                  type="number"
-                  placeholder="0.00"
-                  min="0"
-                  value={form.advanceDeposit || ''}
-                  onChange={e => setForm(f => ({ ...f, advanceDeposit: parseFloat(e.target.value) || 0 }))}
-                  className="w-full bg-bg-3 border border-border rounded px-3 py-2 text-xs text-text focus:border-neon-purple focus:outline-none"
-                />
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    placeholder="0.00"
+                    min="0"
+                    value={form.advanceDeposit || ''}
+                    onChange={e => setForm(f => ({ ...f, advanceDeposit: parseFloat(e.target.value) || 0 }))}
+                    className="flex-1 bg-bg-3 border border-border rounded px-3 py-2 text-xs text-text focus:border-neon-purple focus:outline-none"
+                  />
+                  <div className="flex rounded border border-border overflow-hidden shrink-0">
+                    {['cash', 'online'].map(method => (
+                      <button
+                        key={method}
+                        type="button"
+                        onClick={() => setForm(f => ({ ...f, depositMethod: method }))}
+                        className={`px-3 py-2 text-[10px] font-mono font-semibold uppercase tracking-wider transition-colors ${
+                          form.depositMethod === method
+                            ? 'bg-neon-purple/20 text-neon-purple'
+                            : 'bg-bg-3 text-text-3 hover:text-text-2'
+                        }`}
+                      >
+                        {method}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {/* Only the cash portion of a deposit ever sits in the physical drawer - an
+                    online deposit is still credited off the customer's final bill, it just
+                    never touches the till, so it must never count toward what the drawer is
+                    expected to hold. */}
+                <p className="text-[10px] text-text-3">
+                  {form.depositMethod === 'online'
+                    ? 'Paid online — not counted in the cash drawer.'
+                    : 'Paid as cash — added to the cash drawer.'}
+                </p>
               </div>
             )}
 

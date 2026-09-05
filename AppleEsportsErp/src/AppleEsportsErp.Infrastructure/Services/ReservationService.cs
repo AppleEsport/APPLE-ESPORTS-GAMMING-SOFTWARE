@@ -99,6 +99,11 @@ public class ReservationService : IReservationService
 
         var gracePeriod = (dto.GracePeriodMin.HasValue && dto.GracePeriodMin.Value > 0) ? dto.GracePeriodMin.Value : 15;
 
+        // The deposit total still covers both portions - it is credited against the customer's
+        // final bill regardless of how it was paid (see the bill-completion path below). Only
+        // the cash portion is ever allowed to touch the drawer.
+        var advanceDeposit = dto.AdvanceDepositCash + dto.AdvanceDepositOnline;
+
         var reservation = new Reservation
         {
             PcId = dto.PcId,
@@ -109,7 +114,7 @@ public class ReservationService : IReservationService
             ReservationTime = dto.ReservationTime,
             DurationMin = dto.DurationMin,
             GracePeriodMin = gracePeriod,
-            AdvanceDeposit = dto.AdvanceDeposit,
+            AdvanceDeposit = advanceDeposit,
             State = ReservationState.Pending,
             Notes = dto.Notes
         };
@@ -123,20 +128,23 @@ public class ReservationService : IReservationService
             _unitOfWork.Repository<Pc>().Update(pc);
         }
 
-        // Fetch operator's active shift and record advance deposit
+        // Fetch operator's active shift and record the CASH portion of the advance deposit.
+        // The online portion never touched the drawer, so it never adds to ExpectedDrawerCash -
+        // it used to be added unconditionally here, which permanently inflated what the drawer
+        // was expected to hold by however much of the deposit was actually paid online.
         var activeShift = await _unitOfWork.Repository<Shift>().Query()
             .FirstOrDefaultAsync(s => s.OperatorId == operatorId && s.BranchId == branchId && s.Status == ShiftStatus.Active);
         var shiftId = activeShift?.Id;
 
-        if (dto.AdvanceDeposit > 0 && shiftId.HasValue)
+        if (dto.AdvanceDepositCash > 0 && shiftId.HasValue)
         {
             var activeRegister = await _unitOfWork.Repository<CashRegister>().Query()
                 .FirstOrDefaultAsync(cr => cr.BranchId == branchId && cr.ShiftId == shiftId.Value && cr.Status == CashRegisterStatus.Open);
-                
+
             if (activeRegister != null)
             {
-                activeRegister.ExpectedDrawerCash += dto.AdvanceDeposit;
-                activeRegister.TotalCashSales += dto.AdvanceDeposit;
+                activeRegister.ExpectedDrawerCash += dto.AdvanceDepositCash;
+                activeRegister.TotalCashSales += dto.AdvanceDepositCash;
                 _unitOfWork.Repository<CashRegister>().Update(activeRegister);
 
                 var cashTx = new CashTransaction
@@ -145,7 +153,7 @@ public class ReservationService : IReservationService
                     BranchId = branchId,
                     OperatorId = operatorId,
                     TransactionType = "reservation_deposit",
-                    CashAmount = dto.AdvanceDeposit,
+                    CashAmount = dto.AdvanceDepositCash,
                     CreatedAt = DateTimeOffset.UtcNow
                 };
                 await _unitOfWork.Repository<CashTransaction>().AddAsync(cashTx);
@@ -153,7 +161,7 @@ public class ReservationService : IReservationService
         }
 
         await _unitOfWork.Repository<Reservation>().AddAsync(reservation);
-        
+
         await _auditService.LogAsync(new AuditEntry
         {
             OperatorId = operatorId,
@@ -163,7 +171,14 @@ public class ReservationService : IReservationService
             BranchId = branchId,
             TargetType = "reservation",
             TargetId = reservation.Id,
-            Details = new { CustomerName = dto.CustomerName, PcNumber = pc.PcNumber, ReservationTime = dto.ReservationTime, AdvanceDeposit = dto.AdvanceDeposit }
+            Details = new
+            {
+                CustomerName = dto.CustomerName,
+                PcNumber = pc.PcNumber,
+                ReservationTime = dto.ReservationTime,
+                AdvanceDepositCash = dto.AdvanceDepositCash,
+                AdvanceDepositOnline = dto.AdvanceDepositOnline
+            }
         });
 
         await _unitOfWork.CommitTransactionAsync();
