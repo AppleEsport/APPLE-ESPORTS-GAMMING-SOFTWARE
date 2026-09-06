@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace AppleEsportsErp.Application.DTOs.Settings;
 
@@ -9,6 +10,10 @@ public class CreateBranchDto
     public string OpeningTime { get; set; } = "10:00";
     public string ClosingTime { get; set; } = "02:00";
     public string? ConfiguredReservationDurations { get; set; }
+
+    /// <summary>Null (the default) means this branch's food/snacks stay fully independent.
+    /// See FoodGroup.</summary>
+    public Guid? FoodGroupId { get; set; }
 }
 
 public class UpdateBranchDto
@@ -18,6 +23,7 @@ public class UpdateBranchDto
     public string OpeningTime { get; set; } = null!;
     public string ClosingTime { get; set; } = null!;
     public string? ConfiguredReservationDurations { get; set; }
+    public Guid? FoodGroupId { get; set; }
 }
 
 public class BranchDto
@@ -30,6 +36,29 @@ public class BranchDto
     public string Status { get; set; } = null!;
     public DateTimeOffset CreatedAt { get; set; }
     public string? ConfiguredReservationDurations { get; set; }
+    public Guid? FoodGroupId { get; set; }
+    public string? FoodGroupName { get; set; }
+}
+
+/// <summary>A named link between branches that share one food/snacks menu and stock count —
+/// see FoodGroup.</summary>
+public class FoodGroupDto
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = null!;
+    public DateTimeOffset CreatedAt { get; set; }
+    public List<FoodGroupBranchDto> Branches { get; set; } = new();
+}
+
+public class FoodGroupBranchDto
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = null!;
+}
+
+public class CreateFoodGroupDto
+{
+    public string Name { get; set; } = null!;
 }
 
 public class CreateOperatorDto

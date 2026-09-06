@@ -266,4 +266,14 @@ public static class BranchCommands
     /// see the old balance forever, no matter what Head Office's screen said.
     /// </summary>
     public const string AdminEditMemberValues = "admin_edit_member_values";
+
+    /// <summary>
+    /// A shared food/snacks item's stock moving by some amount at a sibling branch, relayed by
+    /// Head Office so this branch's own count moves by the same amount. Carries a delta, not a
+    /// fresh total - see SharedStockCapture and SyncInboxController.RelaySharedStockDeltaAsync
+    /// for why. Allowed to take the local count negative; that is an accepted, visible cost of
+    /// two branches occasionally selling "the last one" within the same few seconds of each
+    /// other, not a bug to route around.
+    /// </summary>
+    public const string RelaySharedStockDelta = "relay_shared_stock_delta";
 }

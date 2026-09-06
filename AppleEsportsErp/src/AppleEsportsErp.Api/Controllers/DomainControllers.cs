@@ -102,6 +102,7 @@ public class InventoryController : ControllerBase
             i.MinStockLimit,
             Status = i.Status.ToString(),
             IsLowStock = i.CurrentStock <= i.MinStockLimit,
+            IsOversold = i.CurrentStock < 0,
             i.ImageUrl,
             i.CreatedAt,
             i.UpdatedAt
@@ -212,6 +213,7 @@ public class InventoryController : ControllerBase
                 item.MinStockLimit,
                 Status = item.Status.ToString(),
                 IsLowStock = item.CurrentStock <= item.MinStockLimit,
+                IsOversold = item.CurrentStock < 0,
                 item.ImageUrl,
                 item.CreatedAt,
                 item.UpdatedAt
@@ -309,6 +311,7 @@ public class InventoryController : ControllerBase
             item.MinStockLimit,
             Status = item.Status.ToString(),
             IsLowStock = item.CurrentStock <= item.MinStockLimit,
+            IsOversold = item.CurrentStock < 0,
             item.ImageUrl,
             item.CreatedAt,
             item.UpdatedAt
@@ -767,6 +770,7 @@ public class BranchesController : ControllerBase
     {
         var branches = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.Branch>()
             .Query()
+            .Include(b => b.FoodGroup)
             .OrderBy(b => b.Name)
             .ToListAsync();
 
@@ -779,7 +783,9 @@ public class BranchesController : ControllerBase
             ClosingTime = b.ClosingTime.ToString("HH:mm"),
             Status = b.Status.ToString(),
             CreatedAt = b.CreatedAt,
-            ConfiguredReservationDurations = b.ConfiguredReservationDurations
+            ConfiguredReservationDurations = b.ConfiguredReservationDurations,
+            FoodGroupId = b.FoodGroupId,
+            FoodGroupName = b.FoodGroup?.Name
         });
 
         return Ok(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Ok(dtos));
@@ -798,7 +804,8 @@ public class BranchesController : ControllerBase
             Status = AppleEsportsErp.Domain.Enums.BranchStatus.Active,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
-            ConfiguredReservationDurations = dto.ConfiguredReservationDurations
+            ConfiguredReservationDurations = dto.ConfiguredReservationDurations,
+            FoodGroupId = dto.FoodGroupId
         };
 
         await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.Branch>().AddAsync(branch);
@@ -818,6 +825,7 @@ public class BranchesController : ControllerBase
         branch.OpeningTime = TimeOnly.Parse(dto.OpeningTime);
         branch.ClosingTime = TimeOnly.Parse(dto.ClosingTime);
         branch.ConfiguredReservationDurations = dto.ConfiguredReservationDurations;
+        branch.FoodGroupId = dto.FoodGroupId;
         branch.UpdatedAt = DateTimeOffset.UtcNow;
 
         _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.Branch>().Update(branch);
@@ -893,6 +901,112 @@ public class BranchesController : ControllerBase
             return BadRequest(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Fail(
                 $"Deletion blocked by remaining linked records: {ex.InnerException?.Message ?? ex.Message}"));
         }
+    }
+}
+
+/// <summary>
+/// Links branches that share one food/snacks menu and stock count — see FoodGroup.cs.
+/// Gated the same as branch management itself, since deciding who shares a pantry with
+/// whom is a Head Office/Super Admin decision, not a counter-level one.
+/// </summary>
+[ApiController]
+[Route("api/food-groups")]
+[Authorize(Policy = "Dashboard:settings")]
+public class FoodGroupsController : ControllerBase
+{
+    private readonly AppleEsportsErp.Application.Interfaces.IUnitOfWork _unitOfWork;
+
+    public FoodGroupsController(AppleEsportsErp.Application.Interfaces.IUnitOfWork unitOfWork)
+    {
+        _unitOfWork = unitOfWork;
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> GetAll()
+    {
+        var groups = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.FoodGroup>()
+            .Query()
+            .Include(g => g.Branches)
+            .OrderBy(g => g.Name)
+            .ToListAsync();
+
+        var dtos = groups.Select(g => new AppleEsportsErp.Application.DTOs.Settings.FoodGroupDto
+        {
+            Id = g.Id,
+            Name = g.Name,
+            CreatedAt = g.CreatedAt,
+            Branches = g.Branches
+                .OrderBy(b => b.Name)
+                .Select(b => new AppleEsportsErp.Application.DTOs.Settings.FoodGroupBranchDto { Id = b.Id, Name = b.Name })
+                .ToList()
+        });
+
+        return Ok(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Ok(dtos));
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] AppleEsportsErp.Application.DTOs.Settings.CreateFoodGroupDto dto)
+    {
+        var group = new AppleEsportsErp.Domain.Entities.FoodGroup
+        {
+            Id = Guid.NewGuid(),
+            Name = dto.Name,
+            CreatedAt = DateTimeOffset.UtcNow,
+        };
+
+        await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.FoodGroup>().AddAsync(group);
+        await _unitOfWork.SaveChangesAsync();
+
+        return Ok(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Ok(new { group.Id, group.Name }));
+    }
+
+    /// <summary>Replaces the group's whole branch membership with exactly the ids given — the
+    /// simplest shape for a checkbox-list settings screen. A branch removed from the list keeps
+    /// whatever menu items it already has locally; it just stops receiving future changes from
+    /// (or sending its own to) the group, same as it never having joined.</summary>
+    [HttpPut("{id}/branches")]
+    public async Task<IActionResult> SetBranches(Guid id, [FromBody] List<Guid> branchIds)
+    {
+        var group = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.FoodGroup>()
+            .Query().FirstOrDefaultAsync(g => g.Id == id);
+        if (group == null) return NotFound(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Fail("Food group not found"));
+
+        var branchRepo = _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.Branch>();
+
+        var currentMembers = await branchRepo.Query().Where(b => b.FoodGroupId == id).ToListAsync();
+        foreach (var b in currentMembers.Where(b => !branchIds.Contains(b.Id)))
+        {
+            b.FoodGroupId = null;
+            branchRepo.Update(b);
+        }
+
+        var toAdd = await branchRepo.Query()
+            .Where(b => branchIds.Contains(b.Id) && b.FoodGroupId != id)
+            .ToListAsync();
+        foreach (var b in toAdd)
+        {
+            b.FoodGroupId = id;
+            branchRepo.Update(b);
+        }
+
+        await _unitOfWork.SaveChangesAsync();
+
+        return Ok(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Ok(new { message = "Updated." }));
+    }
+
+    /// <summary>Member branches simply revert to independent (FoodGroupId set to null by the
+    /// database itself, DeleteBehavior.SetNull) — nothing about their existing menu is touched.</summary>
+    [HttpDelete("{id}")]
+    public async Task<IActionResult> Delete(Guid id)
+    {
+        var group = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.FoodGroup>()
+            .Query().FirstOrDefaultAsync(g => g.Id == id);
+        if (group == null) return NotFound(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Fail("Food group not found"));
+
+        _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.FoodGroup>().Remove(group);
+        await _unitOfWork.SaveChangesAsync();
+
+        return Ok(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Ok(new { message = "Food group deleted." }));
     }
 }
 

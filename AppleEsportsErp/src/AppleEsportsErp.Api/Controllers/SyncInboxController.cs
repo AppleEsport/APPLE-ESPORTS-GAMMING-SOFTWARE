@@ -8,6 +8,7 @@ using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
 using AppleEsportsErp.Application.Interfaces;
 using AppleEsportsErp.Application.Services;
+using AppleEsportsErp.Api.Services;
 
 namespace AppleEsportsErp.Api.Controllers;
 
@@ -20,12 +21,15 @@ public class SyncInboxController : ControllerBase
 {
     private readonly AppDbContext _db;
     private readonly IEmailService _email;
+    private readonly IRemoteBranchControl _remote;
     private readonly ILogger<SyncInboxController> _logger;
 
-    public SyncInboxController(AppDbContext db, IEmailService email, ILogger<SyncInboxController> logger)
+    public SyncInboxController(
+        AppDbContext db, IEmailService email, IRemoteBranchControl remote, ILogger<SyncInboxController> logger)
     {
         _db = db;
         _email = email;
+        _remote = remote;
         _logger = logger;
     }
 
@@ -389,7 +393,8 @@ public class SyncInboxController : ControllerBase
 
         "food_order.status_changed" => 4,
 
-        _ => 5,   // inventory_item.changed, audit_log.changed, email.send_requested - independent
+        _ => 5,   // inventory_item.changed, inventory_stock_delta.changed, audit_log.changed,
+                  // email.send_requested - independent of everything else
     };
 
     /// <summary>
@@ -495,6 +500,13 @@ public class SyncInboxController : ControllerBase
                 await UpsertRowAsync<InventoryItem>(held, root);
                 break;
 
+            // A shop's shared stock moving by some amount - see SharedStockCapture for why
+            // this travels as a delta rather than a fresh total, and RelaySharedStockDeltaAsync
+            // below for what Head Office does with it.
+            case "inventory_stock_delta.changed":
+                await RelaySharedStockDeltaAsync(held, root);
+                break;
+
             // Food orders never travelled up at all before this. A walk-in order's money
             // happened to arrive because its Bill is separately watched, but a session-linked
             // order updated nothing synced until the food was marked delivered - and even then
@@ -550,6 +562,50 @@ public class SyncInboxController : ControllerBase
     /// not arrived yet is kept, minus the reference, instead of being rejected outright and
     /// taking the day's takings with it.
     /// </summary>
+    /// <summary>
+    /// A shop's food/snacks stock moving by some amount, told to every other branch sharing the
+    /// same food group so their own count moves by the same amount too.
+    ///
+    /// A branch not in any food group (<see cref="Branch.FoodGroupId"/> null) is untouched by
+    /// this entirely - there is nobody to tell, so this simply returns. For a grouped branch,
+    /// the selling branch has already applied this same change to its own local copy, offline,
+    /// the instant it happened; this is purely about telling its siblings, via the same
+    /// queued-instruction channel already used for a remote payment or discount.
+    /// </summary>
+    private async Task RelaySharedStockDeltaAsync(SyncInboxEntry held, JsonElement root)
+    {
+        var inventoryItemId = ReadGuid(root, "inventoryItemId") ?? held.AggregateId;
+        var delta = ReadInt(root, "delta") ?? 0;
+        if (delta == 0) return;
+
+        var foodGroupId = await _db.Branches.AsNoTracking()
+            .Where(b => b.Id == held.BranchId)
+            .Select(b => b.FoodGroupId)
+            .FirstOrDefaultAsync();
+
+        if (foodGroupId is null) return;
+
+        var siblingIds = await _db.Branches.AsNoTracking()
+            .Where(b => b.FoodGroupId == foodGroupId && b.Id != held.BranchId)
+            .Select(b => b.Id)
+            .ToListAsync();
+
+        foreach (var siblingId in siblingIds)
+        {
+            // The relay's own stable id, not a fresh one, even on a retry of this same entry -
+            // see InventoryLog.SourceRelayEventId. Without it, a retry that got partway through
+            // fanning out to several siblings before failing would queue a second command for
+            // each on the next attempt, and a sibling with no way to recognise the duplicate
+            // would apply the same movement twice.
+            await _remote.SendAsync(siblingId, BranchCommands.RelaySharedStockDelta, new
+            {
+                inventoryItemId,
+                delta,
+                relayEventId = held.Id,
+            }, Guid.Empty, CancellationToken.None);
+        }
+    }
+
     private async Task UpsertRowAsync<TEntity>(
         SyncInboxEntry held, JsonElement root, IReadOnlySet<string>? excludeFields = null)
         where TEntity : class, new()
@@ -592,7 +648,16 @@ public class SyncInboxController : ControllerBase
 
             // The primary key is set from the branch's id when creating, and never touched
             // afterwards - an update must not be able to move a row to a different id.
-            if (property.Metadata.IsPrimaryKey() && existing is not null) continue;
+            //
+            // BranchId follows the same rule, for a reason that only started mattering once
+            // two different branches could legitimately send a row sharing the same id (see
+            // BranchHeartbeatService.ApplyOneMenuItemAsync, which deliberately reuses a shared
+            // item's Guid across a food group's branches). Without this, whichever branch's
+            // echo of that shared item happened to sync up last would silently flip who
+            // Head Office thinks owns the row - and a generic upsert has no way to tell "this
+            // branch legitimately owns it" apart from "this branch's echo just landed last".
+            // Owning branch is decided once, at creation, exactly like the id itself.
+            if ((property.Metadata.IsPrimaryKey() || name == "BranchId") && existing is not null) continue;
 
             var clr = Nullable.GetUnderlyingType(property.Metadata.ClrType) ?? property.Metadata.ClrType;
 

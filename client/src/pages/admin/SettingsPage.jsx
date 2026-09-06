@@ -5,22 +5,24 @@ import Drawer from '../../components/ui/Drawer';
 import { useAuth } from '../../contexts/AuthContext';
 import { ROLES } from '../../config/constants';
 import { useBranch } from '../../contexts/BranchContext';
-import { 
+import {
   getBranches, createBranch, updateBranch, deleteBranch, activateBranch, deleteBranchPermanent,
   getOperators, createOperator, updateOperator, deleteOperator, activateOperator, deleteOperatorPermanent,
   getBranchPcsDetailed, createPc, updatePc, deletePc,
   getAuditLogs,
   forceLogoutOperator, getSystemConfigs, saveSystemConfig,
-  manageOperatorAdminRole, getPricingProfiles
+  manageOperatorAdminRole, getPricingProfiles,
+  getFoodGroups, createFoodGroup, setFoodGroupBranches, deleteFoodGroup
 } from '../../api/settings.api';
 import { authAPI } from '../../api/auth.api';
 import {
-  Store, Users, Activity, MoreVertical, Edit, Trash2, Plus, Save, Clock, MapPin, Monitor, Wrench, Shield, Check, Info, Eye, EyeOff, KeyRound, Gamepad2
+  Store, Users, Activity, MoreVertical, Edit, Trash2, Plus, Save, Clock, MapPin, Monitor, Wrench, Shield, Check, Info, Eye, EyeOff, KeyRound, Gamepad2, Utensils
 } from 'lucide-react';
 import SystemConfigTab from './SystemConfigTab';
 import SecuritySettingsTab from './SecuritySettingsTab';
 import AdminsTab from './AdminsTab';
 import PricingProfilesTab from './PricingProfilesTab';
+import FoodSharingTab from './FoodSharingTab';
 import './SettingsPage.css';
 
 const PERMISSION_KEYS = [
@@ -55,6 +57,7 @@ export default function SettingsPage() {
   const [branches, setBranches] = useState([]);
   const [operators, setOperators] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
+  const [foodGroups, setFoodGroups] = useState([]);
 
   // Drawers State
   const [branchDrawer, setBranchDrawer] = useState({ isOpen: false, data: null });
@@ -73,12 +76,13 @@ export default function SettingsPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [bRes, oRes, aRes] = await Promise.all([
-        getBranches(), getOperators(), getAuditLogs()
+      const [bRes, oRes, aRes, fgRes] = await Promise.all([
+        getBranches(), getOperators(), getAuditLogs(), getFoodGroups()
       ]);
       setBranches(bRes.data || []);
       setOperators(oRes.data || []);
       setAuditLogs(aRes.data?.items || []);
+      setFoodGroups(fgRes.data || []);
     } catch (error) {
       toast.error('Failed to load settings data');
     } finally {
@@ -133,12 +137,14 @@ export default function SettingsPage() {
   const handleSaveBranch = async (e) => {
     e.preventDefault();
     const formData = new FormData(e.target);
+    const foodGroupId = formData.get('foodGroupId');
     const payload = {
       name: formData.get('name'),
       address: formData.get('address'),
       openingTime: formData.get('openingTime'),
       closingTime: formData.get('closingTime'),
-      configuredReservationDurations: formData.get('configuredReservationDurations')
+      configuredReservationDurations: formData.get('configuredReservationDurations'),
+      foodGroupId: foodGroupId || null
     };
 
     try {
@@ -412,11 +418,17 @@ export default function SettingsPage() {
                 >
                   <Monitor size={16} /> Pricing Profiles
                 </button>
-                <button 
-                  className={`nav-item w-full ${activeTab === 'security' ? 'active' : ''}`} 
+                <button
+                  className={`nav-item w-full ${activeTab === 'security' ? 'active' : ''}`}
                   onClick={() => setActiveTab('security')}
                 >
                   <Shield size={16} /> Security Settings
+                </button>
+                <button
+                  className={`nav-item w-full ${activeTab === 'food-sharing' ? 'active' : ''}`}
+                  onClick={() => setActiveTab('food-sharing')}
+                >
+                  <Utensils size={16} /> Food & Snacks Sharing
                 </button>
               </>
             )}
@@ -653,6 +665,8 @@ export default function SettingsPage() {
               
               {/* GLOBAL ADMINS TAB */}
               {activeTab === 'admins' && <AdminsTab />}
+
+              {activeTab === 'food-sharing' && <FoodSharingTab />}
             </>
           )}
         </div>
@@ -722,7 +736,27 @@ export default function SettingsPage() {
             />
             <span className="text-[10px] text-text-3 mt-1 block">Enter minutes separated by commas.</span>
           </div>
-          
+
+          <div className="form-group">
+            <label>Share Food & Snacks With</label>
+            <select
+              name="foodGroupId"
+              defaultValue={branchDrawer.data?.foodGroupId || ''}
+              className="form-control"
+            >
+              <option value="">Don't share — keep independent</option>
+              {foodGroups.map(g => (
+                <option key={g.id} value={g.id}>
+                  {g.name} ({g.branches.map(b => b.name).join(', ') || 'no branches yet'})
+                </option>
+              ))}
+            </select>
+            <span className="text-[10px] text-text-3 mt-1 block">
+              Branches sharing a group show the same menu and stock count. Create a new group
+              first from Food & Snacks Sharing in the sidebar if the one you need isn't listed.
+            </span>
+          </div>
+
           <div className="drawer-footer pt-4">
             <button type="submit" className="btn-primary w-full flex justify-center items-center gap-2 font-heading tracking-wider">
               <Save size={16} /> SAVE LOCATION

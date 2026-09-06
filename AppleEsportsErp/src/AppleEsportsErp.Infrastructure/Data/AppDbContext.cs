@@ -95,6 +95,9 @@ public class AppDbContext : DbContext
 
         var entries = SyncCapture.Collect(ChangeTracker);
         if (entries.Count > 0) SyncOutboxEntries.AddRange(entries);
+
+        var stockDeltaEntries = SharedStockCapture.Collect(ChangeTracker);
+        if (stockDeltaEntries.Count > 0) SyncOutboxEntries.AddRange(stockDeltaEntries);
     }
 
     /// <summary>

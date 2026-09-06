@@ -26,6 +26,27 @@ export const deleteBranchPermanent = async (id) => {
   return response.data;
 };
 
+// --- Food Groups (shared food/snacks menu + stock across linked branches) ---
+export const getFoodGroups = async () => {
+  const response = await api.get('/food-groups');
+  return response.data;
+};
+
+export const createFoodGroup = async (name) => {
+  const response = await api.post('/food-groups', { name });
+  return response.data;
+};
+
+export const setFoodGroupBranches = async (id, branchIds) => {
+  const response = await api.put(`/food-groups/${id}/branches`, branchIds);
+  return response.data;
+};
+
+export const deleteFoodGroup = async (id) => {
+  const response = await api.delete(`/food-groups/${id}`);
+  return response.data;
+};
+
 // --- Operators ---
 export const getOperators = async () => {
   const response = await api.get('/operators');
