@@ -377,10 +377,23 @@ public class BranchHeartbeatController : ControllerBase
             })
             .ToListAsync(ct);
 
+        // Null unless this branch shares a food group with another - see Branch.FoodGroupId.
+        var foodGroupId = await _db.Branches.AsNoTracking()
+            .Where(b => b.Id == branchId)
+            .Select(b => b.FoodGroupId)
+            .FirstOrDefaultAsync(ct);
+
         // Catalog fields only - CurrentStock and SoldQty are the branch's own trading state
         // and never travel down, for the same reason a PC's busy/idle state does not.
+        //
+        // Scoped to this branch alone, unless it shares a food group - then every branch
+        // sharing that group is included too, so an item created or edited by ANY of them ends
+        // up on every member's menu, not just its own creator's. No further dedup is needed:
+        // Head Office's own InventoryItems table already holds at most one row per Id (the
+        // primary key), the same as any other branch's echo.
         var menuItems = await _db.Set<InventoryItem>().AsNoTracking()
-            .Where(i => i.BranchId == branchId)
+            .Where(i => i.BranchId == branchId
+                || (foodGroupId != null && i.Branch!.FoodGroupId == foodGroupId))
             .OrderBy(i => i.Id)
             .Select(i => new BranchMenuItemConfigDto
             {
