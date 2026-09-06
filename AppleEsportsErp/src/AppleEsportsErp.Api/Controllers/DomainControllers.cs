@@ -78,9 +78,20 @@ public class InventoryController : ControllerBase
             targetBranchId = firstBranch.Id;
         }
         
+        // Null unless this branch shares a food group with another - see Branch.FoodGroupId.
+        var foodGroupId = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.Branch>().Query()
+            .Where(b => b.Id == targetBranchId)
+            .Select(b => b.FoodGroupId)
+            .FirstOrDefaultAsync();
+
+        // Scoped to this branch alone, unless it shares a food group - then every branch
+        // sharing that group is included too, so an item created or stocked from ANY of them
+        // shows up here regardless of which one actually owns the row. Same reasoning as
+        // BranchHeartbeatController.ConfigForBranchIfChangedAsync's catalogue push.
         var query = _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.InventoryItem>()
             .Query()
-            .Where(i => i.BranchId == targetBranchId);
+            .Where(i => i.BranchId == targetBranchId
+                || (foodGroupId != null && i.Branch.FoodGroupId == foodGroupId));
 
         if (!includeAll)
         {
@@ -130,18 +141,26 @@ public class InventoryController : ControllerBase
         var targetBranchId = dto.BranchId ?? Guid.Parse(HttpContext.Items["BranchId"]!.ToString()!);
         var requestedStock = 0;
 
+        // Null unless this branch shares a food group with another - see Branch.FoodGroupId.
+        var foodGroupId = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.Branch>().Query()
+            .Where(b => b.Id == targetBranchId)
+            .Select(b => b.FoodGroupId)
+            .FirstOrDefaultAsync();
+
         // Same item, typed twice under a different case, is how this branch ended up with
         // "Red bull" and "redbull" as two unrelated rows with two unrelated stock counts -
-        // neither aware the other existed. Checked case-insensitively, per branch, so a
-        // genuinely different branch can still stock an item under the same name.
+        // neither aware the other existed. Checked case-insensitively, per branch (or per food
+        // group, when this one shares its menu with another) so a genuinely different,
+        // unrelated branch can still stock an item under the same name.
         var duplicate = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.InventoryItem>()
             .Query()
-            .FirstOrDefaultAsync(i => i.BranchId == targetBranchId
+            .FirstOrDefaultAsync(i => (i.BranchId == targetBranchId
+                    || (foodGroupId != null && i.Branch.FoodGroupId == foodGroupId))
                 && i.ItemName.ToLower() == dto.ItemName.Trim().ToLower());
         if (duplicate is not null)
         {
             return BadRequest(AppleEsportsErp.Application.DTOs.Common.ApiResponse<object>.Fail(
-                $"\"{duplicate.ItemName}\" already exists on this branch's menu. Edit that item instead of adding another.",
+                $"\"{duplicate.ItemName}\" already exists on this menu. Edit that item instead of adding another.",
                 "DUPLICATE_ITEM_NAME"));
         }
 
