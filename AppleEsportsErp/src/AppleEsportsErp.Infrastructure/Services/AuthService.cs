@@ -1787,7 +1787,20 @@ public class AuthService : IAuthService
         var op = await _db.Operators.FirstOrDefaultAsync(o => o.Email == email && o.ResetToken == dto.Token);
         var member = await _db.Members.FirstOrDefaultAsync(m => m.Email == email && m.ResetToken == dto.Token);
 
-        if (user == null && op == null && member == null) throw new AuthorizationException("Invalid or expired reset token.");
+        if (user == null && op == null && member == null)
+        {
+            // Not necessarily a dead token - just a member Head Office does not have a row for
+            // yet. See ApplyMemberResetTokenAsync's own docstring for why that method refuses to
+            // invent one: a branch that has never told Head Office a member exists at all is
+            // something to wait for, not something to guess at. But the token itself already
+            // arrived here the moment it was minted (ShareMemberResetTokenAsync sends it
+            // separately from - and before - the member ever needs to exist), so it does not
+            // have to wait on a Member row to be checked against.
+            if (_configuration.IsHeadOffice() && await TryCompleteResetForUnsyncedMemberAsync(email, dto.Token, dto.NewPassword))
+                return;
+
+            throw new AuthorizationException("Invalid or expired reset token.");
+        }
 
         var newHash = BCryptNet.HashPassword(dto.NewPassword);
         if (user != null)
@@ -1885,6 +1898,73 @@ public class AuthService : IAuthService
                 Details = new { status = "success", resetAt = DateTimeOffset.UtcNow },
             });
         }
+    }
+
+    /// <summary>
+    /// Completes a member's reset when Head Office has the token but not the member - the same
+    /// gap ApplyMemberResetTokenAsync defers on and waits for a member.created that, for a member
+    /// created before this branch's sync ever ran, may never arrive.
+    ///
+    /// A member's password only ever needs to reach one place: the branch's own row, which is
+    /// what a gaming PC actually checks at login (see the comment on the ordinary member branch
+    /// above). Head Office does not need a Member row of its own to queue that command - it only
+    /// needs to know which branch and which member id, and both of those already arrived with the
+    /// reset-token event itself, stored as-received in SyncInboxEntries. Matching this dormant
+    /// event on email and token is exactly the same check the ordinary path makes against a real
+    /// Member row; the only thing missing here is the row, not the proof of who asked.
+    /// </summary>
+    private async Task<bool> TryCompleteResetForUnsyncedMemberAsync(string email, string token, string newPassword)
+    {
+        var candidates = await _db.SyncInboxEntries
+            .Where(e => e.EventType == "member.reset_requested" && !e.Applied)
+            .ToListAsync();
+
+        foreach (var entry in candidates)
+        {
+            using var doc = JsonDocument.Parse(entry.EventData);
+            var root = doc.RootElement;
+            var entryEmail = root.TryGetProperty("email", out var e) ? e.GetString() : null;
+            var entryToken = root.TryGetProperty("resetToken", out var t) ? t.GetString() : null;
+
+            if (!string.Equals(entryEmail, email, StringComparison.OrdinalIgnoreCase) || entryToken != token)
+                continue;
+
+            _db.Add(new BranchCommand
+            {
+                Id = Guid.NewGuid(),
+                BranchId = entry.BranchId,
+                CommandType = "set_member_password",
+                Payload = JsonSerializer.Serialize(new
+                {
+                    memberId = entry.AggregateId,
+                    passwordHash = BCryptNet.HashPassword(newPassword),
+                }),
+                Status = BranchCommandStatus.Pending,
+                RequestedByUserId = Guid.Empty,   // the member themselves, not a Head Office user
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+
+            // Spent, the same as ResetToken = null on a real row - this exact token cannot be
+            // replayed, and it stops ApplyMemberResetTokenAsync's retry from still trying to
+            // apply it if the member.created it was waiting on ever does show up afterward.
+            entry.Applied = true;
+            entry.ApplyError = null;
+            await _db.SaveChangesAsync();
+
+            await _audit.LogAsync(new AuditEntry
+            {
+                UserRole = "Member",
+                UserName = entryEmail ?? email,
+                Action = AuditActions.PasswordReset,
+                TargetType = "member",
+                TargetId = entry.AggregateId,
+                Details = new { status = "success", resetAt = DateTimeOffset.UtcNow, viaUnsyncedMember = true },
+            });
+
+            return true;
+        }
+
+        return false;
     }
 
     public async Task ChangeCredentialsAsync(Guid targetUserId, ChangeCredentialsDto dto)
