@@ -749,9 +749,17 @@ public class SyncInboxController : ControllerBase
         if (string.IsNullOrWhiteSpace(fullName))
             throw new InvalidOperationException($"Member {memberId} arrived with no name.");
 
-        // Not branch-scoped, and correctly so: a member joins at one shop and plays at any of
-        // them, which is the whole reason their wallet has to live at Head Office rather than
-        // on one till.
+        // Gameplay itself is deliberately not branch-scoped - a member joins at one shop and
+        // plays at any of them, which is the whole reason their wallet lives at Head Office
+        // rather than on one till. HomeBranchId below does not change that; nothing gates play
+        // on it. It exists for a single, narrower purpose - CompletePasswordResetAsync and
+        // WalletService's setup-token flow both need to know which branch's own copy of this
+        // member actually gets checked at login, so they know where to send a changed password.
+        // Leaving it null (as this used to) answers that question with "nowhere": Head Office
+        // would validate a reset link, update its own copy, tell the customer "success" - and
+        // never queue anything for any branch to receive, leaving the login every gaming PC
+        // actually checks untouched. held.BranchId is exactly that answer, already sitting on
+        // the envelope this event arrived in.
         _db.Members.Add(new Member
         {
             Id = memberId,
@@ -761,6 +769,7 @@ public class SyncInboxController : ControllerBase
             Email = ReadString(root, "email"),
             Username = ReadString(root, "username"),
             Status = MemberStatus.Active,
+            HomeBranchId = held.BranchId,
             CreatedAt = ReadDate(root, "createdAt") ?? held.OccurredAt,
             UpdatedAt = held.ReceivedAt,
         });
