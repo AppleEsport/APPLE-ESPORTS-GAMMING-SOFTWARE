@@ -442,6 +442,9 @@ public class BranchHeartbeatService : BackgroundService
             case BranchCommands.SetMemberPassword:
                 return await RunSetMemberPasswordAsync(scoped, command.Payload, ct);
 
+            case BranchCommands.AdminEditMemberValues:
+                return await RunAdminEditMemberValuesAsync(scoped, command.Payload, ct);
+
             default:
                 return (false, $"This branch does not know the command '{command.CommandType}' yet.");
         }
@@ -741,6 +744,55 @@ public class BranchHeartbeatService : BackgroundService
         });
 
         return (true, "Password updated at this branch.");
+    }
+
+    /// <summary>
+    /// A Super Admin's direct balance/stat override, carried out on this branch's own copy of
+    /// the member - the one its counter actually reads. Runs through the exact same
+    /// MemberService.AdminEditValuesAsync a local admin-edit screen would call, so the branch
+    /// gets its own Correction wallet transaction and audit entry out of this too, not just a
+    /// changed number with nothing explaining it later.
+    /// </summary>
+    private static async Task<(bool, string)> RunAdminEditMemberValuesAsync(
+        IServiceProvider scoped, string payload, CancellationToken ct)
+    {
+        Guid memberId, adminId;
+        Application.DTOs.Members.AdminEditMemberValuesDto dto;
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            var root = doc.RootElement;
+            memberId = root.GetProperty("memberId").GetGuid();
+            adminId = root.GetProperty("adminId").GetGuid();
+            dto = JsonSerializer.Deserialize<Application.DTOs.Members.AdminEditMemberValuesDto>(
+                root.GetProperty("dto").GetRawText(),
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                ?? throw new InvalidOperationException("Empty member-edit payload.");
+        }
+        catch
+        {
+            return (false, "The member-edit command arrived without a readable member id and values.");
+        }
+
+        var db = scoped.GetRequiredService<AppDbContext>();
+        var member = await db.Set<Member>().AsNoTracking().FirstOrDefaultAsync(m => m.Id == memberId, ct);
+
+        // Same reasoning as RunSetMemberPasswordAsync: a member this branch has never seen has
+        // nothing here to edit, and that is not a failure worth retrying forever.
+        if (member is null) return (true, "This member does not exist at this branch.");
+
+        try
+        {
+            var memberService = scoped.GetRequiredService<IMemberService>();
+            var result = await memberService.AdminEditValuesAsync(
+                member.HomeBranchId ?? Guid.Empty, adminId, memberId, dto);
+
+            return (true, $"Updated at this branch. Gaming balance now Rs {result.GamingBalance}.");
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.GetBaseException().Message);
+        }
     }
 
     private static async Task<(bool, string)> RunDeleteInventoryItemAsync(

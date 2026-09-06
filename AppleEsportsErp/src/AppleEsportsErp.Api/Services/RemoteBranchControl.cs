@@ -253,4 +253,17 @@ public static class BranchCommands
     /// "Permanently deleted" was never actually true for anything requested from Head Office.
     /// </summary>
     public const string DeleteInventoryItem = "delete_inventory_item";
+
+    /// <summary>
+    /// A Super Admin's direct override of a member's wallet balance or lifetime stats, told to
+    /// the branch that actually holds this member's row instead of just written into Head
+    /// Office's own copy.
+    ///
+    /// Same shape as every other command here: Head Office's dashboard reads its own copy and
+    /// shows the new number immediately, which is exactly the trap this file's own class
+    /// comment describes - it demos perfectly and does nothing, because the gaming PC at the
+    /// counter checks the branch's row, not Head Office's. An operator watching that PC would
+    /// see the old balance forever, no matter what Head Office's screen said.
+    /// </summary>
+    public const string AdminEditMemberValues = "admin_edit_member_values";
 }

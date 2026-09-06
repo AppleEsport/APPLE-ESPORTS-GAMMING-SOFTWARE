@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using BCryptNet = BCrypt.Net.BCrypt;
 using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Common;
@@ -8,6 +9,7 @@ using AppleEsportsErp.Application.Exceptions;
 using AppleEsportsErp.Application.Interfaces;
 using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
+using AppleEsportsErp.Infrastructure.Configuration;
 using AppleEsportsErp.Infrastructure.Identity;
 
 namespace AppleEsportsErp.Infrastructure.Services;
@@ -24,8 +26,9 @@ public class MemberService : IMemberService
     private static readonly TimeSpan LockoutDuration = TimeSpan.FromMinutes(15);
 
     private readonly IOutboxService _outbox;
+    private readonly IConfiguration _configuration;
 
-    public MemberService(IUnitOfWork unitOfWork, IAuditService auditService, JwtTokenService jwt, IEmailService emailService, IAppUrlProvider appUrls, IOutboxService outbox)
+    public MemberService(IUnitOfWork unitOfWork, IAuditService auditService, JwtTokenService jwt, IEmailService emailService, IAppUrlProvider appUrls, IOutboxService outbox, IConfiguration configuration)
     {
         _outbox = outbox;
         _unitOfWork = unitOfWork;
@@ -33,6 +36,7 @@ public class MemberService : IMemberService
         _jwt = jwt;
         _emailService = emailService;
         _appUrls = appUrls;
+        _configuration = configuration;
     }
 
     private static bool IsLocked(DateTimeOffset? lockedUntil) => lockedUntil.HasValue && lockedUntil.Value > DateTimeOffset.UtcNow;
@@ -391,6 +395,18 @@ public class MemberService : IMemberService
     /// every other field just changes directly, with a single audit log entry summarizing the edit.</summary>
     public async Task<MemberDto> AdminEditValuesAsync(Guid branchId, Guid adminId, Guid id, AdminEditMemberValuesDto dto)
     {
+        // Head Office's own copy of a member is not what the gaming PC at the counter checks -
+        // the branch's own row is. Writing here would show the new number on Head Office's
+        // screen and change nothing an operator can actually see, exactly the trap
+        // RemoteBranchControl's own class comment describes. MembersController routes this to
+        // the branch instead whenever it is called from Head Office; this only guards against
+        // some other, future caller reaching this method directly and re-creating that trap.
+        if (_configuration.IsHeadOffice())
+            throw new AppException(
+                "A member's balance has to be edited at the branch itself, not written here at " +
+                "Head Office - the branch's own copy is what the counter actually reads, and a " +
+                "change written only here would be invisible to it.");
+
         var member = await _unitOfWork.Repository<Member>().GetByIdAsync(id)
             ?? throw new NotFoundException("Member not found.");
 
