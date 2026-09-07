@@ -802,12 +802,14 @@ public class BranchHeartbeatService : BackgroundService
     /// A sibling branch's shared food/snacks stock moving by some amount, applied here as the
     /// same movement to this branch's own local copy of that item.
     ///
-    /// Uncapped on purpose - this can take CurrentStock negative, and that is accepted rather
-    /// than guarded against. Two branches sharing one pantry can each only ever know their own
-    /// count between sync beats, so a same-moment sale at both is possible; the Menu Editor
-    /// flags a negative count visibly rather than this handler silently refusing the movement
-    /// or clamping it to zero, either of which would leave the two branches disagreeing again -
-    /// exactly what this whole mechanism exists to prevent.
+    /// Clamped to zero. Two branches sharing one pantry can each only ever know their own count
+    /// between sync beats, so a same-moment sale at both is still possible - each branch's own
+    /// local sale already refused to oversell against what it knew (FoodOrderService), but the
+    /// two branches' otherwise-valid sales can still add up to more than the shared item ever
+    /// had. Letting the total go negative here just moves that same overselling into the
+    /// stock count itself instead of preventing it; zero is the honest floor for "how much is
+    /// left," and the sibling branch that sold into an already-empty shelf is the one this
+    /// shows up for by seeing 0 instead of the sale count it expected.
     /// </summary>
     private static async Task<(bool, string)> RunRelaySharedStockDeltaAsync(
         IServiceProvider scoped, string payload, CancellationToken ct)
@@ -844,7 +846,7 @@ public class BranchHeartbeatService : BackgroundService
         // next beat gives that push a chance to arrive first.
         if (item is null) return (false, "This branch does not know this shared item yet.");
 
-        item.CurrentStock += delta;
+        item.CurrentStock = Math.Max(0, item.CurrentStock + delta);
 
         db.Set<InventoryLog>().Add(new InventoryLog
         {

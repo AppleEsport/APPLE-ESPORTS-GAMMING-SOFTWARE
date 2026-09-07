@@ -70,9 +70,22 @@ export default function EodDashboardPage() {
   const rangeLabel = isRange ? `${targetDate} to ${endDate}` : targetDate;
   const [rangeDaily, setRangeDaily] = useState([]);
   const [rangeCredits, setRangeCredits] = useState([]);
-  // Fully expanded by default (matches EodPaymentSummaryBar's own MAX_HEIGHT) so every row of
-  // Cash & Collection is visible the moment EOD opens, with nothing to drag first.
-  const [summaryBarHeight, setSummaryBarHeight] = useState(420);
+  // Compact by default on a browser that has never opened this page before - a shift-close
+  // operator wants a glance at the totals, not the PC grid above covered up the moment EOD
+  // opens. Remembered per-browser after that: dragging the bar persists across reloads and
+  // future visits instead of snapping back to whatever the default was every single time.
+  const [summaryBarHeight, setSummaryBarHeight] = useState(() => {
+    try {
+      const stored = localStorage.getItem('eodSummaryBar.height');
+      return stored ? Number(stored) : 180;
+    } catch {
+      return 180;
+    }
+  });
+
+  useEffect(() => {
+    try { localStorage.setItem('eodSummaryBar.height', String(summaryBarHeight)); } catch { /* ignore */ }
+  }, [summaryBarHeight]);
   const [report, setReport] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);

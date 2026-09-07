@@ -125,6 +125,16 @@ public class ReservationsController : ControllerBase
         return Ok(ApiResponse<ReservationDto>.Ok(result));
     }
 
+    /// <summary>A plain "the customer is here" reminder flag - see ReservationService.
+    /// SetArrivedAsync. Never routed to a branch even when called from Head Office: nothing a
+    /// branch needs to carry out follows from it.</summary>
+    [HttpPut("{id}/arrived")]
+    public async Task<IActionResult> SetArrived(Guid id, [FromBody] SetArrivedDto dto, CancellationToken ct)
+    {
+        var result = await _reservationService.SetArrivedAsync(GetBranchId(), id, dto.Arrived);
+        return Ok(ApiResponse<ReservationDto>.Ok(result));
+    }
+
     [HttpPost("{id}/start")]
     public async Task<IActionResult> StartReservedSession(Guid id, CancellationToken ct)
     {

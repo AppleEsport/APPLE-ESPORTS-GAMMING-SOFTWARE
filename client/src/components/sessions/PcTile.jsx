@@ -25,7 +25,6 @@ import { useToast } from '../ui/Toast';
 const STATUS_STYLES = {
   Idle:            { icon: 'text-pc-idle',        dot: 'bg-pc-idle',        border: 'border-pc-idle/50',        bg: 'bg-pc-idle/10',        label: 'FREE' },
   Active:          { icon: 'text-pc-active',      dot: 'bg-pc-active',      border: 'border-pc-active/60',      bg: 'bg-pc-active/10',      label: 'OCCUPIED' },
-  Reserved:        { icon: 'text-pc-reserved',    dot: 'bg-pc-reserved',    border: 'border-pc-reserved/60',    bg: 'bg-pc-reserved/25',    label: 'RESERVED' },
   AwaitingBilling: { icon: 'text-pc-awaiting',    dot: 'bg-pc-awaiting',    border: 'border-pc-awaiting/60',    bg: 'bg-pc-awaiting/10',    label: 'BILLING' },
   UnderMaintenance:{ icon: 'text-pc-maintenance', dot: 'bg-pc-maintenance', border: 'border-pc-maintenance/60', bg: 'bg-pc-maintenance/10', label: 'MAINT' },
   Expired:         { icon: 'text-neon-orange',    dot: 'bg-neon-orange',    border: 'border-neon-orange/60',    bg: 'bg-neon-orange/10',    label: 'EXPIRED' },
@@ -111,8 +110,6 @@ const PcTile = memo(({ pc, walkinReq, isSelected, onSelect, onQuickStart, onRefr
   // monitor, for a seat that has neither a screen nor a screen-lock agent.
   const isConsole = pc.zone === 'Console';
 
-  const hasReservation = pc.nextReservationTime && new Date(pc.nextReservationTime) > new Date();
-
   // pc.poweredOff means PcStatusHub's shutdown command was sent and the PC has not reconnected
   // since (see backend Pc.PoweredOff). On its own that's ambiguous: a shut-down PC with a
   // session still open on it (Active/AwaitingBilling) is still billing the customer and needs
@@ -128,15 +125,21 @@ const PcTile = memo(({ pc, walkinReq, isSelected, onSelect, onQuickStart, onRefr
   const isShutDownWhileBilling = pc.poweredOff && hasOpenSession && !neverClaimed;
   const isShutDownIdle = pc.poweredOff && !hasOpenSession && !neverClaimed;
 
+  // A reservation no longer gets its own tile appearance or gating - a PC is Idle, Occupied or
+  // Under Maintenance, full stop. The backend still tracks a Reserved state internally (see
+  // ReservationService), but on this screen it reads and behaves exactly like Idle: free to
+  // double-click into a normal session the same as any walk-in, reservation or not.
+  const displayState = pc.state === 'Reserved' ? 'Idle' : pc.state;
+
   const style = walkinReq
     ? PENDING_STYLE
     : isShutDownWhileBilling
       ? SHUTDOWN_BILLING_STYLE
       : isShutDownIdle
         ? DEFAULT_STYLE
-        : (hasReservation ? STATUS_STYLES.Reserved : (STATUS_STYLES[pc.state] || DEFAULT_STYLE));
-  const isIdle = pc.state === 'Idle' && !walkinReq && !hasReservation;
-  const isActive = pc.state === 'Active';
+        : (STATUS_STYLES[displayState] || DEFAULT_STYLE);
+  const isIdle = displayState === 'Idle' && !walkinReq;
+  const isActive = displayState === 'Active';
   // activeSessionId is only ever set when the session that lives behind it was actually
   // found - which fails silently at Head Office, where a branch's active sessions are never
   // synced (only their bills, once paid). Without this check, "no end time" was read as "this
@@ -222,7 +225,7 @@ const PcTile = memo(({ pc, walkinReq, isSelected, onSelect, onQuickStart, onRefr
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      title={walkinReq ? `${pc.name}: Walk-in pending` : hasReservation ? `${pc.name}: RESERVED at ${new Date(pc.nextReservationTime).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}` : isPayAsYouGo ? `${pc.name}: ${style.label} (Pay-As-You-Go, ${timerLabel} elapsed)` : hasPlanTime ? `${pc.name}: ${style.label} (${timerLabel} left)` : `${pc.name}: ${style.label}`}
+      title={walkinReq ? `${pc.name}: Walk-in pending` : isPayAsYouGo ? `${pc.name}: ${style.label} (Pay-As-You-Go, ${timerLabel} elapsed)` : hasPlanTime ? `${pc.name}: ${style.label} (${timerLabel} left)` : `${pc.name}: ${style.label}`}
       className={`group relative flex flex-col items-center justify-center ${sizeStyle.gap} rounded-xl ${sizeStyle.py} px-2 select-none transition-all border ${style.border} ${style.bg ?? ''}
         ${isSelected ? 'brightness-150 scale-105' : 'hover:brightness-125 hover:scale-105'}
         ${isDragOver ? 'bg-pc-active/5' : ''}

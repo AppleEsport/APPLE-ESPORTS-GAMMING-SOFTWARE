@@ -48,7 +48,6 @@ function fmtTime(isoString) {
 const STATUS_STYLES = {
   Idle:            { text: 'text-pc-idle',     border: 'border-pc-idle/40',     label: 'FREE' },
   Active:          { text: 'text-pc-active',   border: 'border-pc-active/50',   label: 'OCCUPIED' },
-  Reserved:        { text: 'text-pc-reserved', border: 'border-pc-reserved/50', label: 'RESERVED' },
   // pc-awaiting, matching the tile. Sharing neon-orange with "time finished" made the one state
   // that owes money look like the one that does not.
   AwaitingBilling: { text: 'text-pc-awaiting', border: 'border-pc-awaiting/50', label: 'BILLING' },
@@ -72,7 +71,7 @@ const SHUTDOWN_BILLING_STYLE = { text: 'text-neon-orange', border: 'border-neon-
 // otherwise renders the form/info/actions appropriate to that PC's state ──
 export default function PcDetailPanel({
   pc, walkinReq, onClose, onRefresh,
-  onStartReservedSession, onOverrideReservation, onApproveWalkin, onDeclineWalkin,
+  onApproveWalkin, onDeclineWalkin,
   onFlagMaintenance, onCreditClick, onShutdown,
 }) {
   const { user, canApplyDiscount } = useAuth();
@@ -154,18 +153,23 @@ export default function PcDetailPanel({
     );
   }
 
-  const hasUpcomingReservation = pc.nextReservationTime && new Date(pc.nextReservationTime) > new Date();
+  // A reservation no longer gets its own section, badge or Start Session/Override flow here -
+  // a PC is Idle, Occupied or Under Maintenance, full stop. The backend still tracks a Reserved
+  // state internally (see ReservationService), but on this screen it reads and behaves exactly
+  // like Idle: the normal Start Session form, the normal Flag for Maintenance/Shut Down actions,
+  // nothing reservation-specific. See the matching fix in PcTile.jsx.
+  const displayState = pc.state === 'Reserved' ? 'Idle' : pc.state;
 
   // pc.poweredOff means PcStatusHub's shutdown command was sent and the PC has not reconnected
   // since (see backend Pc.PoweredOff). Combined with state here purely to pick the header
-  // badge's colour/label - none of the body sections below key off this, only off pc.state, so
-  // a shut-down PC with a session still open on it keeps showing that session's normal details.
-  const hasOpenSession = pc.state === 'Active' || pc.state === 'AwaitingBilling';
+  // badge's colour/label - none of the body sections below key off this, only off displayState,
+  // so a shut-down PC with a session still open on it keeps showing that session's normal details.
+  const hasOpenSession = displayState === 'Active' || displayState === 'AwaitingBilling';
 
   // A PC still AwaitingSetup has never been claimed by a real machine, so poweredOff being true
   // on one is stale leftover state from before the backend guarded shutdown commands against
   // this exact case - never a real signal to act on. See the matching exclusion in PcTile.jsx.
-  const neverClaimed = pc.state === 'AwaitingSetup';
+  const neverClaimed = displayState === 'AwaitingSetup';
   const isShutDownWhileBilling = pc.poweredOff && hasOpenSession && !neverClaimed;
   const isShutDownIdle = pc.poweredOff && !hasOpenSession && !neverClaimed;
 
@@ -175,13 +179,12 @@ export default function PcDetailPanel({
       ? SHUTDOWN_BILLING_STYLE
       : isShutDownIdle
         ? DEFAULT_STYLE
-        : (hasUpcomingReservation ? STATUS_STYLES.Reserved : (STATUS_STYLES[pc.state] || DEFAULT_STYLE));
-  const isActive = pc.state === 'Active';
-  const isAwaiting = pc.state === 'AwaitingBilling';
-  const isReserved = pc.state === 'Reserved' || hasUpcomingReservation;
-  const isExpired = pc.state === 'Expired';
-  const isMaintenance = pc.state === 'UnderMaintenance';
-  const canStart = !walkinReq && pc.state === 'Idle' && !hasUpcomingReservation;
+        : (STATUS_STYLES[displayState] || DEFAULT_STYLE);
+  const isActive = displayState === 'Active';
+  const isAwaiting = displayState === 'AwaitingBilling';
+  const isExpired = displayState === 'Expired';
+  const isMaintenance = displayState === 'UnderMaintenance';
+  const canStart = !walkinReq && displayState === 'Idle';
 
   // What this session is billed on - same rule as PcTile.jsx's isPayAsYouGo/hasPlanTime: an
   // open session with no end time is billed as time elapses (Pay-As-You-Go), one with an end
@@ -424,41 +427,6 @@ export default function PcDetailPanel({
           </>
         )}
 
-        {/* ── RESERVED ── */}
-        {!walkinReq && isReserved && pc.nextReservationTime && (
-          <>
-            <div className="flex items-center gap-1.5 text-pc-reserved text-xs">
-              <User className="w-3.5 h-3.5" />
-              <span>{pc.customerName || 'Reserved slot'}</span>
-            </div>
-            <div className="bg-pc-reserved/10 border border-pc-reserved/30 rounded p-2.5 text-[10px]">
-              <div className="flex items-center gap-1 text-pc-reserved font-mono font-bold mb-1">
-                <Clock className="w-3 h-3" />
-                <span>{new Date(pc.nextReservationTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-              </div>
-              <div className="text-text-3 text-[9px]">
-                Reservation starts at this time
-              </div>
-            </div>
-            {pc.state === 'Reserved' && (
-              <div className="grid grid-cols-2 gap-1.5">
-                <button
-                  onClick={() => onStartReservedSession?.(pc.nextReservationId)}
-                  className="py-1.5 rounded border border-pc-active/40 bg-pc-active/10 text-pc-active text-[10px] font-bold uppercase tracking-wider hover:bg-pc-active/20 transition-colors"
-                >
-                  Start Session
-                </button>
-                <button
-                  onClick={() => onOverrideReservation?.(pc.nextReservationId, pc)}
-                  className="py-1.5 rounded border border-neon-orange/40 bg-neon-orange/10 text-neon-orange text-[10px] font-bold uppercase tracking-wider hover:bg-neon-orange/20 transition-colors"
-                >
-                  Override
-                </button>
-              </div>
-            )}
-          </>
-        )}
-
         {/* ── EXPIRED ── */}
         {!walkinReq && isExpired && (
           <div className="flex items-center gap-1.5 text-text-3 text-xs">
@@ -508,7 +476,7 @@ export default function PcDetailPanel({
         )}
 
         {/* ── OFFLINE fallback (non-Idle, non-mapped states) ── */}
-        {!walkinReq && !canStart && !isActive && !isAwaiting && !isReserved && !isExpired && !isMaintenance && (
+        {!walkinReq && !canStart && !isActive && !isAwaiting && !isExpired && !isMaintenance && (
           <button
             onClick={() => onFlagMaintenance?.(pc, false)}
             className="w-full py-1.5 rounded border border-pc-active/40 bg-pc-active/10 text-pc-active text-[11px] font-bold uppercase tracking-widest hover:bg-pc-active/20 transition-colors flex items-center justify-center gap-1"

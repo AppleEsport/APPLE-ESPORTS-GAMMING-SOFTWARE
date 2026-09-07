@@ -22,6 +22,8 @@ public class OnlineTransactionDto
 public class WalletDeskSummaryDto
 {
     public Guid ShiftId { get; set; }
+    public DateOnly FromDate { get; set; }
+    public DateOnly ToDate { get; set; }
     public decimal TotalWalletTopUps { get; set; }
     public decimal TotalWalletDeductions { get; set; }
     public List<WalletTransactionSummaryDto> Transactions { get; set; } = new();

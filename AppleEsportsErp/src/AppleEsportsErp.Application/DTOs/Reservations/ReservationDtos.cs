@@ -16,6 +16,7 @@ public class ReservationDto
     public decimal AdvanceDeposit { get; set; }
     public int GracePeriodMin { get; set; }
     public string? PcName { get; set; }
+    public bool Arrived { get; set; }
 }
 
 public class CreateReservationDto
@@ -55,4 +56,9 @@ public class OverrideReservationDto
 {
     [Required]
     public string Reason { get; set; } = null!;
+}
+
+public class SetArrivedDto
+{
+    public bool Arrived { get; set; }
 }
