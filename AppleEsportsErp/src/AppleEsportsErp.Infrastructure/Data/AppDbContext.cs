@@ -17,6 +17,7 @@ public class AppDbContext : DbContext
     public DbSet<User> Users => Set<User>();
     public DbSet<Operator> Operators => Set<Operator>();
     public DbSet<PricingProfile> PricingProfiles => Set<PricingProfile>();
+    public DbSet<PricingPackage> PricingPackages => Set<PricingPackage>();
     public DbSet<Pc> Pcs => Set<Pc>();
     public DbSet<Shift> Shifts => Set<Shift>();
     public DbSet<Session> Sessions => Set<Session>();
