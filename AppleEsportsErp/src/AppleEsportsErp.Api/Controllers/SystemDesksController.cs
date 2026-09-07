@@ -43,11 +43,11 @@ public class SystemDesksController : ControllerBase
 
     [HttpGet("wallet/active")]
     [Authorize(Roles = Roles.Operator + "," + Roles.Admin + "," + Roles.SuperAdmin)]
-    public async Task<IActionResult> GetActiveWalletDesk()
+    public async Task<IActionResult> GetActiveWalletDesk([FromQuery] DateOnly? fromDate = null, [FromQuery] DateOnly? toDate = null)
     {
         try
         {
-            var result = await _systemDesksService.GetActiveWalletDeskAsync(GetBranchId(), await this.GetShiftIdAsync());
+            var result = await _systemDesksService.GetActiveWalletDeskAsync(GetBranchId(), await this.GetShiftIdAsync(), fromDate, toDate);
             return Ok(new { success = true, data = result });
         }
         catch (Exception ex)

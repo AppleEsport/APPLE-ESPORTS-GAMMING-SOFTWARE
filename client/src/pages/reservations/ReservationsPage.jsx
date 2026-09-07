@@ -11,9 +11,9 @@ import {
   getActiveReservations,
   createReservation,
   cancelReservation,
-  startReservedSession
+  setReservationArrived
 } from '../../api/reservations.api';
-import { Calendar, User, Clock, IndianRupee, FileText, Ban, Play, CheckCircle, UserCheck, Search } from 'lucide-react';
+import { Calendar, User, Clock, IndianRupee, FileText, Ban, CheckCircle, UserCheck, Search } from 'lucide-react';
 
 export default function ReservationsPage() {
   const { isSuperAdmin, user } = useAuth();
@@ -315,15 +315,17 @@ export default function ReservationsPage() {
     }
   };
 
-  // ── Actions: Start Session ──
-  const handleStartSession = async (id) => {
+  // ── Actions: Arrived toggle — a plain reminder, not a gate on anything. Starting a session
+  // for this customer still goes through the ordinary Sessions screen, reservation or not. ──
+  const handleToggleArrived = async (res) => {
+    // Optimistic: this is a low-stakes hand-set flag, not worth a spinner or a failed-request
+    // toast interrupting the counter for something this minor. Reverts silently on error.
+    setReservations(prev => prev.map(r => r.id === res.id ? { ...r, arrived: !res.arrived } : r));
     try {
-      await startReservedSession(id);
-      toast.success('Reserved session started successfully!');
-      fetchReservationsList();
-      fetchPcsAndSessions();
+      await setReservationArrived(res.id, !res.arrived);
     } catch (err) {
-      toast.error(err.response?.data?.error || err.response?.data?.message || 'Failed to start session');
+      setReservations(prev => prev.map(r => r.id === res.id ? { ...r, arrived: res.arrived } : r));
+      toast.error('Failed to update arrival status');
     }
   };
 
@@ -704,16 +706,21 @@ export default function ReservationsPage() {
                         )}
                       </div>
 
-                      {/* Action buttons (only if Pending) */}
-                      {isPendingState && (
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => handleStartSession(res.id)}
-                            title="Start Reserved Session"
-                            className="p-2 border border-pc-active/40 bg-pc-active/10 text-pc-active rounded hover:bg-pc-active/20 transition-colors flex items-center gap-1.5 text-xs font-semibold"
-                          >
-                            <Play className="w-3.5 h-3.5" /> Start
-                          </button>
+                      {/* Arrived reminder toggle + Cancel (only while still Pending) */}
+                      <div className="flex gap-2 shrink-0">
+                        <button
+                          onClick={() => handleToggleArrived(res)}
+                          title={res.arrived ? 'Mark as not arrived' : 'Mark as arrived'}
+                          className={`p-2 border rounded flex items-center gap-1.5 text-xs font-semibold transition-colors ${
+                            res.arrived
+                              ? 'border-pc-active/40 bg-pc-active/10 text-pc-active hover:bg-pc-active/20'
+                              : 'border-border bg-bg-3 text-text-3 hover:text-text-2'
+                          }`}
+                        >
+                          {res.arrived ? <CheckCircle className="w-3.5 h-3.5" /> : <User className="w-3.5 h-3.5" />}
+                          {res.arrived ? 'Arrived' : 'Not Arrived'}
+                        </button>
+                        {isPendingState && (
                           <button
                             onClick={() => handleCancelClick(res)}
                             title="Cancel Reservation"
@@ -721,8 +728,8 @@ export default function ReservationsPage() {
                           >
                             <Ban className="w-3.5 h-3.5" /> Cancel
                           </button>
-                        </div>
-                      )}
+                        )}
+                      </div>
                     </div>
                   );
                 })}

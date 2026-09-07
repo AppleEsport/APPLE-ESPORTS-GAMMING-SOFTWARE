@@ -92,7 +92,8 @@ public class SystemDesksService : ISystemDesksService
         return dto;
     }
 
-    public async Task<WalletDeskSummaryDto> GetActiveWalletDeskAsync(Guid branchId, Guid shiftId)
+    public async Task<WalletDeskSummaryDto> GetActiveWalletDeskAsync(
+        Guid branchId, Guid shiftId, DateOnly? fromDate = null, DateOnly? toDate = null)
     {
         var shift = await _unitOfWork.Repository<Shift>().Query()
             .FirstOrDefaultAsync(s => s.Id == shiftId && s.BranchId == branchId);
@@ -100,9 +101,13 @@ public class SystemDesksService : ISystemDesksService
         if (shift == null)
             throw new Exception("Shift not found.");
 
-
-        // Same trading-day scope as the Online Desk — see the note there.
-        var (dayStart, dayEnd) = IndiaTime.BusinessDayRangeFor(DateTimeOffset.UtcNow);
+        // Same trading-day scope as the Online Desk — see the note there — but overridable: an
+        // operator looking back at a previous day, or a range, needs the same figures for that
+        // window instead of always today's. No dates given still means today, unchanged.
+        var resolvedFrom = fromDate ?? IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow);
+        var resolvedTo = toDate ?? fromDate ?? IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow);
+        var (dayStart, _) = IndiaTime.BusinessDayRange(resolvedFrom);
+        var (_, dayEnd) = IndiaTime.BusinessDayRange(resolvedTo);
 
         var walletTxs = await _unitOfWork.Repository<WalletTransaction>().Query()
             .Where(w => w.BranchId == branchId && w.CreatedAt >= dayStart && w.CreatedAt < dayEnd)
@@ -120,7 +125,9 @@ public class SystemDesksService : ISystemDesksService
 
         var dto = new WalletDeskSummaryDto
         {
-            ShiftId = shiftId
+            ShiftId = shiftId,
+            FromDate = resolvedFrom,
+            ToDate = resolvedTo,
         };
 
         foreach (var tx in walletTxs)

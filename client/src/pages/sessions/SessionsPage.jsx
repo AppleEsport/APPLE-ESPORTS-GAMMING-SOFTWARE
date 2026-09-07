@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { MonitorPlay, MonitorOff, IndianRupee, Clock, ShieldAlert, Banknote, Minus, Plus, Power } from 'lucide-react';
+import { MonitorPlay, MonitorOff, IndianRupee, Clock, Banknote, Minus, Plus, Power } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useBranch } from '../../contexts/BranchContext';
 import { useSocket } from '../../contexts/SocketContext';
@@ -12,7 +12,6 @@ import QuickStartModal from '../../components/sessions/QuickStartModal';
 import SessionActivityLog from '../../components/sessions/SessionActivityLog';
 import { MaintenanceReasonModal } from '../../components/modals/MaintenanceReasonModal';
 import { useToast } from '../../components/ui/Toast';
-import { startReservedSession, overrideReservation } from '../../api/reservations.api';
 import { getRangeReport } from '../../api/food.api';
 import { getActiveBills, getBill, processPayment } from '../../api/billing.api';
 import { markMaintenanceAsync, resolveMaintenance } from '../../api/maintenanceLogs.api';
@@ -33,11 +32,6 @@ export default function SessionsPage() {
   const [selectedPcId, setSelectedPcId] = useState(null); // PC shown in the detail panel
   const [quickStartPc, setQuickStartPc] = useState(null); // PC being quick-started via double-click
   const [tileSizeIndex, setTileSizeIndex] = useState(1); // index into TILE_SIZES — controls PC tile size
-
-  // Reservation Override modal states
-  const [overrideData, setOverrideData] = useState(null); // { id, pcName }
-  const [overrideReason, setOverrideReason] = useState('');
-  const [overrideLoading, setOverrideLoading] = useState(false);
 
   // Maintenance modal states
   const [maintenanceModalOpen, setMaintenanceModalOpen] = useState(false);
@@ -91,22 +85,6 @@ export default function SessionsPage() {
     }
   }, [targetBranchId]);
 
-  const handleStartReservedSession = async (reservationId) => {
-    try {
-      await startReservedSession(reservationId);
-      toast.success('Reserved session started successfully!');
-      logActivity('Reserved session started.', 'success');
-      fetchPcs();
-    } catch (err) {
-      toast.error(err.response?.data?.error || err.response?.data?.message || 'Failed to start reserved session');
-    }
-  };
-
-  const handleOverrideClick = (reservationId, pc) => {
-    setOverrideData({ id: reservationId, pcName: pc.name });
-    setOverrideReason('');
-  };
-
   const handleFlagMaintenance = async (pc, enable = true) => {
     if (enable) {
       setMaintenancePc(pc);
@@ -142,27 +120,6 @@ export default function SessionsPage() {
       toast.error(err?.error || err?.message || 'Failed to update maintenance status');
     } finally {
       setMaintenanceLoading(false);
-    }
-  };
-
-  const handleOverrideSubmit = async (e) => {
-    e.preventDefault();
-    if (!overrideReason.trim()) {
-      toast.error('Override reason is required');
-      return;
-    }
-    setOverrideLoading(true);
-    try {
-      await overrideReservation(overrideData.id, { reason: overrideReason.trim() });
-      toast.success('Reservation overridden successfully');
-      logActivity(`${overrideData.pcName}: Reservation overridden.`, 'warn');
-      setOverrideData(null);
-      setOverrideReason('');
-      fetchPcs();
-    } catch (err) {
-      toast.error(err.response?.data?.error || err.response?.data?.message || 'Failed to override reservation');
-    } finally {
-      setOverrideLoading(false);
     }
   };
 
@@ -504,7 +461,6 @@ export default function SessionsPage() {
         <div className="flex flex-wrap items-center gap-3 text-[10px] font-bold uppercase tracking-wider">
           <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-pc-idle" /> Idle</div>
           <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-pc-active" /> Active</div>
-          <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-pc-reserved" /> Reserved</div>
           <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-pc-awaiting" /> Awaiting Bill</div>
           <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-pc-maintenance" /> Maintenance</div>
           <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-pc-offline" /> Shut Down</div>
@@ -542,8 +498,6 @@ export default function SessionsPage() {
             walkinReq={selectedWalkinReq}
             onClose={() => setSelectedPcId(null)}
             onRefresh={fetchPcs}
-            onStartReservedSession={handleStartReservedSession}
-            onOverrideReservation={handleOverrideClick}
             onApproveWalkin={handleApproveWalkin}
             onDeclineWalkin={handleDeclineWalkin}
             onFlagMaintenance={handleFlagMaintenance}
@@ -578,61 +532,6 @@ export default function SessionsPage() {
         }}
       />
 
-      {/* ── Override Reservation Modal ── */}
-      {overrideData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-[fadeIn_0.15s_ease-out]">
-          <div className="w-full max-w-sm bg-bg-2 border border-border rounded-xl shadow-2xl overflow-hidden">
-            <div className="px-5 py-4 border-b border-border bg-bg-3 flex items-center justify-between">
-              <div>
-                <h2 className="font-heading font-bold text-text uppercase tracking-wider text-sm flex items-center gap-2">
-                  <ShieldAlert className="w-4 h-4 text-neon-orange animate-bounce" />
-                  Override Reservation — {overrideData.pcName}
-                </h2>
-                <p className="text-text-3 text-[10px] font-mono mt-0.5">
-                  An audit log entry will document this override.
-                </p>
-              </div>
-              <button onClick={() => setOverrideData(null)} className="text-text-3 hover:text-text text-xl">&times;</button>
-            </div>
-            <form onSubmit={handleOverrideSubmit} className="p-5 space-y-4">
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-mono font-semibold text-text-2 uppercase tracking-wider block">
-                  Mandatory Reason for Override *
-                </label>
-                <textarea
-                  value={overrideReason}
-                  onChange={(e) => setOverrideReason(e.target.value)}
-                  placeholder="Provide detailed explanation..."
-                  rows={3}
-                  className="w-full bg-bg-3 border border-border rounded px-3 py-2 text-xs text-text placeholder-text-3 focus:border-neon-orange focus:outline-none transition-colors resize-none"
-                  required
-                  autoFocus
-                />
-              </div>
-              <div className="flex justify-end gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => setOverrideData(null)}
-                  className="px-4 py-2 border border-border bg-transparent text-text-2 rounded text-xs font-semibold hover:bg-bg-3 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={overrideLoading || !overrideReason.trim()}
-                  className="px-4 py-2 bg-neon-orange/10 border border-neon-orange/50 text-neon-orange rounded text-xs font-semibold hover:bg-neon-orange/20 transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
-                >
-                  {overrideLoading ? (
-                    <span className="w-3.5 h-3.5 border border-current border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    'Override PC'
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
       {/* ── Maintenance Reason Modal ── */}
       <MaintenanceReasonModal

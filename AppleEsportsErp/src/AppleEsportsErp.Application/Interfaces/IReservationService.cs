@@ -11,7 +11,10 @@ public interface IReservationService
     Task<ReservationDto> CancelReservationAsync(Guid branchId, Guid operatorId, Guid id, CancelReservationDto dto);
     Task<ReservationDto> StartReservedSessionAsync(Guid branchId, Guid operatorId, Guid id);
     Task<ReservationDto> OverrideReservationAsync(Guid branchId, Guid operatorId, Guid id, OverrideReservationDto dto);
-    
+
+    /// <summary>A plain "the customer is here" reminder flag - see ReservationService.SetArrivedAsync.</summary>
+    Task<ReservationDto> SetArrivedAsync(Guid branchId, Guid id, bool arrived);
+
     // Auto-expire reservations (can be called periodically or passively on fetch)
     Task ExpirePastReservationsAsync(Guid branchId);
 }

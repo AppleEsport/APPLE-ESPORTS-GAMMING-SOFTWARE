@@ -246,6 +246,31 @@ public class ReservationService : IReservationService
         return MapToDto(reservation);
     }
 
+    /// <summary>
+    /// A plain reminder flag, hand-set at the counter - not routed through Head Office when set
+    /// there, unlike every other action here. There is nothing for a branch to carry out: no PC
+    /// to free, no session to start, nothing with a money or audit consequence. Reservation is
+    /// already a synced entity (SyncCapture.Watched), so this still reaches Head Office's own
+    /// copy the ordinary way when set at a branch - it just never needs to travel the other
+    /// direction, because nothing there depends on it.
+    /// </summary>
+    public async Task<ReservationDto> SetArrivedAsync(Guid branchId, Guid id, bool arrived)
+    {
+        var reservation = await _unitOfWork.Repository<Reservation>().Query()
+            .Include(r => r.Pc)
+            .FirstOrDefaultAsync(r => r.Id == id)
+            ?? throw new NotFoundException("Reservation not found.");
+
+        if (reservation.BranchId != branchId)
+            throw new BranchIsolationException("Reservation belongs to another branch.");
+
+        reservation.Arrived = arrived;
+        _unitOfWork.Repository<Reservation>().Update(reservation);
+        await _unitOfWork.CommitTransactionAsync();
+
+        return MapToDto(reservation);
+    }
+
     public async Task<ReservationDto> StartReservedSessionAsync(Guid branchId, Guid operatorId, Guid id)
     {
         RefuseIfHeadOffice("started");
@@ -486,7 +511,8 @@ public class ReservationService : IReservationService
             Notes = r.Notes,
             AdvanceDeposit = r.AdvanceDeposit,
             GracePeriodMin = r.GracePeriodMin,
-            PcName = r.Pc?.PcNumber
+            PcName = r.Pc?.PcNumber,
+            Arrived = r.Arrived
         };
     }
 }
