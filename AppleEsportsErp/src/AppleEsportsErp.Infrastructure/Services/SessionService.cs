@@ -438,11 +438,28 @@ public class SessionService : ISessionService
             // guess) is the honest fallback for legacy sessions that predate that enforcement.
             decimal ratePerHour = session.Pc?.PricingProfile?.BaseHourlyRate ?? SessionPricingCalculator.DefaultRatePerHour;
 
-            // 2. Apply the branch's buffer/grace period & bill for exact elapsed time.
-            // Applies to every session type (fixed package or open/PAYG) — a customer who
-            // ends early is only charged for time actually used, per the branch's live rate.
+            // 2. Apply the branch's buffer/grace period & bill for exact elapsed time — unless
+            // the customer completed (or overran) a plan they were sold a fixed price for.
+            // session.GamingAmount currently still holds whatever was set at Start/Extend (the
+            // plan's price, e.g. a "4 hrs - Rs 180" package's Rs 180, or the old linear
+            // multiples' rate*hours — the two are indistinguishable here on purpose, since for
+            // a linear multiple this produces the exact same number as recomputing from elapsed
+            // time). Ending early still bills the honest elapsed-time rate: a discount package
+            // is a prepaid block, not a discount on however little of it got used.
             int bufferMinutes = session.Pc?.PricingProfile?.BufferMinutes ?? SessionPricingCalculator.DefaultBufferMinutes;
-            session.GamingAmount = SessionPricingCalculator.CalculateGamingAmount(ratePerHour, bufferMinutes, session.ActualDurationMin!.Value);
+            decimal plannedAmount = session.GamingAmount;
+            if (session.PlannedDurationMin.HasValue && session.ActualDurationMin!.Value >= session.PlannedDurationMin.Value)
+            {
+                int overageMinutes = session.ActualDurationMin.Value - session.PlannedDurationMin.Value;
+                decimal overageAmount = overageMinutes > 0
+                    ? SessionPricingCalculator.CalculateGamingAmount(ratePerHour, 0, overageMinutes)
+                    : 0m;
+                session.GamingAmount = plannedAmount + overageAmount;
+            }
+            else
+            {
+                session.GamingAmount = SessionPricingCalculator.CalculateGamingAmount(ratePerHour, bufferMinutes, session.ActualDurationMin!.Value);
+            }
 
             if (session.ActualDurationMin <= bufferMinutes)
             {
