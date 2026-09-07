@@ -243,27 +243,53 @@ public class PublicController : ControllerBase
         Domain.Entities.Pc? pc = null;
         if (Guid.TryParse(pcId, out var pcGuid))
         {
-            pc = await _db.Pcs.Include(p => p.Branch).Include(p => p.PricingProfile).FirstOrDefaultAsync(p => p.Id == pcGuid);
+            pc = await _db.Pcs.Include(p => p.Branch).Include(p => p.PricingProfile).ThenInclude(pp => pp!.Packages).FirstOrDefaultAsync(p => p.Id == pcGuid);
         }
         else
         {
-            pc = await _db.Pcs.Include(p => p.Branch).Include(p => p.PricingProfile).FirstOrDefaultAsync(p => p.PcNumber == pcId || p.PcName == pcId);
+            pc = await _db.Pcs.Include(p => p.Branch).Include(p => p.PricingProfile).ThenInclude(pp => pp!.Packages).FirstOrDefaultAsync(p => p.PcNumber == pcId || p.PcName == pcId);
         }
 
         if (pc == null)
             return Ok(new { success = false, error = "PC not found" });
 
         decimal ratePerHour = pc.PricingProfile?.BaseHourlyRate ?? 0m;
-
-        var plans = new List<object>();
         string planName = string.IsNullOrEmpty(pc.MonitorHz) ? "Standard" : $"{pc.MonitorHz}Hz Tier";
 
-        plans.Add(new { id = Guid.NewGuid(), name = $"1 Hour ({planName})", duration = 60, price = ratePerHour, isPostpaid = false });
-        plans.Add(new { id = Guid.NewGuid(), name = $"2 Hours ({planName})", duration = 120, price = ratePerHour * 2, isPostpaid = false });
-        plans.Add(new { id = Guid.NewGuid(), name = $"3 Hours ({planName})", duration = 180, price = ratePerHour * 3, isPostpaid = false });
-        plans.Add(new { id = Guid.NewGuid(), name = $"Postpaid ({planName})", duration = 0, price = 0m, isPostpaid = true });
+        var plans = BuildPlansForProfile(pc.PricingProfile, planName);
 
         return Ok(ApiResponse<object>.Ok(plans));
+    }
+
+    /// <summary>Custom packages replace the auto-generated 1/2/3-hour multiples entirely when a
+    /// profile has any active ones configured; otherwise falls back to the multiples exactly as
+    /// before, so every branch without custom packages is unaffected.</summary>
+    private static List<object> BuildPlansForProfile(Domain.Entities.PricingProfile? profile, string planName, string tier = "", string? tierLabel = null)
+    {
+        decimal ratePerHour = profile?.BaseHourlyRate ?? 0m;
+        var activePackages = profile?.Packages?
+            .Where(pkg => pkg.IsActive)
+            .OrderBy(pkg => pkg.SortOrder)
+            .ThenBy(pkg => pkg.DurationMinutes)
+            .ToList() ?? new List<Domain.Entities.PricingPackage>();
+
+        var plans = new List<object>();
+
+        if (activePackages.Any())
+        {
+            foreach (var pkg in activePackages)
+                plans.Add(new { id = pkg.Id, name = $"{pkg.Name} ({planName})", duration = pkg.DurationMinutes, price = pkg.Price, tier, tierLabel = tierLabel ?? planName, isPostpaid = false });
+        }
+        else
+        {
+            plans.Add(new { id = Guid.NewGuid(), name = $"1 Hour ({planName})", duration = 60, price = ratePerHour, tier, tierLabel = tierLabel ?? planName, isPostpaid = false });
+            plans.Add(new { id = Guid.NewGuid(), name = $"2 Hours ({planName})", duration = 120, price = ratePerHour * 2, tier, tierLabel = tierLabel ?? planName, isPostpaid = false });
+            plans.Add(new { id = Guid.NewGuid(), name = $"3 Hours ({planName})", duration = 180, price = ratePerHour * 3, tier, tierLabel = tierLabel ?? planName, isPostpaid = false });
+        }
+
+        plans.Add(new { id = Guid.NewGuid(), name = $"Postpaid ({planName})", duration = 0, price = 0m, tier, tierLabel = tierLabel ?? planName, isPostpaid = true });
+
+        return plans;
     }
 
     [HttpGet("branches/{branchId}/plans")]
@@ -272,6 +298,7 @@ public class PublicController : ControllerBase
         var branch = await _db.Branches
             .Include(b => b.Pcs)
                 .ThenInclude(p => p.PricingProfile)
+                    .ThenInclude(pp => pp!.Packages)
             .FirstOrDefaultAsync(b => b.Id == branchId);
 
         if (branch == null)
@@ -293,14 +320,10 @@ public class PublicController : ControllerBase
         foreach (var tier in uniqueTiers)
         {
             var pcWithTier = branch.Pcs.FirstOrDefault(p => (string.IsNullOrWhiteSpace(p.MonitorHz) ? "Standard" : p.MonitorHz) == tier);
-            decimal ratePerHour = pcWithTier?.PricingProfile?.BaseHourlyRate ?? 0m;
             string planNameTier = tier == "Standard" ? "Standard Tier" : $"{tier}Hz Tier";
             string monitorHzVal = tier == "Standard" ? "" : tier;
 
-            plans.Add(new { id = Guid.NewGuid(), name = $"1 Hour ({planNameTier})", duration = 60, price = ratePerHour, tier = monitorHzVal, tierLabel = planNameTier, isPostpaid = false });
-            plans.Add(new { id = Guid.NewGuid(), name = $"2 Hours ({planNameTier})", duration = 120, price = ratePerHour * 2, tier = monitorHzVal, tierLabel = planNameTier, isPostpaid = false });
-            plans.Add(new { id = Guid.NewGuid(), name = $"3 Hours ({planNameTier})", duration = 180, price = ratePerHour * 3, tier = monitorHzVal, tierLabel = planNameTier, isPostpaid = false });
-            plans.Add(new { id = Guid.NewGuid(), name = $"Postpaid ({planNameTier})", duration = 0, price = 0m, tier = monitorHzVal, tierLabel = planNameTier, isPostpaid = true });
+            plans.AddRange(BuildPlansForProfile(pcWithTier?.PricingProfile, planNameTier, monitorHzVal, planNameTier));
         }
 
         return Ok(ApiResponse<object>.Ok(plans));

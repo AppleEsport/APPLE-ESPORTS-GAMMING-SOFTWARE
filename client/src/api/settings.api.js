@@ -170,6 +170,21 @@ export const deletePricingProfile = async (id) => {
   return response.data;
 };
 
+export const createPricingPackage = async (data) => {
+  const response = await api.post('/pricing-profiles/packages', data);
+  return response.data;
+};
+
+export const updatePricingPackage = async (id, data) => {
+  const response = await api.put(`/pricing-profiles/packages/${id}`, data);
+  return response.data;
+};
+
+export const deletePricingPackage = async (id) => {
+  const response = await api.delete(`/pricing-profiles/packages/${id}`);
+  return response.data;
+};
+
 export const forceLogoutOperator = async (id) => {
   const response = await api.post(`/auth/force-logout/${id}`);
   return response.data;
