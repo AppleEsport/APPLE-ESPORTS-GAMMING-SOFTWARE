@@ -36,4 +36,10 @@ public class WalletTransactionSummaryDto
     public string Description { get; set; } = string.Empty;
     public decimal Amount { get; set; }
     public string Action { get; set; } = string.Empty; // TopUp or Deduction
+
+    /// <summary>Set only for a deduction that paid a gaming session's bill - which PC it was
+    /// and how long it ran, so a deduction isn't just a bare number. Null for a top-up, or a
+    /// deduction that isn't tied to a session (e.g. a food-only bill).</summary>
+    public string? PcName { get; set; }
+    public int? DurationMinutes { get; set; }
 }

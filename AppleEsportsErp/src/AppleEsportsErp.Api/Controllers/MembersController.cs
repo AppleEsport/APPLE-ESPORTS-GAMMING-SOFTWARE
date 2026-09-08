@@ -67,6 +67,13 @@ public class MembersController : ControllerBase
         return Ok(ApiResponse<MemberDto>.Ok(result));
     }
 
+    [HttpGet("{id:guid}/history")]
+    public async Task<IActionResult> GetMemberHistory(Guid id, [FromQuery] DateOnly? fromDate, [FromQuery] DateOnly? toDate)
+    {
+        var result = await _memberService.GetMemberHistoryAsync(id, fromDate, toDate);
+        return Ok(ApiResponse<List<MemberHistoryEntryDto>>.Ok(result));
+    }
+
     [HttpGet("phone/{mobileNumber}")]
     public async Task<IActionResult> GetMemberByMobile(string mobileNumber)
     {

@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Wallet, AlertTriangle, ArrowUpRight, ArrowDownRight, Calendar } from 'lucide-react';
+import { Wallet, AlertTriangle, ArrowUpRight, ArrowDownRight, Calendar, Download } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useBranch } from '../../contexts/BranchContext';
 import api from '../../config/api';
 import PageHeader from '../../components/layout/PageHeader';
 import { format } from 'date-fns';
+import { createReport, addTable, save } from '../../utils/pdfReport';
 
 const todayIso = () => format(new Date(), 'yyyy-MM-dd');
 
@@ -75,6 +76,35 @@ export default function WalletDeskPage() {
     setToDate(todayIso());
   };
 
+  const handleDownloadPdf = () => {
+    if (!data || data.transactions.length === 0) return;
+    const rangeLabel = fromDate === toDate ? fromDate : `${fromDate} to ${toDate}`;
+    const subtitle = `${activeBranch?.name || 'Branch'}  •  ${rangeLabel}`;
+    const { doc } = createReport({ title: 'Member Amount Desk', subtitle });
+    let y = 90;
+
+    y = addTable(doc, y, {
+      title: 'Member Amount Desk', subtitle,
+      heading: `Total Top-Ups: Rs ${data.totalWalletTopUps.toFixed(2)}   |   Total Deductions: Rs ${data.totalWalletDeductions.toFixed(2)}`,
+      head: ['Date & Time', 'Description', 'PC', 'Duration', 'Amount'],
+      body: data.transactions.map(tx => {
+        const isTopUp = tx.action.includes('Recharge');
+        const match = tx.description.match(/^(.*) \((.*)\)$/);
+        const mainText = match ? match[1] : tx.description;
+        const customerName = match ? match[2] : null;
+        return [
+          format(new Date(tx.timestamp), 'MMM d, hh:mm a'),
+          customerName ? `${customerName} - ${mainText}` : mainText,
+          tx.pcName || '-',
+          tx.durationMinutes != null ? `${tx.durationMinutes}m` : '-',
+          `${isTopUp ? '+' : '-'}Rs ${tx.amount.toFixed(2)}`,
+        ];
+      }),
+    });
+
+    save(doc, `member-amount-desk-${fromDate}${fromDate !== toDate ? `_to_${toDate}` : ''}.pdf`);
+  };
+
   if (isSuperAdmin && !activeBranch) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
@@ -133,6 +163,13 @@ export default function WalletDeskPage() {
         >
           Today
         </button>
+        <button
+          onClick={handleDownloadPdf}
+          disabled={!data || data.transactions.length === 0}
+          className="btn-secondary py-1.5 px-3 flex items-center gap-1.5 text-xs font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <Download className="w-3.5 h-3.5" /> Download PDF
+        </button>
       </div>
 
       {error && (
@@ -187,7 +224,11 @@ export default function WalletDeskPage() {
                                 {customerName ? `${customerName} - ${mainText}` : mainText}
                               </p>
                             </div>
-                            <p className="text-xs text-text-3">{format(new Date(tx.timestamp), 'MMM d, hh:mm a')}</p>
+                            <p className="text-xs text-text-3">
+                              {format(new Date(tx.timestamp), 'MMM d, hh:mm a')}
+                              {tx.pcName && ` • ${tx.pcName}`}
+                              {tx.durationMinutes != null && ` • ${tx.durationMinutes}m`}
+                            </p>
                           </div>
                         </div>
                         <div className={`font-mono font-bold ${isTopUp ? 'text-neon-blue' : 'text-neon-orange'}`}>
