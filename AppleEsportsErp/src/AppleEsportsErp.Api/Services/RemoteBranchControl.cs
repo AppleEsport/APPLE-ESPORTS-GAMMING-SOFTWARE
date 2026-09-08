@@ -221,6 +221,7 @@ public static class BranchCommands
 
     /// <summary>Cancels a booking - see CreateReservation for why this has to travel too.</summary>
     public const string CancelReservation = "cancel_reservation";
+    public const string DeleteReservation = "delete_reservation";
 
     /// <summary>
     /// Converts a booking into a running session, at the counter that actually has the PC.

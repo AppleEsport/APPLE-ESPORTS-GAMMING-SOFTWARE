@@ -23,6 +23,7 @@ public static class AuditActions
     // Reservations
     public const string ReservationCreate = "reservation_create";
     public const string ReservationCancel = "reservation_cancel";
+    public const string ReservationDelete = "reservation_delete";
     public const string ReservationOverride = "reservation_override";
     public const string ReservationExpire = "reservation_expire";
 

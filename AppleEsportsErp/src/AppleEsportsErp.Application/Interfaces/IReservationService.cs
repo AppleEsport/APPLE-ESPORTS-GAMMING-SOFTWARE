@@ -15,6 +15,9 @@ public interface IReservationService
     /// <summary>A plain "the customer is here" reminder flag - see ReservationService.SetArrivedAsync.</summary>
     Task<ReservationDto> SetArrivedAsync(Guid branchId, Guid id, bool arrived);
 
+    /// <summary>Permanently removes a reservation - unlike Cancel, no reason kept, no record left.</summary>
+    Task DeleteReservationAsync(Guid branchId, Guid operatorId, Guid id);
+
     // Auto-expire reservations (can be called periodically or passively on fetch)
     Task ExpirePastReservationsAsync(Guid branchId);
 }

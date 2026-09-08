@@ -54,6 +54,17 @@ public class BranchConfigDto
     /// balance from a partial history invites exactly the kind of drift this exists to remove.
     /// </summary>
     public List<BranchMemberConfigDto> Members { get; set; } = new();
+
+    /// <summary>
+    /// Every pricing profile this branch has, plus any custom fixed-duration packages on it.
+    ///
+    /// A branch that runs the full local install (its own database, not just a thin agent) has
+    /// its own separate copy of PricingProfiles from Head Office's - created once at adoption
+    /// and never touched again. A profile edited, or a package added, at Head Office's own
+    /// dashboard was invisible at the counter for exactly the same reason the menu editor was:
+    /// two different databases, only one of which anybody was actually looking at.
+    /// </summary>
+    public List<BranchPricingProfileConfigDto> PricingProfiles { get; set; } = new();
 }
 
 /// <summary>
@@ -140,4 +151,36 @@ public class BranchMemberConfigDto
     public DateTimeOffset? BalanceAsOf { get; set; }
 
     public bool IsBlocked { get; set; }
+}
+
+/// <summary>
+/// One pricing profile as Head Office defines it, with its custom packages (if any).
+///
+/// BaseHourlyRate/BufferMinutes/RefreshRate/SystemSpecs plus whichever fixed-duration packages
+/// are attached - everything a branch's own PC-plans screen needs, deliberately excluding
+/// nothing operational: a profile carries no trading state of its own to protect, unlike a
+/// PC or an inventory item.
+/// </summary>
+public class BranchPricingProfileConfigDto
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public decimal BaseHourlyRate { get; set; }
+    public int BufferMinutes { get; set; }
+    public bool IsActive { get; set; }
+    public string? RefreshRate { get; set; }
+    public string? SystemSpecs { get; set; }
+
+    public List<BranchPricingPackageConfigDto> Packages { get; set; } = new();
+}
+
+/// <summary>One fixed-duration/fixed-price package on a pricing profile - see PricingPackage.</summary>
+public class BranchPricingPackageConfigDto
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public int DurationMinutes { get; set; }
+    public decimal Price { get; set; }
+    public int SortOrder { get; set; }
+    public bool IsActive { get; set; }
 }

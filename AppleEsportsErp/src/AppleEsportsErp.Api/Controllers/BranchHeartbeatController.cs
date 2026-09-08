@@ -66,6 +66,32 @@ public class BranchHeartbeatController : ControllerBase
     /// </summary>
     public static readonly TimeSpan CommandGivenUpAfter = TimeSpan.FromMinutes(5);
 
+    /// <summary>
+    /// How long a <see cref="AppleEsportsErp.Api.Services.BranchCommands.SetMemberPassword"/>
+    /// command specifically may go unanswered before Head Office gives up on it.
+    ///
+    /// Five minutes is right for a PC-facing command because something on Head Office's own
+    /// screen is frozen waiting on it and an operator is standing there watching it happen live.
+    /// Neither is true of a password reset: nothing on any screen depends on it, and the member
+    /// who requested it may not try to log in again for hours or days. Giving it the same
+    /// five-minute leash meant a branch that was simply a few releases behind - not broken,
+    /// just not yet updated - silently and permanently lost the member's new password with no
+    /// visible failure anywhere. The member saw a working "password reset successful" and then
+    /// "invalid password" at the counter, and the only trace of why was this exact command
+    /// sitting Failed in a table nobody had reason to open. Two real members hit this before
+    /// anyone noticed.
+    ///
+    /// 48 hours instead - long enough to cover a branch that is genuinely offline or several
+    /// updates behind, short enough that a truly abandoned branch does not accumulate these
+    /// forever.
+    /// </summary>
+    public static readonly TimeSpan MemberPasswordCommandGivenUpAfter = TimeSpan.FromHours(48);
+
+    private static TimeSpan GiveUpAfterFor(string commandType) =>
+        commandType == AppleEsportsErp.Api.Services.BranchCommands.SetMemberPassword
+            ? MemberPasswordCommandGivenUpAfter
+            : CommandGivenUpAfter;
+
     private static readonly JsonSerializerOptions CaseInsensitiveJson = new() { PropertyNameCaseInsensitive = true };
 
     /// <summary>
@@ -244,14 +270,16 @@ public class BranchHeartbeatController : ControllerBase
         // Given up on, and said so. A branch that was going to answer has answered long before
         // this; one that has not is on a build too old to understand the command, and will
         // never answer however many times it is asked. Closing it stops the retry and releases
-        // the PC back to reporting its own state - see CommandGivenUpAfter.
-        var abandoned = open.Where(c => now - c.CreatedAt > CommandGivenUpAfter).ToList();
+        // the PC back to reporting its own state - see CommandGivenUpAfter and, for the one
+        // command type that gets much longer, GiveUpAfterFor.
+        var abandoned = open.Where(c => now - c.CreatedAt > GiveUpAfterFor(c.CommandType)).ToList();
         foreach (var c in abandoned)
         {
+            var giveUpAfter = GiveUpAfterFor(c.CommandType);
             c.Status = BranchCommandStatus.Failed;
             c.CompletedAt = now;
             c.ResultMessage =
-                $"The branch did not pick this up within {CommandGivenUpAfter.TotalMinutes:0} minutes. " +
+                $"The branch did not pick this up within {giveUpAfter.TotalHours:0} hour(s). " +
                 "It is most likely running a version that does not understand this instruction yet.";
 
             _logger.LogWarning(
@@ -438,7 +466,41 @@ public class BranchHeartbeatController : ControllerBase
             })
             .ToListAsync(ct);
 
-        var config = new BranchConfigDto { Operators = operators, MenuItems = menuItems, Members = members };
+        // This branch's own pricing profiles, each with whatever custom packages are on it.
+        // Not scoped by food group or anything shared - pricing is per-branch, always.
+        var pricingProfiles = await _db.Set<PricingProfile>().AsNoTracking()
+            .Where(p => p.BranchId == branchId)
+            .OrderBy(p => p.Id)
+            .Select(p => new BranchPricingProfileConfigDto
+            {
+                Id = p.Id,
+                Name = p.Name,
+                BaseHourlyRate = p.BaseHourlyRate,
+                BufferMinutes = p.BufferMinutes,
+                IsActive = p.IsActive,
+                RefreshRate = p.RefreshRate,
+                SystemSpecs = p.SystemSpecs,
+                Packages = p.Packages
+                    .OrderBy(pkg => pkg.Id)
+                    .Select(pkg => new BranchPricingPackageConfigDto
+                    {
+                        Id = pkg.Id,
+                        Name = pkg.Name,
+                        DurationMinutes = pkg.DurationMinutes,
+                        Price = pkg.Price,
+                        SortOrder = pkg.SortOrder,
+                        IsActive = pkg.IsActive,
+                    }).ToList(),
+            })
+            .ToListAsync(ct);
+
+        var config = new BranchConfigDto
+        {
+            Operators = operators,
+            MenuItems = menuItems,
+            Members = members,
+            PricingProfiles = pricingProfiles,
+        };
         config.Version = Fingerprint(config);
 
         return string.Equals(config.Version, branchHasVersion, StringComparison.Ordinal)
@@ -467,7 +529,12 @@ public class BranchHeartbeatController : ControllerBase
             m.Id, m.FullName, m.MemberNumber, m.MobileNumber, m.Email, m.Username,
             m.GamingBalance, m.FoodBalance, m.BalanceAsOf, m.IsBlocked)));
 
-        var canonical = string.Join("\n---\n", operatorsPart, menuPart, membersPart);
+        var pricingPart = string.Join('\n', config.PricingProfiles.Select(p => string.Join("",
+            p.Id, p.Name, p.BaseHourlyRate, p.BufferMinutes, p.IsActive, p.RefreshRate, p.SystemSpecs,
+            string.Join('|', p.Packages.Select(pkg => string.Join(',',
+                pkg.Id, pkg.Name, pkg.DurationMinutes, pkg.Price, pkg.SortOrder, pkg.IsActive))))));
+
+        var canonical = string.Join("\n---\n", operatorsPart, menuPart, membersPart, pricingPart);
 
         return Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))[..16];

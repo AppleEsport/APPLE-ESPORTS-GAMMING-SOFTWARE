@@ -125,6 +125,28 @@ public class ReservationsController : ControllerBase
         return Ok(ApiResponse<ReservationDto>.Ok(result));
     }
 
+    /// <summary>The "Remove" button - permanently deletes a reservation, no reason kept.</summary>
+    [HttpDelete("{id}")]
+    public async Task<IActionResult> DeleteReservation(Guid id, CancellationToken ct)
+    {
+        if (_remote.MustTravel)
+        {
+            var branchId = await _db.Set<AppleEsportsErp.Domain.Entities.Reservation>().AsNoTracking()
+                .Where(r => r.Id == id).Select(r => r.BranchId).FirstOrDefaultAsync(ct);
+
+            if (branchId == Guid.Empty)
+                return NotFound(ApiResponse<object>.Fail("Head Office has no such reservation.", "RESERVATION_NOT_FOUND"));
+
+            return await SendToBranchAsync(branchId, AppleEsportsErp.Api.Services.BranchCommands.DeleteReservation, new
+            {
+                reservationId = id,
+            }, ct);
+        }
+
+        await _reservationService.DeleteReservationAsync(GetBranchId(), (await this.GetOperatorIdAsync()), id);
+        return Ok(ApiResponse<object>.Ok(null));
+    }
+
     /// <summary>A plain "the customer is here" reminder flag - see ReservationService.
     /// SetArrivedAsync. Never routed to a branch even when called from Head Office: nothing a
     /// branch needs to carry out follows from it.</summary>

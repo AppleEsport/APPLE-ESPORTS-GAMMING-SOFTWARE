@@ -271,6 +271,57 @@ public class ReservationService : IReservationService
         return MapToDto(reservation);
     }
 
+    /// <summary>Permanently removes a reservation - the "Remove" button, distinct from Cancel:
+    /// no reason kept, no Cancelled record left behind, just gone. Frees the PC exactly like
+    /// Cancel does if it was still holding it for this booking.</summary>
+    public async Task DeleteReservationAsync(Guid branchId, Guid operatorId, Guid id)
+    {
+        var reservation = await _unitOfWork.Repository<Reservation>().Query()
+            .Include(r => r.Pc)
+            .FirstOrDefaultAsync(r => r.Id == id)
+            ?? throw new NotFoundException("Reservation not found.");
+
+        if (reservation.BranchId != branchId)
+            throw new BranchIsolationException("Reservation belongs to another branch.");
+
+        var pc = await _unitOfWork.Repository<Pc>().GetByIdAsync(reservation.PcId);
+        if (pc != null)
+        {
+            if (pc.CurrentReservationId == reservation.Id)
+                pc.CurrentReservationId = null;
+
+            if (pc.State == PcState.Reserved)
+            {
+                var hasOther = await _unitOfWork.Repository<Reservation>().Query()
+                    .AnyAsync(r => r.PcId == pc.Id && r.State == ReservationState.Pending && r.Id != reservation.Id
+                              && r.ReservationTime <= DateTimeOffset.UtcNow.AddMinutes(15));
+
+                if (!hasOther)
+                    pc.State = PcState.Idle;
+            }
+
+            _unitOfWork.Repository<Pc>().Update(pc);
+            await _hubNotification.BroadcastPcStatusChangeAsync(branchId, pc.Id);
+        }
+
+        _unitOfWork.Repository<Reservation>().Remove(reservation);
+
+        await _auditService.LogAsync(new AuditEntry
+        {
+            OperatorId = operatorId,
+            UserRole = "Operator",
+            UserName = "System",
+            Action = AuditActions.ReservationDelete,
+            BranchId = branchId,
+            TargetType = "reservation",
+            TargetId = reservation.Id,
+            Details = new { reservation.CustomerName, reservation.PcId }
+        });
+
+        await _unitOfWork.CommitTransactionAsync();
+        await _hubNotification.BroadcastReservationUpdateAsync(branchId, reservation.Id);
+    }
+
     public async Task<ReservationDto> StartReservedSessionAsync(Guid branchId, Guid operatorId, Guid id)
     {
         RefuseIfHeadOffice("started");
