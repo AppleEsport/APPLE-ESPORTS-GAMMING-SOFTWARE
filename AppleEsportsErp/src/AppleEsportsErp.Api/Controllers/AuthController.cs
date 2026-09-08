@@ -219,6 +219,11 @@ public class AuthController : ControllerBase
     [Authorize(Roles = Roles.Operator)]
     public async Task<IActionResult> GetAvailableAdminsForSwitch()
     {
+        // A PIN set up minutes ago must show up the next time this opens, not whenever the
+        // embedded browser's disk cache happens to decide the old empty answer expired.
+        Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";
+        Response.Headers.Pragma = "no-cache";
+
         var result = await _authService.GetAvailableAdminsForSwitchAsync();
         return Ok(ApiResponse<IEnumerable<AvailableAdminDto>>.Ok(result));
     }
