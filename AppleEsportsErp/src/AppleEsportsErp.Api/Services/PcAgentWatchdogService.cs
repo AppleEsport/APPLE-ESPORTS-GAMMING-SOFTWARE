@@ -20,9 +20,21 @@ namespace AppleEsportsErp.Api.Services;
 /// Genuinely still-installed agents are never at risk here: DualConnectionService heartbeats
 /// every 10 seconds and fails over from LAN to Cloud within 30 (AgentConfig.HealthCheckIntervalSeconds/
 /// FailoverThresholdSeconds), so anything actually running reports in from one channel or the
-/// other well inside a minute of any disruption. StaleAfter is set an order of magnitude beyond
-/// that specifically so a reboot, a Windows update, or a brief network blip is never mistaken
-/// for an uninstall.
+/// other well inside a minute of any disruption.
+///
+/// StaleAfter was originally 5 minutes - "an order of magnitude beyond" that 30-second failover
+/// window, on the assumption that the agent itself was reliable and only a genuine uninstall or
+/// reboot would ever cause a real gap. That assumption held right up until it met a known-buggy
+/// agent build: one that connects, then drops, then reconnects, on its own schedule - not
+/// uninstalled, just unreliable. Every drop past 5 minutes wiped the PC's claimed status back to
+/// "Not Set Up" and Head Office's view of it along with it, even while an operator was actively
+/// running real sessions on that exact machine through the branch's own console. Confirmed live
+/// at Citylight 144Hz: every one of sixteen PCs sat permanently "AwaitingSetup" at Head Office,
+/// the direct cause of "the whole app isn't syncing, I can't see any sessions on the server."
+///
+/// 4 hours instead. Long enough that a flaky agent's drop-and-reconnect cycles no longer trip
+/// this at all, short enough that a machine genuinely retired or never coming back is still
+/// caught the same day rather than sitting stale for good.
 ///
 /// Branch-only, like every other job that acts on live PC state - see BranchOnlyBackgroundService.
 /// Head Office's own copy of this same PC is overwritten wholesale by the branch's own heartbeat
@@ -38,10 +50,10 @@ public class PcAgentWatchdogService : BranchOnlyBackgroundService
 
     /// <summary>
     /// How long a PC can go without a heartbeat before it is treated as no longer actually
-    /// installed. Comfortably above the 30-second failover window above, so this never fires on
-    /// a machine that is still there and simply mid-reconnect.
+    /// installed. See the class remarks for why this is 4 hours rather than the original 5
+    /// minutes.
     /// </summary>
-    private static readonly TimeSpan StaleAfter = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan StaleAfter = TimeSpan.FromHours(4);
 
     private readonly IServiceProvider _services;
     private readonly ILogger<PcAgentWatchdogService> _logger;

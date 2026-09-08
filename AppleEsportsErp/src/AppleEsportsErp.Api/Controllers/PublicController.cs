@@ -79,6 +79,22 @@ public class PublicController : ControllerBase
     }
 
     /// <summary>
+    /// Whether any PC at this branch is currently in an active session - used by the branch's
+    /// own silent auto-update task (apply-update.ps1) to decide whether to install right now or
+    /// wait for the next 15-minute pass.
+    ///
+    /// Anonymous on purpose: that script runs as SYSTEM, with no operator logged in and nothing
+    /// to authenticate with. It mirrors exactly what BranchBusySignal.jsx already asks the
+    /// dashboard's own /api/pcs for - same question, asked by a caller with no session cookie.
+    /// </summary>
+    [HttpGet("branches/{branchId:guid}/busy")]
+    public async Task<IActionResult> IsBranchBusy(Guid branchId)
+    {
+        var busy = await _db.Pcs.AnyAsync(p => p.BranchId == branchId && p.State == PcState.Active);
+        return Ok(ApiResponse<object>.Ok(new { busy }));
+    }
+
+    /// <summary>
     /// Get the active session for a PC — used by the overlay on startup to load real session data.
     /// Accepts either a PC UUID or a PC name string (e.g. "PC-07").
     /// </summary>
@@ -239,6 +255,33 @@ public class PublicController : ControllerBase
         pc.MonitorHz = dto.MonitorHz;
         pc.UpdatedAt = DateTimeOffset.UtcNow;
         await _db.SaveChangesAsync();
+
+        return Ok(ApiResponse<object>.Ok(new { success = true }));
+    }
+
+    /// <summary>
+    /// The one place a gaming PC's own AppleEsports.exe reports what version it is actually
+    /// running - separate from AgentVersion, which is the screen-lock agent's own, independent
+    /// version. Called by MainForm.cs every 30 seconds (piggybacked on its own update-check
+    /// loop) so "N of M gaming PCs up to date" on the Updates page reflects the program a
+    /// customer actually plays through, not a different one on the same machine.
+    /// </summary>
+    [HttpPost("pcs/{pcId:guid}/app-version")]
+    public async Task<IActionResult> ReportPcAppVersion(Guid pcId, [FromBody] ReportPcAppVersionDto dto)
+    {
+        if (string.IsNullOrWhiteSpace(dto.Version))
+            return Ok(new { success = false, error = "No version given" });
+
+        var pc = await _db.Pcs.FirstOrDefaultAsync(p => p.Id == pcId);
+        if (pc == null)
+            return Ok(new { success = false, error = "PC not found" });
+
+        if (pc.AppVersion != dto.Version)
+        {
+            pc.AppVersion = dto.Version;
+            pc.UpdatedAt = DateTimeOffset.UtcNow;
+            await _db.SaveChangesAsync();
+        }
 
         return Ok(ApiResponse<object>.Ok(new { success = true }));
     }
@@ -929,4 +972,9 @@ public class LowBalanceAlertRequest
 public class SetMonitorHzDto
 {
     public string? MonitorHz { get; set; }
+}
+
+public class ReportPcAppVersionDto
+{
+    public string? Version { get; set; }
 }
