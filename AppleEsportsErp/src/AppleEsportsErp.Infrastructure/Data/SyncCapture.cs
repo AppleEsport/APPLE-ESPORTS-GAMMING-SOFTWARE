@@ -125,6 +125,18 @@ public static class SyncCapture
         // overridden, so it is the current row that matters and a late-arriving update is
         // resolved the same "newest wins" way as everything else here.
         [typeof(Reservation)] = "reservation",
+
+        // An operator created (or edited) at a branch's own counter, rather than pushed down
+        // from Head Office. The comment this replaces assumed operators were entirely "the
+        // heartbeat's job" - true only in one direction. BranchHeartbeatController's config
+        // reply pushes Head Office's operators DOWN to a branch; nothing ever carried a
+        // branch-created operator back UP. Confirmed live at Citylight 144Hz: an operator
+        // created locally had no row at Head Office, so every session, bill and payment they
+        // ever touched sat permanently stuck in the sync inbox with "Head Office has no
+        // operator X" - 12 sessions and 21 payments deep before anyone noticed, because the
+        // branch's own screen showed all of it working. Sessions, cash desk, EOD, everything
+        // that names an operator was silently invisible at Head Office for exactly this reason.
+        [typeof(Operator)] = "operator",
     };
 
     /// <summary>
