@@ -602,7 +602,26 @@ public class BranchHeartbeatController : ControllerBase
             // branch's own "pc_shutdown" row exists but this one never shows up for the same PC
             // around the same time, that gap IS the problem - the heartbeat left the branch
             // reporting one thing and Head Office never heard it.
-            if (pc.PoweredOff != reported.PoweredOff)
+            //
+            // The actual field assignment below happens BEFORE this, not after - AuditService.
+            // LogAsync calls SaveChangesAsync on this same context, and a save that fires while
+            // PoweredOff is still the old value persists nothing for it. That produced exactly
+            // one AE-CTL machine's PoweredOff flapping the same audit row every single heartbeat
+            // forever: the row committed, the field never did, so next beat saw the same "changed"
+            // value again. Reordering so the property is already staged before the save that logs
+            // it is what makes the two actually happen together.
+            bool poweredOffChanged = pc.PoweredOff != reported.PoweredOff;
+
+            pc.State = state;
+            pc.CurrentSessionId = reported.CurrentSessionId;
+            pc.CurrentSessionStartTime = reported.SessionStartTime;
+            pc.CurrentSessionEndTime = reported.SessionEndTime;
+            pc.PoweredOff = reported.PoweredOff;
+            pc.LastActiveAt = DateTimeOffset.UtcNow;
+            pc.UpdatedAt = DateTimeOffset.UtcNow;
+            changed.Add(pc.Id);
+
+            if (poweredOffChanged)
             {
                 await _audit.LogAsync(new AuditEntry
                 {
@@ -615,15 +634,6 @@ public class BranchHeartbeatController : ControllerBase
                     Details = new { pcNumber = pc.PcNumber, poweredOff = reported.PoweredOff },
                 });
             }
-
-            pc.State = state;
-            pc.CurrentSessionId = reported.CurrentSessionId;
-            pc.CurrentSessionStartTime = reported.SessionStartTime;
-            pc.CurrentSessionEndTime = reported.SessionEndTime;
-            pc.PoweredOff = reported.PoweredOff;
-            pc.LastActiveAt = DateTimeOffset.UtcNow;
-            pc.UpdatedAt = DateTimeOffset.UtcNow;
-            changed.Add(pc.Id);
         }
 
         return changed;
