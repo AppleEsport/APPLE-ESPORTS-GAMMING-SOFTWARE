@@ -369,6 +369,12 @@ public class SyncInboxController : ControllerBase
         "member.created" => 0,
         "shift.changed" => 0,
 
+        // Leads for the same reason member.created does: nearly everything else in this
+        // switch - sessions, payments, cash transactions - refuses to apply at all until the
+        // operator it names already exists here. See SyncCapture.Watched's own note on why
+        // this event exists.
+        "operator.changed" => 0,
+
         // Behind member.created, ahead of everything money-shaped: it needs its member to exist
         // and nothing else needs it, so it neither blocks a batch nor gets blocked by one.
         "member.reset_requested" => 1,
@@ -418,6 +424,16 @@ public class SyncInboxController : ControllerBase
 
             case "member.reset_requested":
                 await ApplyMemberResetTokenAsync(held, root);
+                break;
+
+            // An operator created or edited at a branch's own counter - see SyncCapture.
+            // Watched's note on why this exists. PasswordHash/AccessPin travel through
+            // UpsertRowAsync the same as every other column here, which is no more exposure
+            // than the existing downward direction already has: Head Office hands the same
+            // two fields to every OTHER branch already, in the config reply every heartbeat
+            // can receive.
+            case "operator.changed":
+                await UpsertRowAsync<Operator>(held, root);
                 break;
 
             case "session.started":
