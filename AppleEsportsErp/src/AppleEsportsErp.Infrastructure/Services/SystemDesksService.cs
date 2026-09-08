@@ -112,6 +112,10 @@ public class SystemDesksService : ISystemDesksService
         var walletTxs = await _unitOfWork.Repository<WalletTransaction>().Query()
             .Where(w => w.BranchId == branchId && w.CreatedAt >= dayStart && w.CreatedAt < dayEnd)
             .Include(w => w.Member)
+            .Include(w => w.Bill)
+                .ThenInclude(b => b!.Pc)
+            .Include(w => w.Bill)
+                .ThenInclude(b => b!.Session)
             .ToListAsync();
 
         var walletPayments = await _unitOfWork.Repository<Payment>().Query()
@@ -121,6 +125,10 @@ public class SystemDesksService : ISystemDesksService
                      && p.CreatedAt < dayEnd)
             .Include(p => p.Bill)
                 .ThenInclude(b => b.Member)
+            .Include(p => p.Bill)
+                .ThenInclude(b => b.Pc)
+            .Include(p => p.Bill)
+                .ThenInclude(b => b.Session)
             .ToListAsync();
 
         var dto = new WalletDeskSummaryDto
@@ -147,7 +155,9 @@ public class SystemDesksService : ISystemDesksService
                 Timestamp = tx.CreatedAt,
                 Description = $"Wallet {tx.Action} - {tx.TargetWallet} ({tx.Member?.Username ?? "Member"}) " + (string.IsNullOrEmpty(tx.Reason) ? "" : $"({tx.Reason})"),
                 Amount = tx.Amount,
-                Action = tx.Action.ToString()
+                Action = tx.Action.ToString(),
+                PcName = tx.Bill?.Pc?.PcName ?? tx.Bill?.Pc?.PcNumber,
+                DurationMinutes = tx.Bill?.Session?.ActualDurationMin ?? tx.Bill?.Session?.PlannedDurationMin
             });
         }
 
@@ -161,7 +171,9 @@ public class SystemDesksService : ISystemDesksService
                 Description = $"Bill Payment via Wallet #{payment.Bill?.BillNumber} " +
                               $"({payment.Bill?.CustomerName ?? payment.Bill?.Member?.Username ?? "Walk-in"})",
                 Amount = payment.WalletAmount,
-                Action = "Deduction"
+                Action = "Deduction",
+                PcName = payment.Bill?.Pc?.PcName ?? payment.Bill?.Pc?.PcNumber,
+                DurationMinutes = payment.Bill?.Session?.ActualDurationMin ?? payment.Bill?.Session?.PlannedDurationMin
             });
         }
 

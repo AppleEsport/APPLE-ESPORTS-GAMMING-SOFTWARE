@@ -620,4 +620,63 @@ public class MemberService : IMemberService
             HomeBranchName = m.HomeBranch?.Name
         };
     }
+
+    public async Task<List<MemberHistoryEntryDto>> GetMemberHistoryAsync(Guid memberId, DateOnly? fromDate, DateOnly? toDate)
+    {
+        DateTimeOffset? rangeStart = fromDate.HasValue
+            ? AppleEsportsErp.Application.Services.IndiaTime.BusinessDayRange(fromDate.Value).Start
+            : null;
+        DateTimeOffset? rangeEnd = toDate.HasValue
+            ? AppleEsportsErp.Application.Services.IndiaTime.BusinessDayRange(toDate.Value).End
+            : null;
+
+        var sessionsQuery = _unitOfWork.Repository<Session>().Query()
+            .Where(s => s.MemberId == memberId);
+        if (rangeStart.HasValue) sessionsQuery = sessionsQuery.Where(s => s.StartTime >= rangeStart.Value);
+        if (rangeEnd.HasValue) sessionsQuery = sessionsQuery.Where(s => s.StartTime < rangeEnd.Value);
+
+        var sessions = await sessionsQuery
+            .Include(s => s.Pc)
+            .Include(s => s.Branch)
+            .ToListAsync();
+
+        var walletQuery = _unitOfWork.Repository<WalletTransaction>().Query()
+            .Where(w => w.MemberId == memberId);
+        if (rangeStart.HasValue) walletQuery = walletQuery.Where(w => w.CreatedAt >= rangeStart.Value);
+        if (rangeEnd.HasValue) walletQuery = walletQuery.Where(w => w.CreatedAt < rangeEnd.Value);
+
+        var walletTxs = await walletQuery
+            .Include(w => w.Branch)
+            .ToListAsync();
+
+        var entries = new List<MemberHistoryEntryDto>();
+
+        entries.AddRange(sessions.Select(s => new MemberHistoryEntryDto
+        {
+            Id = s.Id,
+            Type = "Session",
+            Timestamp = s.StartTime,
+            BranchId = s.BranchId,
+            BranchName = s.Branch?.Name ?? "",
+            PcName = s.Pc?.PcName ?? s.Pc?.PcNumber,
+            DurationMinutes = s.ActualDurationMin ?? s.PlannedDurationMin,
+            Amount = s.TotalAmount,
+            Description = $"Gaming session - {s.GamingType}"
+        }));
+
+        entries.AddRange(walletTxs.Select(w => new MemberHistoryEntryDto
+        {
+            Id = w.Id,
+            Type = w.Action == WalletAction.Recharge ? "WalletTopUp" : "WalletDeduction",
+            Timestamp = w.CreatedAt,
+            BranchId = w.BranchId,
+            BranchName = w.Branch?.Name ?? "",
+            PcName = null,
+            DurationMinutes = null,
+            Amount = w.Amount,
+            Description = $"{w.Action} - {w.TargetWallet}" + (string.IsNullOrEmpty(w.Reason) ? "" : $" ({w.Reason})")
+        }));
+
+        return entries.OrderByDescending(e => e.Timestamp).ToList();
+    }
 }

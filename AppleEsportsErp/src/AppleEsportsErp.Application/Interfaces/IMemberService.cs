@@ -13,4 +13,10 @@ public interface IMemberService
     Task DeleteMemberAsync(Guid branchId, Guid operatorId, Guid id);
     Task<MemberLoginResponseDto> LoginMemberAsync(MemberLoginDto dto);
     Task<MemberDto> AdminEditValuesAsync(Guid branchId, Guid adminId, Guid id, AdminEditMemberValuesDto dto);
+
+    /// <summary>Everything that happened for one member - gaming sessions and wallet
+    /// top-ups/deductions together, across every branch they've ever played at (a member's
+    /// wallet is not branch-locked, so neither is this). Optional date range; open-ended
+    /// when either end is omitted.</summary>
+    Task<List<MemberHistoryEntryDto>> GetMemberHistoryAsync(Guid memberId, DateOnly? fromDate, DateOnly? toDate);
 }
