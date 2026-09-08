@@ -427,6 +427,9 @@ public class BranchHeartbeatService : BackgroundService
             case BranchCommands.CancelReservation:
                 return await RunCancelReservationAsync(scoped, command.Payload, ct);
 
+            case BranchCommands.DeleteReservation:
+                return await RunDeleteReservationAsync(scoped, command.Payload, ct);
+
             case BranchCommands.StartReservation:
                 return await RunStartReservationAsync(scoped, command.Payload, ct);
 
@@ -1048,6 +1051,43 @@ public class BranchHeartbeatService : BackgroundService
                 reservation.BranchId, actorId.Value, reservationId,
                 new Application.DTOs.Reservations.CancelReservationDto { Reason = reason });
             return (true, $"Cancelled the booking for {reservation.CustomerName}.");
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.GetBaseException().Message);
+        }
+    }
+
+    private static async Task<(bool, string)> RunDeleteReservationAsync(
+        IServiceProvider scoped, string payload, CancellationToken ct)
+    {
+        Guid reservationId;
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            reservationId = doc.RootElement.GetProperty("reservationId").GetGuid();
+        }
+        catch
+        {
+            return (false, "The remove command arrived without a readable reservation id.");
+        }
+
+        var db = scoped.GetRequiredService<AppDbContext>();
+        var reservation = await db.Set<Reservation>().AsNoTracking()
+            .FirstOrDefaultAsync(r => r.Id == reservationId, ct);
+        // Already gone at this branch (an operator here may have removed it themselves in the
+        // time this took to arrive) - the correct outcome either way is that it no longer exists.
+        if (reservation is null) return (true, "Already removed - nothing to do.");
+
+        var actorId = await OnShiftOrAnyOperatorAsync(db, reservation.BranchId, ct);
+        if (actorId is null)
+            return (false, "This branch has no operator at all to record the removal against.");
+
+        try
+        {
+            var reservationService = scoped.GetRequiredService<IReservationService>();
+            await reservationService.DeleteReservationAsync(reservation.BranchId, actorId.Value, reservationId);
+            return (true, $"Removed the booking for {reservation.CustomerName}.");
         }
         catch (Exception ex)
         {
@@ -1788,7 +1828,8 @@ public class BranchHeartbeatService : BackgroundService
         }
 
         if (config is null) return;
-        if (config.Operators.Count == 0 && config.MenuItems.Count == 0 && config.Members.Count == 0) return;
+        if (config.Operators.Count == 0 && config.MenuItems.Count == 0 && config.Members.Count == 0
+            && config.PricingProfiles.Count == 0) return;
 
         // Every row gets its own scope and its own SaveChangesAsync - deliberately, and this is
         // the fix for a real, silent, permanent failure mode found on Citylight. All of an
@@ -1809,6 +1850,7 @@ public class BranchHeartbeatService : BackgroundService
         var opsAdded = 0;
         var menuAdded = 0;
         var membersAdded = 0;
+        var pricingAdded = 0;
 
         foreach (var incoming in config.Operators)
         {
@@ -1858,15 +1900,32 @@ public class BranchHeartbeatService : BackgroundService
             }
         }
 
-        if (opsAdded + menuAdded + membersAdded > 0)
+        foreach (var item in config.PricingProfiles)
+        {
+            try
+            {
+                using var scope = _serviceProvider.CreateAsyncScope();
+                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                if (await ApplyOnePricingProfileAsync(db, _branchId, item, ct)) pricingAdded++;
+                if (db.ChangeTracker.HasChanges()) await db.SaveChangesAsync(ct);
+            }
+            catch (Exception ex)
+            {
+                anyFailed = true;
+                LogConfigRowFailure("pricing profile", item.Name, item.Id, ex);
+            }
+        }
+
+        if (opsAdded + menuAdded + membersAdded + pricingAdded > 0)
         {
             _logger.LogInformation(
                 "Settings updated from Head Office: {OpCount} operator(s), {OpNew} new; " +
-                "{MenuCount} menu item(s), {MenuNew} new; {MemberCount} member(s), {MemberNew} new. " +
-                "Version {Version}.",
+                "{MenuCount} menu item(s), {MenuNew} new; {MemberCount} member(s), {MemberNew} new; " +
+                "{PricingCount} pricing profile(s), {PricingNew} new. Version {Version}.",
                 config.Operators.Count, opsAdded,
                 config.MenuItems.Count, menuAdded,
                 config.Members.Count, membersAdded,
+                config.PricingProfiles.Count, pricingAdded,
                 config.Version);
         }
 
@@ -2009,6 +2068,82 @@ public class BranchHeartbeatService : BackgroundService
         }
 
         if (differs) row.UpdatedAt = DateTimeOffset.UtcNow;
+
+        return isNew;
+    }
+
+    /// <summary>
+    /// Makes this branch's pricing match Head Office's for one profile, packages included.
+    ///
+    /// This is the fix for the same class of bug as the menu editor, one layer further down: a
+    /// branch running the full local install (its own database, not just a thin agent) has its
+    /// own separate copy of PricingProfiles, written once at adoption and never touched again.
+    /// A rate changed, or a custom package added, at Head Office's own dashboard was invisible
+    /// at the counter - confirmed live at Citylight 144Hz, where new packages showed correctly
+    /// on Head Office's own screen and the never-updated 1/2/3-hour multiples kept showing at
+    /// the actual PC, because the two were reading two different databases.
+    ///
+    /// Every package Head Office currently has on this profile is sent, active or not (a
+    /// deactivated package still needs to arrive with IsActive=false so the branch stops
+    /// offering it - it does not simply vanish from the payload), so there is nothing extra to
+    /// reconcile here beyond an ordinary upsert.
+    /// </summary>
+    private static async Task<bool> ApplyOnePricingProfileAsync(
+        AppDbContext db, Guid branchId, BranchPricingProfileConfigDto profile, CancellationToken ct)
+    {
+        var row = await db.Set<PricingProfile>()
+            .Include(p => p.Packages)
+            .FirstOrDefaultAsync(p => p.Id == profile.Id, ct);
+        var isNew = row is null;
+
+        if (row is null)
+        {
+            row = new PricingProfile
+            {
+                Id = profile.Id,
+                BranchId = branchId,
+                CreatedAt = DateTimeOffset.UtcNow,
+            };
+            db.Add(row);
+        }
+
+        if (row.Name != profile.Name) row.Name = profile.Name;
+        if (row.BaseHourlyRate != profile.BaseHourlyRate) row.BaseHourlyRate = profile.BaseHourlyRate;
+        if (row.BufferMinutes != profile.BufferMinutes) row.BufferMinutes = profile.BufferMinutes;
+        if (row.IsActive != profile.IsActive) row.IsActive = profile.IsActive;
+        if (row.RefreshRate != profile.RefreshRate) row.RefreshRate = profile.RefreshRate;
+        if (row.SystemSpecs != profile.SystemSpecs) row.SystemSpecs = profile.SystemSpecs;
+        row.UpdatedAt = DateTimeOffset.UtcNow;
+
+        var existingPackages = row.Packages?.ToDictionary(pkg => pkg.Id) ?? new Dictionary<Guid, PricingPackage>();
+
+        foreach (var incoming in profile.Packages)
+        {
+            if (existingPackages.TryGetValue(incoming.Id, out var pkgRow))
+            {
+                pkgRow.Name = incoming.Name;
+                pkgRow.DurationMinutes = incoming.DurationMinutes;
+                pkgRow.Price = incoming.Price;
+                pkgRow.SortOrder = incoming.SortOrder;
+                pkgRow.IsActive = incoming.IsActive;
+                pkgRow.UpdatedAt = DateTimeOffset.UtcNow;
+            }
+            else
+            {
+                db.Add(new PricingPackage
+                {
+                    Id = incoming.Id,
+                    PricingProfileId = profile.Id,
+                    Name = incoming.Name,
+                    DurationMinutes = incoming.DurationMinutes,
+                    Price = incoming.Price,
+                    SortOrder = incoming.SortOrder,
+                    IsActive = incoming.IsActive,
+                    CreatedAt = DateTimeOffset.UtcNow,
+                    UpdatedAt = DateTimeOffset.UtcNow,
+                });
+            }
+        }
 
         return isNew;
     }

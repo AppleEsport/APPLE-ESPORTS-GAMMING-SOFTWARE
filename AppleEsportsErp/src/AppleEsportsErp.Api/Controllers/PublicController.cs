@@ -218,9 +218,15 @@ public class PublicController : ControllerBase
         if (pc == null)
             return Ok(new { success = false, error = "PC not found" });
 
+        // State changes the moment an operator flags/clears maintenance - a customer-facing
+        // screen still showing yesterday's answer here is a real, visible mistake, not a
+        // cosmetic one. Same reasoning as the plans endpoint's own no-cache headers.
+        Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";
+        Response.Headers.Pragma = "no-cache";
+
         decimal rate = pc.PricingProfile?.BaseHourlyRate ?? 0m;
 
-        return Ok(ApiResponse<object>.Ok(new { id = pc.Id, name = pc.PcName ?? pc.PcNumber, branchId = pc.BranchId, branchName = pc.Branch?.Name, monitorHz = pc.MonitorHz, ratePerHour = rate }));
+        return Ok(ApiResponse<object>.Ok(new { id = pc.Id, name = pc.PcName ?? pc.PcNumber, branchId = pc.BranchId, branchName = pc.Branch?.Name, monitorHz = pc.MonitorHz, ratePerHour = rate, state = pc.State.ToString() }));
     }
 
     [HttpPost("pcs/{pcId:guid}/hz")]
