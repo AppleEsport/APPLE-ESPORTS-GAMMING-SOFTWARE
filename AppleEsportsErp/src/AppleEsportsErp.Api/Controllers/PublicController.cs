@@ -240,6 +240,11 @@ public class PublicController : ControllerBase
     [HttpGet("pcs/{pcId}/plans")]
     public async Task<IActionResult> GetPcPlans(string pcId)
     {
+        // Pricing changes at any moment - a stale plan list showing an old price on the operator
+        // console or the customer-facing PC screen is a money mistake, not a cosmetic one.
+        Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";
+        Response.Headers.Pragma = "no-cache";
+
         Domain.Entities.Pc? pc = null;
         if (Guid.TryParse(pcId, out var pcGuid))
         {
@@ -295,6 +300,9 @@ public class PublicController : ControllerBase
     [HttpGet("branches/{branchId}/plans")]
     public async Task<IActionResult> GetBranchPlans(Guid branchId)
     {
+        Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";
+        Response.Headers.Pragma = "no-cache";
+
         var branch = await _db.Branches
             .Include(b => b.Pcs)
                 .ThenInclude(p => p.PricingProfile)
