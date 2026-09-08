@@ -93,6 +93,7 @@ public class PcStatusService : IPcStatusService
                 IsAgentOnline = pc.IsAgentOnline,
                 ConnectionMode = pc.ConnectionMode,
                 AgentVersion = pc.AgentVersion,
+                AppVersion = pc.AppVersion,
                 PoweredOff = pc.PoweredOff
             };
 

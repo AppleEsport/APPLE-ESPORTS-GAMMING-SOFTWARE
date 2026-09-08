@@ -24,3 +24,7 @@ export const cancelReservation = (id, payload) =>
     way, same as a walk-in. */
 export const setReservationArrived = (id, arrived) =>
   api.put(`/reservations/${id}/arrived`, { arrived }).then(r => r.data?.data);
+
+/** DELETE /reservations/:id — the "Remove" button. Permanent, no reason kept. */
+export const deleteReservation = (id) =>
+  api.delete(`/reservations/${id}`).then(r => r.data);

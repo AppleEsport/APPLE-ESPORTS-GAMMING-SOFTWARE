@@ -10,10 +10,10 @@ import { getMembers } from '../../api/members.api';
 import {
   getActiveReservations,
   createReservation,
-  cancelReservation,
+  deleteReservation,
   setReservationArrived
 } from '../../api/reservations.api';
-import { Calendar, User, Clock, IndianRupee, FileText, Ban, CheckCircle, UserCheck, Search } from 'lucide-react';
+import { Calendar, User, Clock, IndianRupee, FileText, Trash2, CheckCircle, UserCheck, Search } from 'lucide-react';
 
 export default function ReservationsPage() {
   const { isSuperAdmin, user } = useAuth();
@@ -89,10 +89,7 @@ export default function ReservationsPage() {
     setForm(f => ({ ...f, durationMin: null, advanceDeposit: 0, selectedTier: '' }));
   }, [form.pcId]);
 
-  // Modal/Reason states
-  const [cancelData, setCancelData] = useState(null); // { id, customerName }
-  const [cancelReason, setCancelReason] = useState('');
-  const [cancelLoading, setCancelLoading] = useState(false);
+  const [removingId, setRemovingId] = useState(null);
 
   // ── Member search with debounce ──
   useEffect(() => {
@@ -315,43 +312,33 @@ export default function ReservationsPage() {
     }
   };
 
-  // ── Actions: Arrived toggle — a plain reminder, not a gate on anything. Starting a session
-  // for this customer still goes through the ordinary Sessions screen, reservation or not. ──
-  const handleToggleArrived = async (res) => {
-    // Optimistic: this is a low-stakes hand-set flag, not worth a spinner or a failed-request
-    // toast interrupting the counter for something this minor. Reverts silently on error.
-    setReservations(prev => prev.map(r => r.id === res.id ? { ...r, arrived: !res.arrived } : r));
+  // ── Actions: Mark Arrived — one-way, like checking off a todo item. The reservation is still
+  // Pending underneath (Arrived is a plain reminder flag, not a gate on anything - starting a
+  // session for this customer still goes through the ordinary Sessions screen either way), it
+  // just no longer needs the counter's attention, so it drops off this list once checked. ──
+  const handleMarkArrived = async (res) => {
+    setReservations(prev => prev.filter(r => r.id !== res.id));
     try {
-      await setReservationArrived(res.id, !res.arrived);
+      await setReservationArrived(res.id, true);
     } catch (err) {
-      setReservations(prev => prev.map(r => r.id === res.id ? { ...r, arrived: res.arrived } : r));
-      toast.error('Failed to update arrival status');
+      setReservations(prev => [...prev, res].sort((a, b) => new Date(a.reservationTime) - new Date(b.reservationTime)));
+      toast.error('Failed to mark as arrived');
     }
   };
 
-  // ── Actions: Cancel ──
-  const handleCancelClick = (res) => {
-    setCancelData(res);
-    setCancelReason('');
-  };
-
-  const handleCancelSubmit = async (e) => {
-    e.preventDefault();
-    if (!cancelReason.trim()) {
-      toast.error('Cancellation reason is required');
-      return;
-    }
-    setCancelLoading(true);
+  // ── Actions: Remove — permanent, no reason needed. ──
+  const handleRemove = async (res) => {
+    if (!window.confirm(`Remove the booking for ${res.customerName}? This can't be undone.`)) return;
+    setRemovingId(res.id);
     try {
-      await cancelReservation(cancelData.id, { reason: cancelReason.trim() });
-      toast.success('Reservation cancelled successfully');
-      setCancelData(null);
-      fetchReservationsList();
+      await deleteReservation(res.id);
+      toast.success('Reservation removed');
+      setReservations(prev => prev.filter(r => r.id !== res.id));
       fetchPcsAndSessions();
     } catch (err) {
-      toast.error(err.response?.data?.error || err.response?.data?.message || 'Failed to cancel reservation');
+      toast.error(err.response?.data?.error || err.response?.data?.message || 'Failed to remove reservation');
     } finally {
-      setCancelLoading(false);
+      setRemovingId(null);
     }
   };
 
@@ -706,27 +693,24 @@ export default function ReservationsPage() {
                         )}
                       </div>
 
-                      {/* Arrived reminder toggle + Cancel (only while still Pending) */}
+                      {/* Mark Arrived (one-way — checking it off drops the card from this list,
+                          same as ticking a todo item) + Remove (only while still Pending) */}
                       <div className="flex gap-2 shrink-0">
                         <button
-                          onClick={() => handleToggleArrived(res)}
-                          title={res.arrived ? 'Mark as not arrived' : 'Mark as arrived'}
-                          className={`p-2 border rounded flex items-center gap-1.5 text-xs font-semibold transition-colors ${
-                            res.arrived
-                              ? 'border-pc-active/40 bg-pc-active/10 text-pc-active hover:bg-pc-active/20'
-                              : 'border-border bg-bg-3 text-text-3 hover:text-text-2'
-                          }`}
+                          onClick={() => handleMarkArrived(res)}
+                          title="Mark arrived"
+                          className="p-2 border border-border bg-bg-3 text-text-3 hover:text-pc-active hover:border-pc-active/40 hover:bg-pc-active/10 rounded flex items-center gap-1.5 text-xs font-semibold transition-colors"
                         >
-                          {res.arrived ? <CheckCircle className="w-3.5 h-3.5" /> : <User className="w-3.5 h-3.5" />}
-                          {res.arrived ? 'Arrived' : 'Not Arrived'}
+                          <CheckCircle className="w-3.5 h-3.5" /> Arrived
                         </button>
                         {isPendingState && (
                           <button
-                            onClick={() => handleCancelClick(res)}
-                            title="Cancel Reservation"
-                            className="p-2 border border-neon-red/40 bg-neon-red/10 text-neon-red rounded hover:bg-neon-red/20 transition-colors flex items-center gap-1.5 text-xs font-semibold"
+                            onClick={() => handleRemove(res)}
+                            disabled={removingId === res.id}
+                            title="Remove Reservation"
+                            className="p-2 border border-neon-red/40 bg-neon-red/10 text-neon-red rounded hover:bg-neon-red/20 transition-colors flex items-center gap-1.5 text-xs font-semibold disabled:opacity-50"
                           >
-                            <Ban className="w-3.5 h-3.5" /> Cancel
+                            <Trash2 className="w-3.5 h-3.5" /> Remove
                           </button>
                         )}
                       </div>
@@ -738,63 +722,6 @@ export default function ReservationsPage() {
           </div>
         </div>
       </div>
-
-      {/* ── Cancel Reservation Modal ── */}
-      {cancelData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-[fadeIn_0.15s_ease-out]">
-          <div className="w-full max-w-sm bg-bg-2 border border-border rounded-xl shadow-2xl overflow-hidden">
-            <div className="px-5 py-4 border-b border-border bg-bg-3 flex items-center justify-between">
-              <div>
-                <h2 className="font-heading font-bold text-text uppercase tracking-wider text-sm flex items-center gap-2">
-                  <Ban className="w-4 h-4 text-neon-red" />
-                  Cancel Booking — {cancelData.customerName}
-                </h2>
-                <p className="text-text-3 text-[10px] font-mono mt-0.5">
-                  Please provide a reason to cancel this reservation slot.
-                </p>
-              </div>
-              <button onClick={() => setCancelData(null)} className="text-text-3 hover:text-text text-xl">&times;</button>
-            </div>
-            <form onSubmit={handleCancelSubmit} className="p-5 space-y-4">
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-mono font-semibold text-text-2 uppercase tracking-wider block">
-                  Cancellation Reason *
-                </label>
-                <textarea
-                  value={cancelReason}
-                  onChange={(e) => setCancelReason(e.target.value)}
-                  placeholder="Provide reason for deletion..."
-                  rows={3}
-                  className="w-full bg-bg-3 border border-border rounded px-3 py-2 text-xs text-text placeholder-text-3 focus:border-neon-red focus:outline-none transition-colors resize-none"
-                  required
-                  autoFocus
-                />
-              </div>
-              <div className="flex justify-end gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => setCancelData(null)}
-                  className="px-4 py-2 border border-border bg-transparent text-text-2 rounded text-xs font-semibold hover:bg-bg-3 transition-colors"
-                >
-                  Close
-                </button>
-                <button
-                  type="submit"
-                  disabled={cancelLoading || !cancelReason.trim()}
-                  className="px-4 py-2 bg-neon-red/10 border border-neon-red/50 text-neon-red rounded text-xs font-semibold hover:bg-neon-red/20 transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
-                >
-                  {cancelLoading ? (
-                    <span className="w-3.5 h-3.5 border border-current border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    'Cancel Booking'
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
     </div>
   );
 }

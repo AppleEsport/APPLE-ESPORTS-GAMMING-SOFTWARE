@@ -120,23 +120,27 @@ public class BranchVersionReporterService : BackgroundService
             return;
         }
 
-        // How many of this branch's gaming PCs are on the current version. Counted from what the
-        // PCs themselves last reported (Pc.AgentVersion, written by AgentHeartbeat on the
-        // PcStatusHub) rather than assumed, so "12 of 16 up to date" means twelve machines said
-        // so - not a hardcoded zero, which is what this used to read regardless of reality,
-        // because nothing before AgentVersion existed ever recorded what a gaming PC was
-        // actually running.
+        // How many of this branch's gaming PCs are on the current version. Counted from
+        // Pc.AppVersion - what AppleEsports.exe itself last reported (PublicController's
+        // pcs/{id}/app-version, called from MainForm.cs every 30 seconds) - not Pc.AgentVersion,
+        // which is a second, wholly independent program on the same machine (the screen-lock
+        // agent, AppleEsportsAgent.exe) with its own installer component and its own self-update
+        // path. Counting against AgentVersion meant a gaming PC could update for real - the
+        // program a customer actually plays through - and this count would still say it had
+        // not, sometimes for good, if that one release's agent build was never uploaded or the
+        // agent's own update simply had not landed yet. AppVersion is what "the gaming PC got
+        // updated" actually means to somebody looking at the screen.
         //
         // AwaitingSetup rows are excluded from the denominator too. Those are seats nobody has
         // physically claimed yet - a bulk-created placeholder, not a real machine - and counting
         // them here is why this page could read "0 of 35 up to date" against a branch that only
         // has sixteen real gaming PCs on the floor: the other nineteen were never going to report
-        // a version because there is no agent running on them to report one.
+        // a version because there is no app running on them to report one.
         var totalPcs = await db.Pcs.CountAsync(
             p => p.BranchId == branch.Id && !p.IsDeleted && p.State != PcState.AwaitingSetup, ct);
         var upToDatePcs = await db.Pcs.CountAsync(
             p => p.BranchId == branch.Id && !p.IsDeleted && p.State != PcState.AwaitingSetup
-                 && p.AgentVersion == RunningVersion, ct);
+                 && p.AppVersion == RunningVersion, ct);
 
         // Written to the branch's OWN database first, before Head Office is even contacted.
         //

@@ -25,6 +25,7 @@ export function OverlaySocketProvider({ children, pcId, isMinimized: initialMini
   const [sessionLoading, setSessionLoading] = useState(true);
   const [walletApprovalRequest, setWalletApprovalRequest] = useState(null);
   const [branchId, setBranchId] = useState(null);
+  const [pcState, setPcState] = useState(null);
 
   const idleTimeoutRef = useRef(null);
   const heartbeatIntervalRef = useRef(null);
@@ -90,6 +91,7 @@ export function OverlaySocketProvider({ children, pcId, isMinimized: initialMini
           if (pcRes.data.data.branchId) {
             setBranchId(pcRes.data.data.branchId);
           }
+          setPcState(pcRes.data.data.state ?? null);
         }
       } catch (e) {
         console.warn('[Overlay] Failed to fetch PC rate, using default 100:', e);
@@ -742,6 +744,7 @@ export function OverlaySocketProvider({ children, pcId, isMinimized: initialMini
       walletApprovalRequest,
       respondToWalletApproval,
       branchId,
+      pcState,
       memberCheckout,
       lowBalanceWarning,
       dismissLowBalanceWarning: () => setLowBalanceWarning(null)

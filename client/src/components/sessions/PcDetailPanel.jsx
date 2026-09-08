@@ -229,10 +229,21 @@ export default function PcDetailPanel({
       </div>
 
       <div className="p-4 space-y-3 overflow-y-auto">
-        {/* Agent version - the one place an operator can actually check "has this PC taken the
-            update yet" instead of trusting the branch-wide count alone. Consoles have no agent
-            at all (see PcsController.Create's isConsole handling), so this is skipped for them
-            rather than showing a permanent, meaningless "not reported yet". */}
+        {/* App version - the program itself, and the one the Updates page's "N of M up to date"
+            count is actually judged against. The one place an operator can check "has this PC
+            taken the update yet" instead of trusting the branch-wide count alone. Consoles run
+            the same app, so this is shown for them too, unlike the agent version below. */}
+        <div className="flex justify-between items-center text-[10px] font-mono text-text-3">
+          <span>App version</span>
+          <span className={pc.appVersion ? 'text-text-2' : 'italic'}>
+            {pc.appVersion || 'not reported yet'}
+          </span>
+        </div>
+
+        {/* Agent version - the separate screen-lock agent (AppleEsportsAgent.exe), which
+            self-updates on its own schedule and can lag behind the app above. Consoles have no
+            agent at all (see PcsController.Create's isConsole handling), so this is skipped for
+            them rather than showing a permanent, meaningless "not reported yet". */}
         {pc.zone !== 'Console' && (
           <div className="flex justify-between items-center text-[10px] font-mono text-text-3">
             <span>Agent version</span>

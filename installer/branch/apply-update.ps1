@@ -95,6 +95,37 @@ try {
     $offered = [version]$latest.data.version
     if ($offered -le $installed) { exit 0 }
 
+    # Never installs under a live session, on a gaming PC or the counter. A gaming PC's own
+    # config carries the seat it is (PcId) - ask about that one seat specifically. Anything
+    # without a PcId is the counter, which has no session of its own but runs the API and
+    # database every seat depends on - ask about the whole branch instead. Fails closed: if
+    # this cannot be answered, the update waits rather than risking landing mid-session, same
+    # as BranchBusySignal.jsx's own reasoning for the dashboard side of this same question.
+    $config = Get-Content $ConfigPath -Raw | ConvertFrom-Json
+    try {
+        if ($config.PcId) {
+            $session = Invoke-RestMethod -Uri "$baseUrl/api/public/session/pc/$($config.PcId)" -TimeoutSec 15
+            $busy = $session.success -and $session.data -and $session.data.sessionStatus -eq 'active'
+        }
+        elseif ($config.BranchId) {
+            $status = Invoke-RestMethod -Uri "$baseUrl/api/public/branches/$($config.BranchId)/busy" -TimeoutSec 15
+            $busy = $status.success -and $status.data.busy
+        }
+        else {
+            Write-Log 'Config has no PcId or BranchId to check for an active session against. Skipping this pass to be safe.'
+            exit 0
+        }
+    }
+    catch {
+        Write-Log "Could not check for an active session ($($_.Exception.Message)). Skipping this pass to be safe."
+        exit 0
+    }
+
+    if ($busy) {
+        Write-Log "A session is active here right now. Skipping this pass - will try again in 15 minutes."
+        exit 0
+    }
+
     Write-Log "Installed $installed, offered $offered. Updating."
 
     # Only SYSTEM and Administrators may write here. This is the line that stops a user-supplied

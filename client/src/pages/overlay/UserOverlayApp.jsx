@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useParams, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { useParams, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { OverlaySocketProvider } from '../../contexts/OverlaySocketContext';
 import OverlayNavBar from './components/OverlayNavBar';
 import SessionInfoScreen from './screens/SessionInfoScreen';
@@ -28,6 +28,11 @@ function postToHost(payload) {
 const OVERLAY_SIZES = {
   bubble: { width: 60, height: 60 },
   panel: { width: 380, height: 620 },
+  // Not a real widget size - the host clips "bubble" mode to a circle matching whatever size it
+  // is given (see MainForm.cs's SetFloatingShape), so a 1x1 request becomes a single-pixel dot,
+  // not a visible corner button. That is the point during maintenance: nothing on screen should
+  // read as "our app is still here" while someone is using the PC as an ordinary desktop.
+  hidden: { width: 1, height: 1 },
 };
 
 // Drag-to-move for the floating widget (bubble or expanded panel). The native window is what
@@ -67,7 +72,10 @@ function useDragToMoveHost() {
 
 // Extracted inner content to consume socket context
 function OverlayContent({ isMinimized, setIsMinimized }) {
-  const { sessionData, sessionLoading } = useOverlaySocket();
+  const { pcId } = useParams();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { sessionData, sessionLoading, pcState } = useOverlaySocket();
   const bubbleDrag = useDragToMoveHost();
   const panelDrag = useDragToMoveHost();
 
@@ -75,6 +83,14 @@ function OverlayContent({ isMinimized, setIsMinimized }) {
   const isTimeUp = sessionData && sessionData.remainingTime !== null && sessionData.remainingTime <= 0;
   const isSessionEnded = sessionData && sessionData.sessionStatus !== 'active';
   const showLockScreen = !sessionLoading && (!sessionData || isTimeUp || isSessionEnded);
+
+  // A PC under maintenance never has a session to interrupt (MarkMaintenanceAsync refuses to
+  // flag one that does). Handled the same way an active session already is: the app shrinks
+  // itself out of the way instead of covering the screen, so whoever is working on this PC has
+  // the real Windows desktop to actually use it - not a locked kiosk screen of any kind. Unlike
+  // an active session's bubble, nothing is drawn in it at all (see the render below), since
+  // there is no session to reopen and nothing here for a customer to click.
+  const isUnderMaintenance = pcState === 'UnderMaintenance';
 
   // Tells the native shell that somebody is playing here right now, so it can hold an update
   // back instead of restarting the machine's app under them - MainForm.IsSessionRunningAsync
@@ -110,8 +126,22 @@ function OverlayContent({ isMinimized, setIsMinimized }) {
     if (sessionData?.sessionStatus === 'active' && sessionData.sessionId !== lastOpenedSessionId.current) {
       lastOpenedSessionId.current = sessionData.sessionId;
       setIsMinimized(false);
+
+      // Forces the panel back to the session screen, regardless of whatever route was left
+      // over from before this session existed. Without this, a member who had just been on
+      // "/login" (the gate's own member-login screen, or the panel's - either one) kept that
+      // path in the browser's own history even after it stopped being shown: while the lock
+      // screen covered the whole window nothing here was ever unmounted or reset, since
+      // <Routes> only exists inside the panel branch below. The moment the new session flips
+      // the layout over to the panel, <Routes> mounts for the first time and matches whatever
+      // path was still sitting there - "Member Login" flashing back on screen for a customer
+      // who had just finished logging in and was never on that screen with the panel showing
+      // at all.
+      if (location.pathname !== `/pc-overlay/${pcId}/`) {
+        navigate(`/pc-overlay/${pcId}/`, { replace: true });
+      }
     }
-  }, [sessionData?.sessionId, sessionData?.sessionStatus, setIsMinimized]);
+  }, [sessionData?.sessionId, sessionData?.sessionStatus, setIsMinimized, navigate, pcId, location.pathname]);
 
   // Tells MainForm how big a window to actually be: full screen for the walk-in/member gate
   // and the locked "session ended" screen (both render themselves fixed inset-0 and need the
@@ -126,15 +156,25 @@ function OverlayContent({ isMinimized, setIsMinimized }) {
   // the quick-panel a 284x463 viewport for a layout that needs 380x620, and its header and nav
   // bar filled the window with the session content left nowhere to go. Only the page can
   // measure this ratio, so the page is what reports it.
-  const layoutMode = showLockScreen ? 'full' : isMinimized ? 'bubble' : 'panel';
+  const layoutMode = isUnderMaintenance ? 'bubble' : showLockScreen ? 'full' : isMinimized ? 'bubble' : 'panel';
   useEffect(() => {
-    const size = OVERLAY_SIZES[layoutMode];
+    // "bubble" mode itself is what the host needs to hear to position this window like a
+    // corner widget rather than a full-screen gate - the size is a separate question, and
+    // during maintenance it is the 1x1 "hidden" size rather than the real bubble's 60x60.
+    const size = isUnderMaintenance ? OVERLAY_SIZES.hidden : OVERLAY_SIZES[layoutMode];
     postToHost({
       type: 'overlay-layout',
       mode: layoutMode,
       ...(size && { width: size.width, height: size.height, dpr: window.devicePixelRatio || 1 }),
     });
-  }, [layoutMode]);
+  }, [layoutMode, isUnderMaintenance]);
+
+  // Same bubble-sized window an active session already uses to stay out of the way - just
+  // with nothing drawn inside it, so the desktop underneath reads as a normal, empty PC rather
+  // than one with an app window (however small) sitting on top of it.
+  if (isUnderMaintenance) {
+    return null;
+  }
 
   if (showLockScreen) {
     return (

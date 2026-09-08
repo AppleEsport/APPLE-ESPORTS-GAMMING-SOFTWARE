@@ -19,6 +19,11 @@ public class PcStatusDto
     /// console) it has no agent to report one at all.</summary>
     public string? AgentVersion { get; set; }
 
+    /// <summary>The version of AppleEsports.exe itself this PC last reported - the program a
+    /// customer actually plays through, separate from the screen-lock agent above. See
+    /// Pc.AppVersion for why the two are tracked apart.</summary>
+    public string? AppVersion { get; set; }
+
     /// <summary>
     /// True if PcStatusHub's shutdown command was sent to this PC and it has not reconnected
     /// since (see Pc.PoweredOff). Combined on the frontend with State being Active/AwaitingBilling

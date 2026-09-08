@@ -585,6 +585,11 @@ public sealed class MainForm : Form
                 // Never let an update check take the app down with it.
             }
 
+            // Piggybacked on the same loop rather than a second timer - this app already wakes
+            // up every 30 seconds for the update check, and reporting "what am I running" costs
+            // nothing extra to ask at the same moment.
+            await ReportOwnAppVersionOnceAsync();
+
             // Woken early when somebody presses "Check for updates now", so the button is a
             // real check rather than a message saying one will happen eventually.
             try { await Task.Delay(CheckEvery, _checkNow.Token); }
@@ -627,13 +632,27 @@ public sealed class MainForm : Form
         // appearing over a customer's game every fifteen minutes.
         if (KioskGuard.AutoUpdateTaskInstalled()) return;
 
-        // Installed as soon as it is published, whoever happens to be playing.
+        // Reversed back, on the owner's later and equally explicit instruction: an update must
+        // never land under somebody mid-session, on a gaming PC or the counter. The version of
+        // this comment that used to be here removed exactly this wait, reasoning that the
+        // restart was cheap enough not to matter - in practice it was not: a gaming PC came back
+        // needing its session manually resumed rather than picking up where it left off, which
+        // is the disruption this exists to prevent. IsSessionRunningAsync already existed for
+        // this - built, and never actually called from anywhere - so this is wiring in a check
+        // that was always meant to be here.
         //
-        // This reverses the wait that used to sit here, on the owner's explicit and repeated
-        // instruction: updates start immediately, nothing held back, on gaming PCs and the counter
-        // alike. Written down because the wait was not arbitrary, and whoever reads this next
-        // should see a decision rather than assume an oversight.
-        //
+        // Skipping rather than waiting: this method already runs on CheckForUpdateOnceAsync's
+        // own timer (see wherever that is scheduled), so a busy machine simply tries again next
+        // time round rather than blocking here.
+        if (await IsSessionRunningAsync())
+        {
+            await ReportUpdateProgressAsync(
+                "waiting", 0,
+                $"Version {available.Version} is available but a session is active here right now. " +
+                "Will install once it ends.");
+            return;
+        }
+
         // On a gaming PC it costs almost nothing. The app is replaced and restarted, so the
         // overlay goes and comes back; the session is a row in the branch database and the
         // installer never touches it, so the customer's time and money are safe either way.
@@ -768,6 +787,39 @@ public sealed class MainForm : Form
         catch
         {
             // Reporting is not the job. The update is.
+        }
+    }
+
+    /// <summary>
+    /// Tells the branch what version of AppleEsports.exe this gaming PC is actually running, so
+    /// the Updates page's "N of M gaming PCs up to date" is judged against the program a
+    /// customer plays through rather than the separate screen-lock agent
+    /// (see Pc.AppVersion/BranchVersionReporterService for why those two used to disagree).
+    ///
+    /// Only a gaming PC has a single Pc row of its own to report against - an operator counter
+    /// PC is the branch itself, already covered by BranchVersionReporterService, and has no
+    /// PcId to report one of many seats against.
+    /// </summary>
+    private async Task ReportOwnAppVersionOnceAsync()
+    {
+        if (!_config.IsUserPc || _config.PcId is not { } pcId) return;
+
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
+
+            var payload = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                version = UpdateService.InstalledVersion.ToString(3),
+            });
+
+            await http.PostAsync(
+                $"{_config.NormalisedUrl()}/api/public/pcs/{pcId}/app-version",
+                new StringContent(payload, System.Text.Encoding.UTF8, "application/json"));
+        }
+        catch
+        {
+            // Best-effort telemetry - never worth taking the app down over.
         }
     }
 

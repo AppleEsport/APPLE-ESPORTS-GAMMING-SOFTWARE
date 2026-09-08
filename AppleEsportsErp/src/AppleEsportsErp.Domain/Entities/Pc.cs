@@ -86,6 +86,20 @@ public class Pc
     public string? AgentVersion { get; set; }
 
     /// <summary>
+    /// The version of AppleEsports.exe itself last reported by this gaming PC - the program a
+    /// customer actually sees and plays through, and the one apply-update.ps1 updates. Separate
+    /// from <see cref="AgentVersion"/> on purpose: that field is the screen-lock agent
+    /// (AppleEsportsAgent.exe), a second, independent program on the same machine with its own
+    /// installer component and its own self-update path (AgentSelfUpdater.cs) - a gaming PC can
+    /// update one without the other, so "N of M gaming PCs up to date" read the wrong program
+    /// entirely and could sit stuck reporting PCs as behind for good after a real, successful
+    /// update, if that update never touched the agent (or the agent's own release upload was
+    /// missed for that version). This is what the count should be judged against - it is what
+    /// "the gaming PC got updated" actually means to a person looking at the screen.
+    /// </summary>
+    public string? AppVersion { get; set; }
+
+    /// <summary>
     /// True once <see cref="AppleEsportsErp.Api.Hubs.PcStatusHub.SendShutdownCommand"/> or
     /// SendShutdownAllCommand has told this PC to power off, and not yet cleared by
     /// <see cref="AppleEsportsErp.Api.Hubs.PcOverlayHub.ConnectPc"/> seeing it come back.

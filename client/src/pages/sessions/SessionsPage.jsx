@@ -204,9 +204,18 @@ export default function SessionsPage() {
       fetchPcs();
     });
 
+    // A PC was flagged/unflagged for maintenance (or added/removed/transferred) —
+    // PcManagementService broadcasts this on the same hub as PcStatusChanged, but under a
+    // different event name, so without this the screen kept showing "Maintenance" (no Walk-in/
+    // Member options) after an operator restored a PC until the app was reopened.
+    const unsubPcManagement = subscribe(SIGNALR_HUBS.PC_STATUS, 'PcManagementUpdated', () => {
+      fetchPcs();
+    });
+
     return () => {
       unsubPcStatus();
       unsubPricing();
+      unsubPcManagement();
     };
   }, [isHubUp, subscribe, SIGNALR_HUBS.PC_STATUS, targetBranchId, fetchPcs]);
 
