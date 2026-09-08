@@ -68,6 +68,18 @@ public class BranchHeartbeatController : ControllerBase
 
     private static readonly JsonSerializerOptions CaseInsensitiveJson = new() { PropertyNameCaseInsensitive = true };
 
+    /// <summary>
+    /// Caps how often a single PC's PoweredOff transition gets its own audit row.
+    ///
+    /// A PC whose own power detection is unstable can report a change on every three-second
+    /// beat forever - a real reported difference each time, not a bug in this method, but one
+    /// the audit trail should not be forced to carry twenty times a minute. The dashboard's own
+    /// PC.PoweredOff field is unaffected: it is written from every beat regardless, so it still
+    /// tracks whatever the branch currently says. Only the extra audit row is throttled.
+    /// </summary>
+    private static readonly TimeSpan PoweredOffAuditThrottle = TimeSpan.FromMinutes(1);
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, DateTimeOffset> _recentPoweredOffAudit = new();
+
     public BranchHeartbeatController(
         AppDbContext db, IAuditService audit, IHubNotificationService hubNotifier, ILogger<BranchHeartbeatController> logger)
     {
@@ -603,13 +615,14 @@ public class BranchHeartbeatController : ControllerBase
             // around the same time, that gap IS the problem - the heartbeat left the branch
             // reporting one thing and Head Office never heard it.
             //
-            // The actual field assignment below happens BEFORE this, not after - AuditService.
-            // LogAsync calls SaveChangesAsync on this same context, and a save that fires while
-            // PoweredOff is still the old value persists nothing for it. That produced exactly
-            // one AE-CTL machine's PoweredOff flapping the same audit row every single heartbeat
-            // forever: the row committed, the field never did, so next beat saw the same "changed"
-            // value again. Reordering so the property is already staged before the save that logs
-            // it is what makes the two actually happen together.
+            // The field assignment happens before the log call (not after) so a save triggered
+            // by AuditService.LogAsync - which shares this DbContext - always commits the two
+            // together. That alone was not the whole story: one AE-CTL machine's own power
+            // detection is itself flapping true/false on every single beat, three seconds apart,
+            // which is a real (if noisy) reported change each time, not a persistence bug. The
+            // dashboard still needs the live value, but the audit trail does not need the same
+            // flap recorded twenty times a minute forever - so this is throttled to at most once
+            // per PC per minute, independent of whether the underlying value is actually stable.
             bool poweredOffChanged = pc.PoweredOff != reported.PoweredOff;
 
             pc.State = state;
@@ -621,8 +634,12 @@ public class BranchHeartbeatController : ControllerBase
             pc.UpdatedAt = DateTimeOffset.UtcNow;
             changed.Add(pc.Id);
 
-            if (poweredOffChanged)
+            var alreadyLoggedRecently = _recentPoweredOffAudit.TryGetValue(pc.Id, out var lastLoggedAt)
+                && DateTimeOffset.UtcNow - lastLoggedAt < PoweredOffAuditThrottle;
+
+            if (poweredOffChanged && !alreadyLoggedRecently)
             {
+                _recentPoweredOffAudit[pc.Id] = DateTimeOffset.UtcNow;
                 await _audit.LogAsync(new AuditEntry
                 {
                     UserRole = "System",
