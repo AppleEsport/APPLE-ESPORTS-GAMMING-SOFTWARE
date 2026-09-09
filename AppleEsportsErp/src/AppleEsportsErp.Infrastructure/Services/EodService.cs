@@ -36,31 +36,36 @@ public class EodService : IEodService
             .ToListAsync();
 
         // Fetch Registers
-        // Selected by whether the register was actually open at any point during this calendar
-        // day, not by its own BusinessDay stamp - a register opened yesterday and still trading
-        // past midnight has to appear in today's report too, or today reads as if the shop
-        // never opened its drawer at all.
+        // Two, and only two, things belong to today: a register actually opened today (the
+        // ordinary case), and a register opened before today that is STILL OPEN right now - a
+        // branch genuinely trading straight through midnight with nothing closed yet. Anything
+        // opened before today that has SINCE closed belongs entirely to the day(s) it was
+        // actually open for, never to today, no matter how early this morning it happened to
+        // close - it was already handed over and counted before today's business began, and
+        // that count is what closes out THAT register's own day's report already, not a preview
+        // of this one.
+        //
+        // The bug this replaces: a shift that closed at, say, 00:20 last night still touched
+        // today's ClosedAt >= dayStart window, so it kept appearing in today's report too -
+        // showing yesterday's already-settled opening balance and already-explained shortfall as
+        // if today had somehow already started, on a morning nobody had opened anything yet. The
+        // owner's own words for what this must do instead: "it should be 0 everywhere because
+        // today is new day, opening balance is not yet open."
         //
         // BusinessDay alone used to be enough, because the register itself used to be force-
         // rolled into a fresh one at midnight (see AuthService.CloseFinishedTradingDaysAsync's
         // own history). That rollover was removed on the owner's explicit instruction after it
         // produced duplicate register rows on a branch that was genuinely still trading - so a
-        // register spanning midnight is now a normal, expected thing, and this query has to
-        // find it under both days it touches, not just the one it started on.
-        //
-        // What was here before that ended with "|| r.Status == CashRegisterStatus.Open", with
-        // no date on it at all. That pulled in every register still open on any day in history.
-        // On the live system that was 21 registers going back three weeks, and the day's opening
-        // balance read Rs 5,500 against a drawer that had Rs 100 in it. A register left open by
-        // a crash is a problem for the day it belongs to, never for today - openedAt < dayEnd
-        // still excludes anything opened in the future, and closedAt >= dayStart (or never
-        // closed at all) still excludes anything that was already shut before today began.
+        // register spanning midnight is now a normal, expected thing, which is exactly the one
+        // case (still open, never closed) this still has to find under both days it touches.
         var registers = await _unitOfWork.Repository<CashRegister>().Query()
             .Include(r => r.Operator)
             .Include(r => r.CashTransactions)
             .Where(r => r.BranchId == branchId
-                && r.OpenedAt < dayEnd
-                && (r.ClosedAt == null || r.ClosedAt >= dayStart))
+                && (
+                    (r.OpenedAt >= dayStart && r.OpenedAt < dayEnd)
+                    || (r.OpenedAt < dayStart && r.Status == CashRegisterStatus.Open)
+                ))
             .OrderBy(r => r.OpenedAt)
             .ToListAsync();
 
