@@ -36,19 +36,31 @@ public class EodService : IEodService
             .ToListAsync();
 
         // Fetch Registers
-        // Selected by the trading day the register itself belongs to, which is the day it was
-        // opened under. The register table already records that, and it is the same 06:00-06:00
-        // day the money is counted by everywhere else.
+        // Selected by whether the register was actually open at any point during this calendar
+        // day, not by its own BusinessDay stamp - a register opened yesterday and still trading
+        // past midnight has to appear in today's report too, or today reads as if the shop
+        // never opened its drawer at all.
         //
-        // What was here before ended with "|| r.Status == CashRegisterStatus.Open", with no
-        // date on it. That pulled in every register still open on any day in history. On the
-        // live system that was 21 registers going back three weeks, and the day's opening
-        // balance read Rs 5,500 against a drawer that had Rs 100 in it. A register left open
-        // by a crash is a problem for the day it belongs to, never for today.
+        // BusinessDay alone used to be enough, because the register itself used to be force-
+        // rolled into a fresh one at midnight (see AuthService.CloseFinishedTradingDaysAsync's
+        // own history). That rollover was removed on the owner's explicit instruction after it
+        // produced duplicate register rows on a branch that was genuinely still trading - so a
+        // register spanning midnight is now a normal, expected thing, and this query has to
+        // find it under both days it touches, not just the one it started on.
+        //
+        // What was here before that ended with "|| r.Status == CashRegisterStatus.Open", with
+        // no date on it at all. That pulled in every register still open on any day in history.
+        // On the live system that was 21 registers going back three weeks, and the day's opening
+        // balance read Rs 5,500 against a drawer that had Rs 100 in it. A register left open by
+        // a crash is a problem for the day it belongs to, never for today - openedAt < dayEnd
+        // still excludes anything opened in the future, and closedAt >= dayStart (or never
+        // closed at all) still excludes anything that was already shut before today began.
         var registers = await _unitOfWork.Repository<CashRegister>().Query()
             .Include(r => r.Operator)
             .Include(r => r.CashTransactions)
-            .Where(r => r.BranchId == branchId && r.BusinessDay == businessDay)
+            .Where(r => r.BranchId == branchId
+                && r.OpenedAt < dayEnd
+                && (r.ClosedAt == null || r.ClosedAt >= dayStart))
             .OrderBy(r => r.OpenedAt)
             .ToListAsync();
 
@@ -152,7 +164,45 @@ public class EodService : IEodService
 
         // The money the drawer started the day with - the first shift's opening float, not the
         // sum of every shift's opening.
-        report.Cash.TotalOpeningBalance = firstRegister?.OpeningBalance ?? 0m;
+        //
+        // Not simply firstRegister.OpeningBalance any more. That register can now be one still
+        // spanning midnight from yesterday (see the query above), and its OpeningBalance is
+        // whatever the drawer held when IT opened - yesterday, or earlier - not what it held
+        // the moment today actually began. Reconstructed instead as: what it opened with, plus
+        // every cash movement against it that happened before today started. A branch has one
+        // physical drawer at a time, so "before today started" is unambiguous even without a
+        // direct link from a payment to the register it was collected into.
+        if (firstRegister is null)
+        {
+            report.Cash.TotalOpeningBalance = 0m;
+        }
+        else if (firstRegister.OpenedAt >= dayStart)
+        {
+            report.Cash.TotalOpeningBalance = firstRegister.OpeningBalance;
+        }
+        else
+        {
+            var cashSalesBeforeToday = await _unitOfWork.Repository<Payment>().Query()
+                .Where(p => p.BranchId == branchId
+                    && p.CreatedAt >= firstRegister.OpenedAt && p.CreatedAt < dayStart)
+                .SumAsync(p => p.CashAmount);
+
+            var topUpCashBeforeToday = await _unitOfWork.Repository<WalletTransaction>().Query()
+                .Where(w => w.BranchId == branchId && w.Action == WalletAction.Recharge
+                    && w.CreatedAt >= firstRegister.OpenedAt && w.CreatedAt < dayStart)
+                .SumAsync(w => w.CashAmount);
+
+            var movementBeforeToday = firstRegister.CashTransactions
+                .Where(t => t.CreatedAt < dayStart)
+                .Sum(t => t.TransactionType switch
+                {
+                    "petty_expense" or "withdrawal" => -Math.Abs(t.CashAmount),
+                    _ => t.CashAmount,
+                });
+
+            report.Cash.TotalOpeningBalance =
+                firstRegister.OpeningBalance + cashSalesBeforeToday + topUpCashBeforeToday + movementBeforeToday;
+        }
 
         // Only the part of each top-up that was actually paid in notes. TotalWalletTopUps is
         // every top-up whatever the method, which is right for revenue and wrong for a drawer:
@@ -162,9 +212,19 @@ public class EodService : IEodService
             .Where(w => w.Action == WalletAction.Recharge)
             .Sum(w => w.CashAmount);
 
-        report.Cash.TotalCashSales = registers.Sum(r => r.TotalCashSales) + cashFromTopUps;
+        // From payments themselves, filtered to today, rather than a register's own running
+        // TotalCashSales column - that column is not split by day, so on a register spanning
+        // midnight it would carry yesterday's sales into today's report too. Payments already
+        // has to be filtered by its own CreatedAt for the Payment Methods section above; reusing
+        // that same, already-correct figure here is what keeps this section unable to disagree
+        // with it.
+        report.Cash.TotalCashSales = report.PaymentMethods.TotalCash + cashFromTopUps;
 
-        var allCashTxs = registers.SelectMany(r => r.CashTransactions).ToList();
+        // Filtered to today for the same reason - a spanning register's CashTransactions include
+        // rows from yesterday too, which must not be counted again in today's report.
+        var allCashTxs = registers.SelectMany(r => r.CashTransactions)
+            .Where(t => t.CreatedAt >= dayStart && t.CreatedAt < dayEnd)
+            .ToList();
         report.Cash.TotalCashInwards = allCashTxs.Where(t => t.TransactionType == "inward").Sum(t => t.CashAmount);
         report.Cash.TotalPettyExpenses = allCashTxs.Where(t => t.TransactionType == "petty_expense").Sum(t => Math.Abs(t.CashAmount));
 

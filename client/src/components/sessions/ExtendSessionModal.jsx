@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { RefreshCw, X, Clock } from 'lucide-react';
@@ -13,6 +13,30 @@ export default function ExtendSessionModal({ pc, onClose, onActionSuccess }) {
 
   const [durationMinutes, setDurationMinutes] = useState(60);
 
+  // The branch's real plans for this PC - a 4-hour extension has to cost what a 4-hour plan
+  // actually costs (Rs 180), not (4 x hourly rate). Fetched once per PC rather than assumed
+  // from ratePerHour alone, the same plans a customer's own session-start screen shows, so this
+  // preview can never say a different number than what the operator is about to actually charge.
+  const [plans, setPlans] = useState(null);
+  useEffect(() => {
+    setPlans(null);
+    if (!pc?.id) return;
+    let alive = true;
+    api.get(`/public/pcs/${pc.id}/plans`)
+      .then(({ data }) => { if (alive && data?.success) setPlans(data.data); })
+      .catch(() => { /* falls back to the hourly-rate estimate below */ });
+    return () => { alive = false; };
+  }, [pc?.id]);
+
+  // Exact-duration package wins, same rule the server itself now applies
+  // (SessionService.ExtendSessionAsync) - this is only ever a preview of that, never the
+  // authority on what gets charged.
+  const additionalAmount = useMemo(() => {
+    const matched = plans?.find(p => p.duration === durationMinutes && !p.isPostpaid);
+    if (matched) return matched.price;
+    return (durationMinutes / 60) * (pc?.ratePerHour || 0);
+  }, [plans, durationMinutes, pc?.ratePerHour]);
+
   if (!pc) return null;
 
   const handleExtend = async (e) => {
@@ -20,9 +44,6 @@ export default function ExtendSessionModal({ pc, onClose, onActionSuccess }) {
     setLoading(true);
     setError(null);
     try {
-      const ratePerHour = pc.ratePerHour || 0;
-      const additionalAmount = (durationMinutes / 60) * ratePerHour;
-      
       await api.post(`/sessions/${pc.activeSessionId}/extend`, {
         additionalMinutes: durationMinutes,
         additionalAmount: additionalAmount,
@@ -98,7 +119,7 @@ export default function ExtendSessionModal({ pc, onClose, onActionSuccess }) {
             <div className="bg-bg-3 rounded border border-border p-4 flex justify-between items-center gap-4">
               <span className="text-xs text-text-2 font-mono uppercase tracking-wider">Additional Charge</span>
               <span className="font-bold text-neon-orange font-mono text-lg">
-                ₹{Math.ceil((durationMinutes / 60) * (pc.ratePerHour || 0))}
+                ₹{Math.ceil(additionalAmount)}
               </span>
             </div>
 

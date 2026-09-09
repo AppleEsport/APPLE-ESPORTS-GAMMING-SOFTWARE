@@ -65,6 +65,22 @@ public class BranchConfigDto
     /// two different databases, only one of which anybody was actually looking at.
     /// </summary>
     public List<BranchPricingProfileConfigDto> PricingProfiles { get; set; } = new();
+
+    /// <summary>
+    /// Every Admin-level Users-table account, Head Office's own PIN and all.
+    ///
+    /// An Admin created at Head Office never reached any branch at all - not a caching problem,
+    /// nothing to invalidate, because nothing had ever built the pipe in the first place. Quick
+    /// Admin Switch reads a branch's own LOCAL Users table (AuthService.GetAvailableAdminsForSwitchAsync),
+    /// and Users was never one of the things a heartbeat carried down - only Operator promoted
+    /// with IsGlobalAdmin ever made that trip, which is a different, already-working path. An
+    /// Admin made the "right way" at Head Office looked, from the counter, exactly like it did
+    /// not exist, forever, no matter how long anyone waited or how many times they refreshed.
+    ///
+    /// Not scoped to one branch, the same reasoning as Members: an Admin is meant to be reachable
+    /// from any counter's Quick Admin Switch, not just one, so every branch needs the whole list.
+    /// </summary>
+    public List<BranchAdminConfigDto> Admins { get; set; } = new();
 }
 
 /// <summary>
@@ -183,4 +199,28 @@ public class BranchPricingPackageConfigDto
     public decimal Price { get; set; }
     public int SortOrder { get; set; }
     public bool IsActive { get; set; }
+}
+
+/// <summary>
+/// One Admin-level Users-table account as Head Office defines them.
+///
+/// Enough to create the person locally at a branch that has never heard of them and let them
+/// straight into Quick Admin Switch there, the same closing-the-gap reasoning as
+/// BranchOperatorConfigDto - an Admin made at Head Office could not be switched into at any
+/// counter, ever, ever, which is exactly what "created the right way" was supposed to prevent.
+/// </summary>
+public class BranchAdminConfigDto
+{
+    public Guid Id { get; set; }
+    public string FullName { get; set; } = string.Empty;
+    public string Email { get; set; } = string.Empty;
+
+    /// <summary>The stored hash, never a password - see BranchOperatorConfigDto.PasswordHash.</summary>
+    public string PasswordHash { get; set; } = string.Empty;
+
+    public string? AccessPin { get; set; }
+    public string? DashboardPermissions { get; set; }
+
+    /// <summary>Suspended/disabled at Head Office - see BranchOperatorConfigDto.IsBlocked.</summary>
+    public bool IsBlocked { get; set; }
 }

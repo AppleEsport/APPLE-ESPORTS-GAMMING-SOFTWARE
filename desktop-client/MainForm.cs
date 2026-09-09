@@ -657,71 +657,28 @@ public sealed class MainForm : Form
         // overlay goes and comes back; the session is a row in the branch database and the
         // installer never touches it, so the customer's time and money are safe either way.
         //
-        // On a counter PC it is not free, and this is the part that was traded away. Installing
-        // stops PostgreSQL and the branch API to replace them, so for about a minute the till
-        // cannot bill, cannot seat anyone and cannot end a session - mid-trade, with no warning to
-        // whoever is standing at it. That was the whole reason for waiting, and it is accepted
-        // deliberately now.
+        // This process cannot install anything itself any more - see the comment on the
+        // AutoUpdateTaskInstalled() check above. That used to fall through to here instead,
+        // launching the installer with Verb=runas so Windows could raise an elevation prompt
+        // this process has no way to answer. On a gaming PC that prompt appeared over a
+        // customer's game, asking for an administrator password they do not have - and because
+        // this whole method re-runs every 30 seconds, a machine where AutoUpdateTaskInstalled()
+        // was wrongly answering "no" (not "sometimes", every single time, on one specific PC)
+        // asked the same unanswerable question again every 30 seconds, forever - which is what
+        // "I clicked Yes eight times and it kept coming back" actually was: not eight separate
+        // failures, one broken detection repeating on a fixed clock.
         //
-        // The other half of "no waiting" is not here and cannot be: Install() still launches the
-        // installer with Verb=runas, so Windows can raise an elevation prompt and sit on it for
-        // ever with nobody at the machine to answer. Until that is handed to the branch's own
-        // Windows service - which runs as LocalSystem and has no desktop to prompt on - this is
-        // only truly immediate where the app is already elevated or UAC is off. See
-        // FIXES_TRACKER.md #32.
-        await ReportUpdateProgressAsync("downloading", 0, $"Downloading version {available.Version}.");
-
-        var installer = await updates.DownloadAndVerifyAsync(available, DownloadProgressReporter());
-        if (installer is null)
-        {
-            // Two different failures, deliberately reported as one message. Whichever it was, the
-            // branch stays on the version it is running and tries again on the next pass; what
-            // matters to whoever is reading the Updates page is that it did not silently stop.
-            await ReportUpdateProgressAsync(
-                "failed", 0,
-                $"Could not download version {available.Version}, or the downloaded file did not " +
-                "match what Head Office published. Nothing was installed. It will try again.");
-            return;
-        }
-
+        // There is nothing left for this process to fall back to, and there should not be. The
+        // SYSTEM task is the only supported way to install an update now, and KioskGuard already
+        // re-registers it - correctly, idempotently - on every single launch, so a wrong "not
+        // installed" answer here repairs itself the next time the app starts rather than needing
+        // a customer to approve a prompt that was never going to end the loop anyway. All this
+        // path can safely do is say so.
         await ReportUpdateProgressAsync(
-            "installing", 100,
-            $"Installing version {available.Version}. The branch is offline for about a minute.");
-
-        BeginInvoke(() =>
-        {
-            // Written before anything is launched, and it has to be before: this process is
-            // about to exit so the installer can replace its own executable, and the next
-            // launch has no other way of knowing why the branch is unreachable. Without it
-            // the operator meets "Cannot reach the branch system" and a list of things to
-            // check, none of which are wrong.
-            MarkUpdateStarting(available.Version);
-
-            _allowClose = true;   // the installer needs this process gone to replace the exe
-
-            if (!UpdateService.Install(installer))
-            {
-                // Refused at the UAC prompt or blocked by policy - nothing was stopped and
-                // nothing will restart, so the marker would only produce a patient message
-                // about an update that is not happening.
-                ClearUpdateMarker();
-                _allowClose = false;
-
-                // Reported because this is the one failure a person has to act on, and the only
-                // one invisible from Head Office: the branch is healthy, it is online, it is
-                // reporting its version perfectly, and it will go on refusing this update on
-                // every pass for ever until somebody stands at that PC and approves the prompt.
-                // Silence here looks identical to "not idle yet", which is the wrong conclusion.
-                _ = ReportUpdateProgressAsync(
-                    "failed", 100,
-                    $"Version {available.Version} is downloaded and ready, but Windows refused to " +
-                    "run the installer - the administrator prompt was declined, or policy blocked " +
-                    "it. Somebody needs to approve it on this PC.");
-                return;
-            }
-
-            Application.Exit();
-        });
+            "waiting", 0,
+            $"Version {available.Version} is ready, but the automatic updater on this PC is not " +
+            "registered correctly yet. It repairs itself the next time this app starts - restarting " +
+            "the PC is usually enough. No prompt will appear, and nothing needs approving here.");
     }
 
     /// <summary>

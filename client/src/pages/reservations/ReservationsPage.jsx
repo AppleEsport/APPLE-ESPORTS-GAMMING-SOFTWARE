@@ -13,7 +13,20 @@ import {
   deleteReservation,
   setReservationArrived
 } from '../../api/reservations.api';
-import { Calendar, User, Clock, IndianRupee, FileText, Trash2, CheckCircle, UserCheck, Search } from 'lucide-react';
+import { Calendar, User, Clock, IndianRupee, FileText, Trash2, CheckCircle, UserCheck, Search, Download, History, X } from 'lucide-react';
+import { format } from 'date-fns';
+import { createReport, addTable, save } from '../../utils/pdfReport';
+
+const todayIso = () => format(new Date(), 'yyyy-MM-dd');
+
+// Same per-browser remembered range as the other desks.
+const readStoredDate = (key) => {
+  try {
+    return localStorage.getItem(key) || todayIso();
+  } catch {
+    return todayIso();
+  }
+};
 
 export default function ReservationsPage() {
   const { isSuperAdmin, user } = useAuth();
@@ -90,6 +103,66 @@ export default function ReservationsPage() {
   }, [form.pcId]);
 
   const [removingId, setRemovingId] = useState(null);
+
+  // Read-only history, separate from the live to-do list above - GetActiveReservations only
+  // ever shows Pending, so a past-day lookup needs its own endpoint.
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [historyFrom, setHistoryFrom] = useState(() => readStoredDate('reservations.historyFrom'));
+  const [historyTo, setHistoryTo] = useState(() => readStoredDate('reservations.historyTo'));
+  const [history, setHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  useEffect(() => {
+    try { localStorage.setItem('reservations.historyFrom', historyFrom); } catch { /* ignore */ }
+  }, [historyFrom]);
+
+  useEffect(() => {
+    try { localStorage.setItem('reservations.historyTo', historyTo); } catch { /* ignore */ }
+  }, [historyTo]);
+
+  const fetchHistory = useCallback(async () => {
+    if (!targetBranchId) { setHistory([]); return; }
+    setHistoryLoading(true);
+    try {
+      const { data } = await api.get('/reservations/history', {
+        params: { branchId: targetBranchId, fromDate: historyFrom, toDate: historyTo },
+      });
+      setHistory(data?.data || []);
+    } catch (err) {
+      console.error('Failed to load reservation history:', err);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [targetBranchId, historyFrom, historyTo]);
+
+  useEffect(() => { if (isHistoryOpen) fetchHistory(); }, [isHistoryOpen, fetchHistory]);
+
+  const resetHistoryToToday = () => {
+    setHistoryFrom(todayIso());
+    setHistoryTo(todayIso());
+  };
+
+  const handleDownloadHistoryPdf = () => {
+    if (history.length === 0) return;
+    const rangeLabel = historyFrom === historyTo ? historyFrom : `${historyFrom} to ${historyTo}`;
+    const subtitle = `${activeBranch?.name || 'Branch'}  •  ${rangeLabel}`;
+    const { doc } = createReport({ title: 'PC Reservations History', subtitle });
+
+    addTable(doc, 90, {
+      title: 'PC Reservations History', subtitle,
+      head: ['Time', 'PC', 'Customer', 'Duration', 'Deposit', 'Status'],
+      body: history.map(r => [
+        r.reservationTime ? format(new Date(r.reservationTime), 'MMM d, hh:mm a') : '-',
+        r.pcName || '-',
+        r.customerName || '-',
+        r.durationMin ? `${r.durationMin}m` : '-',
+        `Rs ${(r.advanceDeposit || 0).toFixed(2)}`,
+        r.arrived ? 'Arrived' : r.state,
+      ]),
+    });
+
+    save(doc, `reservations-history-${historyFrom}${historyFrom !== historyTo ? `_to_${historyTo}` : ''}.pdf`);
+  };
 
   // ── Member search with debounce ──
   useEffect(() => {
@@ -345,11 +418,19 @@ export default function ReservationsPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <PageHeader
-        title="PC Reservations"
-        subtitle="Manage future PC bookings with automated grace period and real-time state broadcasts"
-        icon="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
-      />
+      <div className="flex items-start justify-between gap-4">
+        <PageHeader
+          title="PC Reservations"
+          subtitle="Manage future PC bookings with automated grace period and real-time state broadcasts"
+          icon="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+        />
+        <button
+          onClick={() => setIsHistoryOpen(true)}
+          className="btn-secondary shrink-0 flex items-center gap-2 text-xs py-2 px-4 uppercase font-bold"
+        >
+          <History className="w-4 h-4" /> History
+        </button>
+      </div>
 
       <div className="flex h-[calc(100vh-11rem)] overflow-hidden gap-4 p-1">
         {/* Left Side: Creation Form */}
@@ -722,6 +803,101 @@ export default function ReservationsPage() {
           </div>
         </div>
       </div>
+
+      {isHistoryOpen && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="w-full max-w-4xl max-h-[85vh] bg-bg-2 border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden">
+            <div className="px-5 py-4 border-b border-border bg-bg-3 flex items-center justify-between shrink-0">
+              <h2 className="font-heading font-bold text-text uppercase tracking-wider text-base flex items-center gap-2">
+                <History className="w-4 h-4 text-accent" /> Reservations History
+              </h2>
+              <button onClick={() => setIsHistoryOpen(false)} className="p-1 text-text-3 hover:text-text rounded transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 flex flex-wrap items-center gap-3 border-b border-border shrink-0">
+              <Calendar className="w-4 h-4 text-text-3 shrink-0" />
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-text-3 uppercase tracking-wider">From</label>
+                <input
+                  type="date"
+                  value={historyFrom}
+                  max={historyTo}
+                  onChange={(e) => setHistoryFrom(e.target.value)}
+                  className="bg-bg-3 border border-border rounded-lg px-3 py-1.5 text-sm text-text"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-text-3 uppercase tracking-wider">To</label>
+                <input
+                  type="date"
+                  value={historyTo}
+                  min={historyFrom}
+                  max={todayIso()}
+                  onChange={(e) => setHistoryTo(e.target.value)}
+                  className="bg-bg-3 border border-border rounded-lg px-3 py-1.5 text-sm text-text"
+                />
+              </div>
+              <button onClick={resetHistoryToToday} className="text-xs font-medium text-accent hover:text-accent/80 transition-colors ml-auto">
+                Today
+              </button>
+              <button
+                onClick={handleDownloadHistoryPdf}
+                disabled={history.length === 0}
+                className="btn-secondary py-1.5 px-3 flex items-center gap-1.5 text-xs font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Download className="w-3.5 h-3.5" /> Download PDF
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5">
+              {historyLoading ? (
+                <div className="flex justify-center py-12">
+                  <div className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+                </div>
+              ) : history.length === 0 ? (
+                <div className="text-center text-text-3 text-xs italic py-8 border border-dashed border-border rounded-lg">
+                  No reservations found in this range.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs whitespace-nowrap">
+                    <thead>
+                      <tr className="border-b border-border text-text-3 uppercase tracking-wider font-bold text-[10px]">
+                        <th className="py-2 px-3">Time</th>
+                        <th className="py-2 px-3">PC</th>
+                        <th className="py-2 px-3">Customer</th>
+                        <th className="py-2 px-3">Duration</th>
+                        <th className="py-2 px-3 text-right">Deposit</th>
+                        <th className="py-2 px-3 text-center">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border/40 font-mono">
+                      {history.map(r => (
+                        <tr key={r.id}>
+                          <td className="py-2 px-3 text-text-2">{r.reservationTime ? format(new Date(r.reservationTime), 'MMM d, hh:mm a') : '-'}</td>
+                          <td className="py-2 px-3 text-text font-bold">{r.pcName || '-'}</td>
+                          <td className="py-2 px-3 text-text-2 font-sans">{r.customerName || '-'}</td>
+                          <td className="py-2 px-3 text-text-2">{r.durationMin ? `${r.durationMin}m` : '-'}</td>
+                          <td className="py-2 px-3 text-right text-text">₹{(r.advanceDeposit || 0).toFixed(2)}</td>
+                          <td className="py-2 px-3 text-center">
+                            {r.arrived ? (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded border uppercase tracking-wider font-bold text-neon-green bg-neon-green/10 border-neon-green/20">Arrived</span>
+                            ) : (
+                              <StatusBadge state={r.state} />
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

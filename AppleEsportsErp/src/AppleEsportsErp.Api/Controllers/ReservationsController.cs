@@ -64,6 +64,15 @@ public class ReservationsController : ControllerBase
         return Ok(ApiResponse<PaginatedResult<ReservationDto>>.Ok(result));
     }
 
+    /// <summary>Every reservation (any state) in a date range - the History view, separate from
+    /// the live "pending only" to-do list GetActiveReservations feeds.</summary>
+    [HttpGet("history")]
+    public async Task<IActionResult> GetReservationHistory([FromQuery] DateOnly fromDate, [FromQuery] DateOnly toDate)
+    {
+        var result = await _reservationService.GetReservationHistoryAsync(GetBranchId(), fromDate, toDate);
+        return Ok(ApiResponse<List<ReservationDto>>.Ok(result));
+    }
+
     [HttpPost]
     public async Task<IActionResult> CreateReservation([FromBody] CreateReservationDto dto, CancellationToken ct)
     {

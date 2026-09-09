@@ -3,7 +3,7 @@ import {
   User, Phone, Home, Briefcase, Landmark, Users,
   Search, Plus, ChevronDown, ChevronUp, Printer,
   CheckCircle2, ArrowLeft, Eye, EyeOff, FileText, Shield, Store,
-  UploadCloud, X, CreditCard, Trash2
+  UploadCloud, X, CreditCard, Trash2, Calendar, Download
 } from 'lucide-react';
 import api from '../../config/api';
 import PageHeader from '../../components/layout/PageHeader';
@@ -11,6 +11,8 @@ import { useToast } from '../../components/ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { useBranch } from '../../contexts/BranchContext';
 import { BranchPickerOverlay } from '../../components/layout/BranchRequired';
+import { format } from 'date-fns';
+import { createReport, addTable, save } from '../../utils/pdfReport';
 
 // ─── Print stylesheet injected once ───────────────────────────────────────────
 const printStyle = `
@@ -409,6 +411,12 @@ export default function EmployeeFormsPage() {
   const [form, setForm] = useState(emptyForm());
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Joined-date filter for the roster below, plus a print/PDF of whatever that filter shows.
+  // Filtered client-side, not a new query - the list is already fetched in full (up to 100
+  // records), and Start Date is what "joined within this range" actually means for a roster.
+  const [startDateFrom, setStartDateFrom] = useState('');
+  const [startDateTo, setStartDateTo] = useState('');
+
   const targetBranchId = isSuperAdmin ? activeBranch?.id : user?.branchId;
 
   const fetchEmployees = useCallback(async () => {
@@ -468,6 +476,41 @@ export default function EmployeeFormsPage() {
     }
   };
 
+  // Employees whose Start Date falls in the chosen range - an empty end left blank means "no
+  // lower/upper bound", so a from-only or to-only filter both work as you'd expect.
+  const filteredEmployees = employees.filter(emp => {
+    if (!startDateFrom && !startDateTo) return true;
+    if (!emp.startDate) return false;
+    if (startDateFrom && emp.startDate < startDateFrom) return false;
+    if (startDateTo && emp.startDate > startDateTo) return false;
+    return true;
+  });
+
+  const handleDownloadRosterPdf = () => {
+    if (filteredEmployees.length === 0) return;
+    const rangeLabel = startDateFrom || startDateTo
+      ? `Joined ${startDateFrom || 'any'} to ${startDateTo || 'any'}`
+      : 'All records';
+    const subtitle = `${activeBranch?.name || 'All Branches'}  •  ${rangeLabel}`;
+    const { doc } = createReport({ title: 'Employee Roster', subtitle });
+
+    addTable(doc, 90, {
+      title: 'Employee Roster', subtitle,
+      head: ['Employee ID', 'Name', 'Position', 'Department', 'Phone', 'Start Date', 'Status'],
+      body: filteredEmployees.map(emp => [
+        emp.employeeNumber,
+        emp.fullName,
+        emp.positionTitle || '-',
+        emp.department || '-',
+        emp.phone || '-',
+        emp.startDate || '-',
+        emp.status,
+      ]),
+    });
+
+    save(doc, `employee-roster${startDateFrom ? `-${startDateFrom}` : ''}${startDateTo ? `_to_${startDateTo}` : ''}.pdf`);
+  };
+
   if (selectedEmployee) {
     return (
       <div className="h-full flex flex-col">
@@ -503,15 +546,54 @@ export default function EmployeeFormsPage() {
         {/* ── Records Tab ── */}
         {tab === 'records' && (
           <div className="space-y-4">
-            <div className="relative max-w-sm">
-              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-text-3" />
-              <input
-                type="text"
-                placeholder="Search by name, phone, or ID..."
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                className="pl-9 pr-4 py-2 text-sm bg-bg-2 border border-border rounded-lg text-text focus:outline-none focus:border-accent w-full transition-colors"
-              />
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="relative max-w-sm w-full sm:w-auto flex-1">
+                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-text-3" />
+                <input
+                  type="text"
+                  placeholder="Search by name, phone, or ID..."
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  className="pl-9 pr-4 py-2 text-sm bg-bg-2 border border-border rounded-lg text-text focus:outline-none focus:border-accent w-full transition-colors"
+                />
+              </div>
+
+              <Calendar className="w-4 h-4 text-text-3 shrink-0" />
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-text-3 uppercase tracking-wider">Joined from</label>
+                <input
+                  type="date"
+                  value={startDateFrom}
+                  max={startDateTo || undefined}
+                  onChange={(e) => setStartDateFrom(e.target.value)}
+                  className="bg-bg-2 border border-border rounded-lg px-3 py-1.5 text-sm text-text"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-text-3 uppercase tracking-wider">to</label>
+                <input
+                  type="date"
+                  value={startDateTo}
+                  min={startDateFrom || undefined}
+                  onChange={(e) => setStartDateTo(e.target.value)}
+                  className="bg-bg-2 border border-border rounded-lg px-3 py-1.5 text-sm text-text"
+                />
+              </div>
+              {(startDateFrom || startDateTo) && (
+                <button
+                  onClick={() => { setStartDateFrom(''); setStartDateTo(''); }}
+                  className="text-xs font-medium text-accent hover:text-accent/80 transition-colors"
+                >
+                  Clear
+                </button>
+              )}
+              <button
+                onClick={handleDownloadRosterPdf}
+                disabled={filteredEmployees.length === 0}
+                className="btn-secondary py-1.5 px-3 flex items-center gap-1.5 text-xs font-bold disabled:opacity-50 disabled:cursor-not-allowed ml-auto"
+              >
+                <Download className="w-3.5 h-3.5" /> Download PDF
+              </button>
             </div>
 
             {isLoading ? (
@@ -525,6 +607,11 @@ export default function EmployeeFormsPage() {
                 <button onClick={() => setTab('new')} className="mt-4 px-4 py-2 bg-accent/10 hover:bg-accent text-accent hover:text-white border border-accent/30 rounded-lg text-sm font-bold transition-all">
                   Add First Employee
                 </button>
+              </div>
+            ) : filteredEmployees.length === 0 ? (
+              <div className="text-center py-16 bg-bg-2 border border-border rounded-xl">
+                <Calendar className="w-12 h-12 mx-auto mb-3 text-text-3 opacity-30" />
+                <p className="text-sm font-bold uppercase tracking-wider text-text-3">No employees joined in this range</p>
               </div>
             ) : (
               <div className="bg-bg-2 border border-border rounded-xl overflow-x-auto shadow-sm">
@@ -542,7 +629,7 @@ export default function EmployeeFormsPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/50">
-                    {employees.map(emp => (
+                    {filteredEmployees.map(emp => (
                       <tr key={emp.id} className="hover:bg-bg-3/30 transition-colors">
                         <td className="p-4 font-mono text-accent text-xs">{emp.employeeNumber}</td>
                         <td className="p-4 font-bold text-text flex items-center gap-2">

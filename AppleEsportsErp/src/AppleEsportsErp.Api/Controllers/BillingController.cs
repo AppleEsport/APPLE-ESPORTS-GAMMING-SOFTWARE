@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using AppleEsportsErp.Api.Extensions;
 using AppleEsportsErp.Api.Filters;
+using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Billing;
 using AppleEsportsErp.Application.DTOs.Common;
 using AppleEsportsErp.Application.Exceptions;
@@ -89,6 +90,63 @@ public class BillingController : ControllerBase
     {
         var result = await _billingService.GetBillByNumberAsync(GetBranchId(), billNumber);
         return Ok(ApiResponse<BillDto>.Ok(result));
+    }
+
+    /// <summary>
+    /// Removes a bill from the books for good - Admin and Super Admin only, for a genuine
+    /// mistake in the record itself (a duplicate row, a test entry that reached a live branch),
+    /// never for correcting an amount or a payment method, which belong to Discount/Pay instead.
+    ///
+    /// Never silent. A bill leaving Complete Billing Audit Logs with nothing said anywhere is
+    /// exactly the kind of gap this whole system exists to close - so the deletion itself is
+    /// written to the audit trail, with who did it and everything the bill held, before the row
+    /// is actually gone. What was deleted stays answerable even though the bill itself no longer
+    /// does.
+    /// </summary>
+    [HttpDelete("{id:guid}")]
+    [Authorize(Roles = $"{Roles.Admin},{Roles.SuperAdmin}")]
+    public async Task<IActionResult> DeleteBillPermanently(Guid id, [FromServices] IAuditService audit)
+    {
+        var branchId = GetBranchId();
+        var bill = await _db.Bills
+            .Include(b => b.Items)
+            .FirstOrDefaultAsync(b => b.Id == id && b.BranchId == branchId);
+
+        if (bill is null)
+            return NotFound(ApiResponse<object>.Fail("Bill not found."));
+
+        // Cleared first, not cascaded - both are a hard RESTRICT against bills, the same
+        // deliberate guard that stops an ordinary code path deleting a bill a discount or a
+        // payment still depends on. This endpoint is the one place meant to go through it
+        // anyway, on a human's explicit say-so, not around it by accident.
+        var discounts = await _db.Set<AppleEsportsErp.Domain.Entities.Discount>()
+            .Where(d => d.BillId == id).ToListAsync();
+        _db.RemoveRange(discounts);
+
+        var payments = await _db.Set<AppleEsportsErp.Domain.Entities.Payment>()
+            .Where(p => p.BillId == id).ToListAsync();
+        _db.RemoveRange(payments);
+
+        await audit.LogAsync(new AuditEntry
+        {
+            OperatorId = CurrentUserId(),
+            UserRole = User.FindFirstValue(ClaimTypes.Role) ?? "unknown",
+            UserName = User.FindFirstValue(ClaimTypes.Name) ?? "unknown",
+            Action = "bill_deleted_permanently",
+            BranchId = branchId,
+            TargetType = "bill",
+            TargetId = bill.Id,
+            Details = new
+            {
+                bill.BillNumber, bill.CustomerName, bill.TotalAmount, bill.GamingAmount,
+                bill.FoodAmount, bill.DiscountAmount, bill.Status, bill.CreatedAt, bill.CompletedAt,
+            },
+        });
+
+        _db.Bills.Remove(bill);
+        await _db.SaveChangesAsync();
+
+        return Ok(ApiResponse.Ok());
     }
 
     [HttpPost("{id:guid}/discount")]

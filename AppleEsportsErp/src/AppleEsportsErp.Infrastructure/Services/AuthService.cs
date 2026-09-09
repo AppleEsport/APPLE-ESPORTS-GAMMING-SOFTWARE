@@ -679,8 +679,9 @@ public class AuthService : IAuthService
     /// </summary>
     /// <summary>
     /// Closes any trading day that is genuinely over and that nobody closed, and sends its report.
-    /// A branch still trading past midnight is not closed here - see
-    /// <see cref="RolloverOpenRegisterAsync"/> for what happens to it instead.
+    /// A branch still trading past midnight is left entirely alone here, on the owner's explicit
+    /// instruction - see the comment inside this method, where that decision actually happens,
+    /// for why.
     ///
     /// The end-of-day report used to depend entirely on an operator ticking "last shift of the
     /// day". Ticking it wrongly costs one confusing email. Forgetting it used to leave the
@@ -754,92 +755,6 @@ public class AuthService : IAuthService
         return true;
     }
 
-    /// <summary>
-    /// Rolls a still-open drawer from a finished calendar day into today, without touching the
-    /// shift or the operator at all - the branch is still trading, so nothing about the login
-    /// should change, only which day's bucket the drawer belongs to from this moment on.
-    ///
-    /// Needed because EodService's Cash Summary section selects registers by an exact
-    /// BusinessDay match, while its Bills/Payments/Wallet figures are already selected by their
-    /// own timestamp falling in the calendar day. Without this, a register still open from last
-    /// night stays stamped with yesterday's BusinessDay indefinitely - so today's report shows
-    /// zero opening balance and zero cash activity even as real money moves, while yesterday's
-    /// report keeps absorbing tonight's takings under a day that is already over. The two
-    /// sections of the SAME report would disagree with each other, and a branch's own EOD would
-    /// disagree with what Head Office shows for the same day - exactly the "different data"
-    /// the owner was seeing.
-    ///
-    /// No physical count happens here - the cash never left the drawer, so there is nothing to
-    /// verify. The book figure (<see cref="CashRegister.ExpectedDrawerCash"/>) becomes both the
-    /// closing figure for the day that just ended and the opening figure for the one that just
-    /// started, exactly as an ordinary handover already does when an operator counts one drawer
-    /// out and starts the next from what was counted.
-    /// </summary>
-    private async Task RolloverOpenRegisterAsync(Guid branchId, DateOnly today, CancellationToken cancellationToken)
-    {
-        var openRegister = await _db.CashRegisters
-            .Where(r => r.BranchId == branchId && r.Status == CashRegisterStatus.Open)
-            .OrderByDescending(r => r.OpenedAt)
-            .FirstOrDefaultAsync(cancellationToken);
-
-        // Nothing open right now (a handover mid-count, or genuinely nothing) - nothing to
-        // roll. Also guards against rolling the very register this method just opened, if a
-        // branch has more than one calendar-stale day queued up in the same pass.
-        if (openRegister is null || openRegister.BusinessDay >= today) return;
-
-        var (todayStart, _) = IndiaTime.BusinessDayRange(today);
-
-        // Whoever is actually on duty right now inherits the new drawer - not necessarily
-        // whoever opened the one being closed, since a shift already runs across a handover
-        // with no register change at all (CashRegister.ShiftId is kept for accountability,
-        // not scoping - see that field's own comment).
-        var activeShift = await _db.Shifts
-            .Where(s => s.BranchId == branchId && s.Status == ShiftStatus.Active)
-            .OrderByDescending(s => s.LoginTime)
-            .FirstOrDefaultAsync(cancellationToken);
-
-        openRegister.Status = CashRegisterStatus.Closed;
-        openRegister.ClosedAt = todayStart;
-        openRegister.PhysicalCashCounted = openRegister.ExpectedDrawerCash;
-        openRegister.CashDifference = 0;
-        openRegister.MismatchReason = string.IsNullOrWhiteSpace(openRegister.MismatchReason)
-            ? "Rolled over automatically at midnight - the branch was still trading, so the drawer was never physically recounted."
-            : openRegister.MismatchReason;
-
-        var newRegister = new CashRegister
-        {
-            BranchId = branchId,
-            OperatorId = activeShift?.OperatorId ?? openRegister.OperatorId,
-            ShiftId = activeShift?.Id ?? openRegister.ShiftId,
-            BusinessDay = today,
-            OpeningBalance = openRegister.ExpectedDrawerCash,
-            ExpectedDrawerCash = openRegister.ExpectedDrawerCash,
-            TotalCashSales = 0,
-            TotalSplitCash = 0,
-            Status = CashRegisterStatus.Open,
-            OpenedAt = todayStart,
-        };
-
-        _db.CashRegisters.Add(newRegister);
-        await _db.SaveChangesAsync(cancellationToken);
-
-        await _audit.LogAsync(new AuditEntry
-        {
-            OperatorId = newRegister.OperatorId,
-            UserRole = "Operator",
-            UserName = "System",
-            Action = "cash_register_midnight_rollover",
-            BranchId = branchId,
-            TargetType = "cash_register",
-            TargetId = newRegister.Id,
-            Details = new { closedRegisterId = openRegister.Id, carriedBalance = newRegister.OpeningBalance }
-        });
-
-        _logger.LogInformation(
-            "Rolled over branch {Branch}'s drawer at midnight: closed {Old} (Rs {Balance}), opened {New} for {Day}.",
-            branchId, openRegister.Id, newRegister.OpeningBalance, newRegister.Id, today);
-    }
-
     public async Task<int> CloseFinishedTradingDaysAsync(CancellationToken cancellationToken = default)
     {
         var today = IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow);
@@ -862,13 +777,23 @@ public class AuthService : IAuthService
         {
             try
             {
-                // Not yet genuinely closed for the night - still trading, so roll the day's
-                // open drawer forward into today instead of leaving it stuck under a day that
-                // is already over. The operator and their shift are untouched; only the
-                // register's own day-bucket moves.
+                // Not yet genuinely closed for the night - still trading, so leave it alone
+                // entirely and try again on the next pass. This used to call
+                // RolloverOpenRegisterAsync here to keep EodService's day-bucketing correct
+                // while trading continued past midnight - reverted on the owner's explicit
+                // instruction after it produced duplicate register and shift rows on a branch
+                // that was genuinely still trading (Citylight 144Hz, the night this was found):
+                // this 15-minute sweep and something else touching the same register at close
+                // to the same moment were never made to exclude each other, so both could see
+                // "nothing open for today yet" and both create one. Nothing here now closes or
+                // moves anything for an active shift - only the operator's own "last shift of
+                // the day" button does, same as before this rollover existed at all. The
+                // known cost: a branch trading past midnight keeps yesterday's BusinessDay on
+                // its register until that button is pressed, which is exactly the bucketing
+                // gap RolloverOpenRegisterAsync was written to close - accepted deliberately in
+                // exchange for never touching a shift that is still actually in use.
                 if (!await IsBranchGenuinelyClosedForTheNightAsync(branchDay.Key.BranchId, now, cancellationToken))
                 {
-                    await RolloverOpenRegisterAsync(branchDay.Key.BranchId, today, cancellationToken);
                     continue;
                 }
 

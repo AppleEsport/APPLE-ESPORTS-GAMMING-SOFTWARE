@@ -255,7 +255,26 @@ public class SessionService : ISessionService
             }
 
             var now = DateTimeOffset.UtcNow;
-            
+
+            // Same rule as ExtendSessionAsync, and the same reason: a fixed-duration plan has
+            // one true price, the one on the branch's own PricingPackage for that exact
+            // duration, and a client's own calculation of it is a preview, never the authority.
+            // Only overrides when a plan actually exists for this exact duration - Pay-As-You-Go
+            // (DurationMinutes 0) and any duration with no matching package keep trusting the
+            // caller's figure, same as before, since there is nothing here to check it against.
+            decimal expectedAmount = dto.ExpectedAmount;
+            if (dto.DurationMinutes > 0)
+            {
+                var matchingPackage = await _db.Set<PricingPackage>().AsNoTracking()
+                    .Where(pkg => pkg.PricingProfileId == pc.PricingProfileId
+                        && pkg.IsActive && pkg.DurationMinutes == (int)dto.DurationMinutes)
+                    .OrderBy(pkg => pkg.SortOrder)
+                    .FirstOrDefaultAsync();
+
+                if (matchingPackage != null)
+                    expectedAmount = matchingPackage.Price;
+            }
+
             var session = new Session
             {
                 Id = Guid.NewGuid(),
@@ -268,8 +287,8 @@ public class SessionService : ISessionService
                 StartTime = now,
                 EndTime = dto.DurationMinutes > 0 ? now.AddMinutes((double)dto.DurationMinutes) : null,
                 PlannedDurationMin = dto.DurationMinutes > 0 ? (int)dto.DurationMinutes : null,
-                TotalAmount = dto.ExpectedAmount,
-                GamingAmount = dto.ExpectedAmount,
+                TotalAmount = expectedAmount,
+                GamingAmount = expectedAmount,
                 GamingType = dto.PackageName,
                 State = SessionState.Active,
                 Notes = dto.Notes,
@@ -808,7 +827,7 @@ public class SessionService : ISessionService
         try
         {
             var session = await _db.Sessions
-                .Include(s => s.Pc)
+                .Include(s => s.Pc).ThenInclude(p => p!.PricingProfile).ThenInclude(pp => pp!.Packages)
                 .Include(s => s.Bills)
                 .FirstOrDefaultAsync(s => s.Id == sessionId && s.BranchId == branchId);
 
@@ -819,14 +838,30 @@ public class SessionService : ISessionService
                 throw new AppException("Cannot extend inactive session.", System.Net.HttpStatusCode.BadRequest, "SESSION_NOT_ACTIVE");
 
             var now = DateTimeOffset.UtcNow;
-            
+
+            // Priced from the branch's own plans, never from whatever the operator's screen
+            // calculated and sent. An exact-duration custom package wins outright - a 4-hour
+            // extension on a PC whose 4-hour plan is Rs 180 must charge Rs 180, not Rs 200 from
+            // (4 x hourly rate) - the same "plans, not raw multiplication" rule GetPcPlans
+            // already applies to a session's own start. Only a duration with no matching
+            // package (a plain "45 more minutes") falls back to the hourly pro-rata this always
+            // used. See BuildPlansForProfile in PublicController for the same matching logic.
+            var profile = session.Pc?.PricingProfile;
+            var matchingPackage = profile?.Packages?
+                .Where(pkg => pkg.IsActive && pkg.DurationMinutes == (int)dto.AdditionalMinutes)
+                .OrderBy(pkg => pkg.SortOrder)
+                .FirstOrDefault();
+
+            var additionalAmount = matchingPackage?.Price
+                ?? (dto.AdditionalMinutes / 60m) * (profile?.BaseHourlyRate ?? 0m);
+
             session.PlannedDurationMin = (session.PlannedDurationMin ?? 0) + (int)dto.AdditionalMinutes;
             if (session.EndTime.HasValue)
             {
                 session.EndTime = session.EndTime.Value.AddMinutes((double)dto.AdditionalMinutes);
             }
-            session.GamingAmount += dto.AdditionalAmount;
-            session.TotalAmount += dto.AdditionalAmount;
+            session.GamingAmount += additionalAmount;
+            session.TotalAmount += additionalAmount;
             
             var newGamingType = $"{session.GamingType} + {dto.PackageName}";
             if (newGamingType.Length > 150)
@@ -841,7 +876,7 @@ public class SessionService : ISessionService
             if (bill != null)
             {
                 decimal previousGamingAmount = bill.GamingAmount;
-                decimal newRawGamingAmount = previousGamingAmount + dto.AdditionalAmount;
+                decimal newRawGamingAmount = previousGamingAmount + additionalAmount;
 
                 var (displayGaming, displayFood, roundedTotal) = SessionPricingCalculator.ComputeRoundedBreakdown(
                     newRawGamingAmount, bill.FoodAmount, bill.DiscountAmount);
@@ -881,7 +916,7 @@ public class SessionService : ISessionService
                 BranchId = branchId,
                 TargetType = "session",
                 TargetId = session.Id,
-                Details = new { dto.AdditionalMinutes, dto.AdditionalAmount, PcNumber = session.Pc?.PcNumber }
+                Details = new { dto.AdditionalMinutes, AdditionalAmount = additionalAmount, PcNumber = session.Pc?.PcNumber }
             });
 
             await _hubNotifier.BroadcastSessionUpdateAsync(branchId, session.Id);
