@@ -1,13 +1,27 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Calculator, Plus, AlertTriangle, WifiOff } from 'lucide-react';
+import { Calculator, Plus, AlertTriangle, WifiOff, Calendar, Download, History } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useBranch } from '../../contexts/BranchContext';
 import { useSocket } from '../../contexts/SocketContext';
 import api from '../../config/api';
+import { getCashReconciliationReport } from '../../api/reports.api';
 import PageHeader from '../../components/layout/PageHeader';
 import OpenRegisterModal from '../../components/cash/OpenRegisterModal';
 import AddTransactionModal from '../../components/cash/AddTransactionModal';
 import TransactionFeed from '../../components/cash/TransactionFeed';
+import { format } from 'date-fns';
+import { createReport, addTable, save } from '../../utils/pdfReport';
+
+const todayIso = () => format(new Date(), 'yyyy-MM-dd');
+
+// Same per-browser remembered range as the other desks (Member Amount, Online).
+const readStoredDate = (key) => {
+  try {
+    return localStorage.getItem(key) || todayIso();
+  } catch {
+    return todayIso();
+  }
+};
 
 export default function CashDeskPage() {
   const { isSuperAdmin, user } = useAuth();
@@ -20,7 +34,75 @@ export default function CashDeskPage() {
 
   const [isAddTxModalOpen, setIsAddTxModalOpen] = useState(false);
 
+  // A separate, read-only history section below the live drawer - the live view above is
+  // deliberately untouched, this is only for looking back at a past day or range and printing
+  // it, the same date-range-plus-print pattern already on Member Amount Desk and Online Desk.
+  const [historyFrom, setHistoryFrom] = useState(() => readStoredDate('cashDesk.historyFrom'));
+  const [historyTo, setHistoryTo] = useState(() => readStoredDate('cashDesk.historyTo'));
+  const [history, setHistory] = useState(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState(null);
+
+  useEffect(() => {
+    try { localStorage.setItem('cashDesk.historyFrom', historyFrom); } catch { /* ignore */ }
+  }, [historyFrom]);
+
+  useEffect(() => {
+    try { localStorage.setItem('cashDesk.historyTo', historyTo); } catch { /* ignore */ }
+  }, [historyTo]);
+
   const targetBranchId = isSuperAdmin ? activeBranch?.id : user?.branchId;
+
+  const fetchHistory = useCallback(async () => {
+    if (isSuperAdmin && !targetBranchId) {
+      setHistory(null);
+      return;
+    }
+    setHistoryLoading(true);
+    try {
+      setHistoryError(null);
+      const { data } = await getCashReconciliationReport({
+        branchId: targetBranchId,
+        startDate: historyFrom,
+        endDate: historyTo,
+      });
+      setHistory(data.data || []);
+    } catch (err) {
+      setHistoryError(err.response?.data?.error || 'Failed to fetch cash desk history.');
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [targetBranchId, isSuperAdmin, historyFrom, historyTo]);
+
+  useEffect(() => { fetchHistory(); }, [fetchHistory]);
+
+  const resetHistoryToToday = () => {
+    setHistoryFrom(todayIso());
+    setHistoryTo(todayIso());
+  };
+
+  const handleDownloadHistoryPdf = () => {
+    if (!history || history.length === 0) return;
+    const rangeLabel = historyFrom === historyTo ? historyFrom : `${historyFrom} to ${historyTo}`;
+    const subtitle = `${activeBranch?.name || 'Branch'}  •  ${rangeLabel}`;
+    const { doc } = createReport({ title: 'Cash Desk History', subtitle });
+
+    addTable(doc, 90, {
+      title: 'Cash Desk History', subtitle,
+      head: ['Opened', 'Closed', 'Operator', 'Expected', 'Counted', 'Difference', 'Status'],
+      body: history.map(r => [
+        format(new Date(r.openedAt), 'MMM d, hh:mm a'),
+        r.closedAt ? format(new Date(r.closedAt), 'MMM d, hh:mm a') : 'Still open',
+        r.operatorName,
+        `Rs ${r.expectedDrawerCash.toFixed(2)}`,
+        `Rs ${r.physicalCashCounted.toFixed(2)}`,
+        `Rs ${r.difference.toFixed(2)}`,
+        r.isVerified ? 'Verified' : 'Unverified',
+      ]),
+    });
+
+    save(doc, `cash-desk-history-${historyFrom}${historyFrom !== historyTo ? `_to_${historyTo}` : ''}.pdf`);
+  };
 
   const fetchActiveRegister = useCallback(async () => {
     if (isSuperAdmin && !targetBranchId) {
@@ -78,9 +160,117 @@ export default function CashDeskPage() {
     );
   }
 
-  // 1. If no register is open, force the operator to open it.
+  // Built once here rather than duplicated in both branches below - it does not depend on
+  // register at all (it is a past-day lookup, not today's live drawer), so it renders the same
+  // way whether or not a register happens to be open right now.
+  const historySection = (
+    <div className="mt-6 bg-bg-2 border border-border rounded-xl p-4">
+      <h3 className="text-text font-bold uppercase tracking-wider text-sm mb-4 border-b border-border pb-3 flex items-center gap-2">
+        <History className="w-4 h-4" /> Cash Desk History
+      </h3>
+
+      <div className="flex flex-wrap items-center gap-3 mb-4">
+        <Calendar className="w-4 h-4 text-text-3 shrink-0" />
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-text-3 uppercase tracking-wider">From</label>
+          <input
+            type="date"
+            value={historyFrom}
+            max={historyTo}
+            onChange={(e) => setHistoryFrom(e.target.value)}
+            className="bg-bg-3 border border-border rounded-lg px-3 py-1.5 text-sm text-text"
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-text-3 uppercase tracking-wider">To</label>
+          <input
+            type="date"
+            value={historyTo}
+            min={historyFrom}
+            max={todayIso()}
+            onChange={(e) => setHistoryTo(e.target.value)}
+            className="bg-bg-3 border border-border rounded-lg px-3 py-1.5 text-sm text-text"
+          />
+        </div>
+        <button
+          onClick={resetHistoryToToday}
+          className="text-xs font-medium text-accent hover:text-accent/80 transition-colors ml-auto"
+        >
+          Today
+        </button>
+        <button
+          onClick={handleDownloadHistoryPdf}
+          disabled={!history || history.length === 0}
+          className="btn-secondary py-1.5 px-3 flex items-center gap-1.5 text-xs font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <Download className="w-3.5 h-3.5" /> Download PDF
+        </button>
+      </div>
+
+      {historyError && (
+        <div className="bg-neon-red/10 border border-neon-red/30 text-neon-red p-3 rounded-xl mb-4 flex items-center gap-2 text-sm">
+          <AlertTriangle className="w-4 h-4" /> {historyError}
+        </div>
+      )}
+
+      {historyLoading ? (
+        <div className="flex justify-center py-8">
+          <div className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+        </div>
+      ) : !history || history.length === 0 ? (
+        <div className="text-center text-text-3 text-xs italic py-8 border border-dashed border-border rounded-lg">
+          No cash registers found in this range.
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse text-xs whitespace-nowrap">
+            <thead>
+              <tr className="border-b border-border text-text-3 uppercase tracking-wider font-bold text-[10px]">
+                <th className="py-2 px-3">Opened</th>
+                <th className="py-2 px-3">Closed</th>
+                <th className="py-2 px-3">Operator</th>
+                <th className="py-2 px-3 text-right">Expected</th>
+                <th className="py-2 px-3 text-right">Counted</th>
+                <th className="py-2 px-3 text-right">Difference</th>
+                <th className="py-2 px-3 text-center">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/40 font-mono">
+              {history.map(r => (
+                <tr key={r.cashRegisterId}>
+                  <td className="py-2 px-3 text-text-2">{format(new Date(r.openedAt), 'MMM d, hh:mm a')}</td>
+                  <td className="py-2 px-3 text-text-2">{r.closedAt ? format(new Date(r.closedAt), 'MMM d, hh:mm a') : 'Still open'}</td>
+                  <td className="py-2 px-3 text-neon-blue font-bold font-sans">{r.operatorName}</td>
+                  <td className="py-2 px-3 text-right text-text">₹{r.expectedDrawerCash.toFixed(2)}</td>
+                  <td className="py-2 px-3 text-right text-text">₹{r.physicalCashCounted.toFixed(2)}</td>
+                  <td className={`py-2 px-3 text-right font-bold ${r.difference === 0 ? 'text-text-2' : r.difference < 0 ? 'text-neon-red' : 'text-neon-orange'}`}>
+                    ₹{r.difference.toFixed(2)}
+                  </td>
+                  <td className="py-2 px-3 text-center">
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded border uppercase tracking-wider font-bold ${
+                      r.isVerified ? 'text-neon-green bg-neon-green/10 border-neon-green/20' : 'text-neon-orange bg-neon-orange/10 border-neon-orange/20'
+                    }`}>
+                      {r.isVerified ? 'Verified' : 'Unverified'}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+
+  // 1. If no register is open, force the operator to open it - history still shows underneath,
+  // since it is a look at past days regardless of whether a drawer happens to be open right now.
   if (!register) {
-    return <OpenRegisterModal onRegisterOpened={fetchActiveRegister} />;
+    return (
+      <>
+        <OpenRegisterModal onRegisterOpened={fetchActiveRegister} />
+        {historySection}
+      </>
+    );
   }
 
   // 2. Active Register Dashboard
@@ -184,6 +374,8 @@ export default function CashDeskPage() {
 
         <TransactionFeed transactions={transactions} />
       </div>
+
+      {historySection}
 
       {isAddTxModalOpen && (
         <AddTransactionModal

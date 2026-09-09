@@ -10,10 +10,23 @@ import { getMembers } from '../../api/members.api';
 import {
   getActiveReservations,
   createReservation,
-  cancelReservation,
+  deleteReservation,
   setReservationArrived
 } from '../../api/reservations.api';
-import { Calendar, User, Clock, IndianRupee, FileText, Ban, CheckCircle, UserCheck, Search } from 'lucide-react';
+import { Calendar, User, Clock, IndianRupee, FileText, Trash2, CheckCircle, UserCheck, Search, Download, History, X } from 'lucide-react';
+import { format } from 'date-fns';
+import { createReport, addTable, save } from '../../utils/pdfReport';
+
+const todayIso = () => format(new Date(), 'yyyy-MM-dd');
+
+// Same per-browser remembered range as the other desks.
+const readStoredDate = (key) => {
+  try {
+    return localStorage.getItem(key) || todayIso();
+  } catch {
+    return todayIso();
+  }
+};
 
 export default function ReservationsPage() {
   const { isSuperAdmin, user } = useAuth();
@@ -89,10 +102,67 @@ export default function ReservationsPage() {
     setForm(f => ({ ...f, durationMin: null, advanceDeposit: 0, selectedTier: '' }));
   }, [form.pcId]);
 
-  // Modal/Reason states
-  const [cancelData, setCancelData] = useState(null); // { id, customerName }
-  const [cancelReason, setCancelReason] = useState('');
-  const [cancelLoading, setCancelLoading] = useState(false);
+  const [removingId, setRemovingId] = useState(null);
+
+  // Read-only history, separate from the live to-do list above - GetActiveReservations only
+  // ever shows Pending, so a past-day lookup needs its own endpoint.
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [historyFrom, setHistoryFrom] = useState(() => readStoredDate('reservations.historyFrom'));
+  const [historyTo, setHistoryTo] = useState(() => readStoredDate('reservations.historyTo'));
+  const [history, setHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  useEffect(() => {
+    try { localStorage.setItem('reservations.historyFrom', historyFrom); } catch { /* ignore */ }
+  }, [historyFrom]);
+
+  useEffect(() => {
+    try { localStorage.setItem('reservations.historyTo', historyTo); } catch { /* ignore */ }
+  }, [historyTo]);
+
+  const fetchHistory = useCallback(async () => {
+    if (!targetBranchId) { setHistory([]); return; }
+    setHistoryLoading(true);
+    try {
+      const { data } = await api.get('/reservations/history', {
+        params: { branchId: targetBranchId, fromDate: historyFrom, toDate: historyTo },
+      });
+      setHistory(data?.data || []);
+    } catch (err) {
+      console.error('Failed to load reservation history:', err);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [targetBranchId, historyFrom, historyTo]);
+
+  useEffect(() => { if (isHistoryOpen) fetchHistory(); }, [isHistoryOpen, fetchHistory]);
+
+  const resetHistoryToToday = () => {
+    setHistoryFrom(todayIso());
+    setHistoryTo(todayIso());
+  };
+
+  const handleDownloadHistoryPdf = () => {
+    if (history.length === 0) return;
+    const rangeLabel = historyFrom === historyTo ? historyFrom : `${historyFrom} to ${historyTo}`;
+    const subtitle = `${activeBranch?.name || 'Branch'}  •  ${rangeLabel}`;
+    const { doc } = createReport({ title: 'PC Reservations History', subtitle });
+
+    addTable(doc, 90, {
+      title: 'PC Reservations History', subtitle,
+      head: ['Time', 'PC', 'Customer', 'Duration', 'Deposit', 'Status'],
+      body: history.map(r => [
+        r.reservationTime ? format(new Date(r.reservationTime), 'MMM d, hh:mm a') : '-',
+        r.pcName || '-',
+        r.customerName || '-',
+        r.durationMin ? `${r.durationMin}m` : '-',
+        `Rs ${(r.advanceDeposit || 0).toFixed(2)}`,
+        r.arrived ? 'Arrived' : r.state,
+      ]),
+    });
+
+    save(doc, `reservations-history-${historyFrom}${historyFrom !== historyTo ? `_to_${historyTo}` : ''}.pdf`);
+  };
 
   // ── Member search with debounce ──
   useEffect(() => {
@@ -315,54 +385,52 @@ export default function ReservationsPage() {
     }
   };
 
-  // ── Actions: Arrived toggle — a plain reminder, not a gate on anything. Starting a session
-  // for this customer still goes through the ordinary Sessions screen, reservation or not. ──
-  const handleToggleArrived = async (res) => {
-    // Optimistic: this is a low-stakes hand-set flag, not worth a spinner or a failed-request
-    // toast interrupting the counter for something this minor. Reverts silently on error.
-    setReservations(prev => prev.map(r => r.id === res.id ? { ...r, arrived: !res.arrived } : r));
+  // ── Actions: Mark Arrived — one-way, like checking off a todo item. The reservation is still
+  // Pending underneath (Arrived is a plain reminder flag, not a gate on anything - starting a
+  // session for this customer still goes through the ordinary Sessions screen either way), it
+  // just no longer needs the counter's attention, so it drops off this list once checked. ──
+  const handleMarkArrived = async (res) => {
+    setReservations(prev => prev.filter(r => r.id !== res.id));
     try {
-      await setReservationArrived(res.id, !res.arrived);
+      await setReservationArrived(res.id, true);
     } catch (err) {
-      setReservations(prev => prev.map(r => r.id === res.id ? { ...r, arrived: res.arrived } : r));
-      toast.error('Failed to update arrival status');
+      setReservations(prev => [...prev, res].sort((a, b) => new Date(a.reservationTime) - new Date(b.reservationTime)));
+      toast.error('Failed to mark as arrived');
     }
   };
 
-  // ── Actions: Cancel ──
-  const handleCancelClick = (res) => {
-    setCancelData(res);
-    setCancelReason('');
-  };
-
-  const handleCancelSubmit = async (e) => {
-    e.preventDefault();
-    if (!cancelReason.trim()) {
-      toast.error('Cancellation reason is required');
-      return;
-    }
-    setCancelLoading(true);
+  // ── Actions: Remove — permanent, no reason needed. ──
+  const handleRemove = async (res) => {
+    if (!window.confirm(`Remove the booking for ${res.customerName}? This can't be undone.`)) return;
+    setRemovingId(res.id);
     try {
-      await cancelReservation(cancelData.id, { reason: cancelReason.trim() });
-      toast.success('Reservation cancelled successfully');
-      setCancelData(null);
-      fetchReservationsList();
+      await deleteReservation(res.id);
+      toast.success('Reservation removed');
+      setReservations(prev => prev.filter(r => r.id !== res.id));
       fetchPcsAndSessions();
     } catch (err) {
-      toast.error(err.response?.data?.error || err.response?.data?.message || 'Failed to cancel reservation');
+      toast.error(err.response?.data?.error || err.response?.data?.message || 'Failed to remove reservation');
     } finally {
-      setCancelLoading(false);
+      setRemovingId(null);
     }
   };
 
 
   return (
     <div className="flex flex-col gap-4">
-      <PageHeader
-        title="PC Reservations"
-        subtitle="Manage future PC bookings with automated grace period and real-time state broadcasts"
-        icon="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
-      />
+      <div className="flex items-start justify-between gap-4">
+        <PageHeader
+          title="PC Reservations"
+          subtitle="Manage future PC bookings with automated grace period and real-time state broadcasts"
+          icon="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+        />
+        <button
+          onClick={() => setIsHistoryOpen(true)}
+          className="btn-secondary shrink-0 flex items-center gap-2 text-xs py-2 px-4 uppercase font-bold"
+        >
+          <History className="w-4 h-4" /> History
+        </button>
+      </div>
 
       <div className="flex h-[calc(100vh-11rem)] overflow-hidden gap-4 p-1">
         {/* Left Side: Creation Form */}
@@ -706,27 +774,24 @@ export default function ReservationsPage() {
                         )}
                       </div>
 
-                      {/* Arrived reminder toggle + Cancel (only while still Pending) */}
+                      {/* Mark Arrived (one-way — checking it off drops the card from this list,
+                          same as ticking a todo item) + Remove (only while still Pending) */}
                       <div className="flex gap-2 shrink-0">
                         <button
-                          onClick={() => handleToggleArrived(res)}
-                          title={res.arrived ? 'Mark as not arrived' : 'Mark as arrived'}
-                          className={`p-2 border rounded flex items-center gap-1.5 text-xs font-semibold transition-colors ${
-                            res.arrived
-                              ? 'border-pc-active/40 bg-pc-active/10 text-pc-active hover:bg-pc-active/20'
-                              : 'border-border bg-bg-3 text-text-3 hover:text-text-2'
-                          }`}
+                          onClick={() => handleMarkArrived(res)}
+                          title="Mark arrived"
+                          className="p-2 border border-border bg-bg-3 text-text-3 hover:text-pc-active hover:border-pc-active/40 hover:bg-pc-active/10 rounded flex items-center gap-1.5 text-xs font-semibold transition-colors"
                         >
-                          {res.arrived ? <CheckCircle className="w-3.5 h-3.5" /> : <User className="w-3.5 h-3.5" />}
-                          {res.arrived ? 'Arrived' : 'Not Arrived'}
+                          <CheckCircle className="w-3.5 h-3.5" /> Arrived
                         </button>
                         {isPendingState && (
                           <button
-                            onClick={() => handleCancelClick(res)}
-                            title="Cancel Reservation"
-                            className="p-2 border border-neon-red/40 bg-neon-red/10 text-neon-red rounded hover:bg-neon-red/20 transition-colors flex items-center gap-1.5 text-xs font-semibold"
+                            onClick={() => handleRemove(res)}
+                            disabled={removingId === res.id}
+                            title="Remove Reservation"
+                            className="p-2 border border-neon-red/40 bg-neon-red/10 text-neon-red rounded hover:bg-neon-red/20 transition-colors flex items-center gap-1.5 text-xs font-semibold disabled:opacity-50"
                           >
-                            <Ban className="w-3.5 h-3.5" /> Cancel
+                            <Trash2 className="w-3.5 h-3.5" /> Remove
                           </button>
                         )}
                       </div>
@@ -739,62 +804,100 @@ export default function ReservationsPage() {
         </div>
       </div>
 
-      {/* ── Cancel Reservation Modal ── */}
-      {cancelData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-[fadeIn_0.15s_ease-out]">
-          <div className="w-full max-w-sm bg-bg-2 border border-border rounded-xl shadow-2xl overflow-hidden">
-            <div className="px-5 py-4 border-b border-border bg-bg-3 flex items-center justify-between">
-              <div>
-                <h2 className="font-heading font-bold text-text uppercase tracking-wider text-sm flex items-center gap-2">
-                  <Ban className="w-4 h-4 text-neon-red" />
-                  Cancel Booking — {cancelData.customerName}
-                </h2>
-                <p className="text-text-3 text-[10px] font-mono mt-0.5">
-                  Please provide a reason to cancel this reservation slot.
-                </p>
-              </div>
-              <button onClick={() => setCancelData(null)} className="text-text-3 hover:text-text text-xl">&times;</button>
+      {isHistoryOpen && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="w-full max-w-4xl max-h-[85vh] bg-bg-2 border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden">
+            <div className="px-5 py-4 border-b border-border bg-bg-3 flex items-center justify-between shrink-0">
+              <h2 className="font-heading font-bold text-text uppercase tracking-wider text-base flex items-center gap-2">
+                <History className="w-4 h-4 text-accent" /> Reservations History
+              </h2>
+              <button onClick={() => setIsHistoryOpen(false)} className="p-1 text-text-3 hover:text-text rounded transition-colors">
+                <X className="w-5 h-5" />
+              </button>
             </div>
-            <form onSubmit={handleCancelSubmit} className="p-5 space-y-4">
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-mono font-semibold text-text-2 uppercase tracking-wider block">
-                  Cancellation Reason *
-                </label>
-                <textarea
-                  value={cancelReason}
-                  onChange={(e) => setCancelReason(e.target.value)}
-                  placeholder="Provide reason for deletion..."
-                  rows={3}
-                  className="w-full bg-bg-3 border border-border rounded px-3 py-2 text-xs text-text placeholder-text-3 focus:border-neon-red focus:outline-none transition-colors resize-none"
-                  required
-                  autoFocus
+
+            <div className="p-5 flex flex-wrap items-center gap-3 border-b border-border shrink-0">
+              <Calendar className="w-4 h-4 text-text-3 shrink-0" />
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-text-3 uppercase tracking-wider">From</label>
+                <input
+                  type="date"
+                  value={historyFrom}
+                  max={historyTo}
+                  onChange={(e) => setHistoryFrom(e.target.value)}
+                  className="bg-bg-3 border border-border rounded-lg px-3 py-1.5 text-sm text-text"
                 />
               </div>
-              <div className="flex justify-end gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => setCancelData(null)}
-                  className="px-4 py-2 border border-border bg-transparent text-text-2 rounded text-xs font-semibold hover:bg-bg-3 transition-colors"
-                >
-                  Close
-                </button>
-                <button
-                  type="submit"
-                  disabled={cancelLoading || !cancelReason.trim()}
-                  className="px-4 py-2 bg-neon-red/10 border border-neon-red/50 text-neon-red rounded text-xs font-semibold hover:bg-neon-red/20 transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
-                >
-                  {cancelLoading ? (
-                    <span className="w-3.5 h-3.5 border border-current border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    'Cancel Booking'
-                  )}
-                </button>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-text-3 uppercase tracking-wider">To</label>
+                <input
+                  type="date"
+                  value={historyTo}
+                  min={historyFrom}
+                  max={todayIso()}
+                  onChange={(e) => setHistoryTo(e.target.value)}
+                  className="bg-bg-3 border border-border rounded-lg px-3 py-1.5 text-sm text-text"
+                />
               </div>
-            </form>
+              <button onClick={resetHistoryToToday} className="text-xs font-medium text-accent hover:text-accent/80 transition-colors ml-auto">
+                Today
+              </button>
+              <button
+                onClick={handleDownloadHistoryPdf}
+                disabled={history.length === 0}
+                className="btn-secondary py-1.5 px-3 flex items-center gap-1.5 text-xs font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Download className="w-3.5 h-3.5" /> Download PDF
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5">
+              {historyLoading ? (
+                <div className="flex justify-center py-12">
+                  <div className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+                </div>
+              ) : history.length === 0 ? (
+                <div className="text-center text-text-3 text-xs italic py-8 border border-dashed border-border rounded-lg">
+                  No reservations found in this range.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs whitespace-nowrap">
+                    <thead>
+                      <tr className="border-b border-border text-text-3 uppercase tracking-wider font-bold text-[10px]">
+                        <th className="py-2 px-3">Time</th>
+                        <th className="py-2 px-3">PC</th>
+                        <th className="py-2 px-3">Customer</th>
+                        <th className="py-2 px-3">Duration</th>
+                        <th className="py-2 px-3 text-right">Deposit</th>
+                        <th className="py-2 px-3 text-center">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border/40 font-mono">
+                      {history.map(r => (
+                        <tr key={r.id}>
+                          <td className="py-2 px-3 text-text-2">{r.reservationTime ? format(new Date(r.reservationTime), 'MMM d, hh:mm a') : '-'}</td>
+                          <td className="py-2 px-3 text-text font-bold">{r.pcName || '-'}</td>
+                          <td className="py-2 px-3 text-text-2 font-sans">{r.customerName || '-'}</td>
+                          <td className="py-2 px-3 text-text-2">{r.durationMin ? `${r.durationMin}m` : '-'}</td>
+                          <td className="py-2 px-3 text-right text-text">₹{(r.advanceDeposit || 0).toFixed(2)}</td>
+                          <td className="py-2 px-3 text-center">
+                            {r.arrived ? (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded border uppercase tracking-wider font-bold text-neon-green bg-neon-green/10 border-neon-green/20">Arrived</span>
+                            ) : (
+                              <StatusBadge state={r.state} />
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
-
     </div>
   );
 }
