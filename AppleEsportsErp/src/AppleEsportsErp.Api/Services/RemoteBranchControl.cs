@@ -173,6 +173,27 @@ public static class BranchCommands
     public const string SetMemberPassword = "set_member_password";
 
     /// <summary>
+    /// What RunSetMemberPasswordAsync/RunAdminEditMemberValuesAsync report back when the member
+    /// simply has not reached this branch's own database yet - a brand-new member, or a
+    /// password reset requested within moments of signing up, before the ordinary heartbeat
+    /// config push (BranchConfigDto.Members) has had its next cycle to deliver them here.
+    ///
+    /// This is the exact fix for "the member got a success message but cannot log in": the old
+    /// code treated "member not found here" as Succeeded outright, which closed the command for
+    /// good the instant it was checked. Head Office had genuinely reset the password in its own
+    /// copy, told the member so, and then never told the branch anything at all - the command
+    /// was marked done, not pending, so nothing ever tried again once the member did arrive a
+    /// few seconds later.
+    ///
+    /// BranchHeartbeatController.CommandResult checks for this exact string and, only for it,
+    /// leaves the command Pending instead of closing it Failed - so it rides the next heartbeat
+    /// and every one after that, same as a genuine delivery failure would, until either it
+    /// actually succeeds or the ordinary 48-hour give-up window closes it for real.
+    /// </summary>
+    public const string MemberNotYetSyncedMessage =
+        "This member has not synced to this branch yet - will retry once it has.";
+
+    /// <summary>
     /// Money collected at Head Office on the customer's behalf, credited to the branch's own
     /// till. The bill lives in both databases, but only the branch's copy is the one its
     /// counter reads and its cash register reconciles against - so paying Head Office's copy

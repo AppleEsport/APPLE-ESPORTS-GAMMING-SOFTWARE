@@ -28,11 +28,11 @@ public class SystemDesksController : ControllerBase
 
     [HttpGet("online/active")]
     [Authorize(Roles = Roles.Operator + "," + Roles.Admin + "," + Roles.SuperAdmin)]
-    public async Task<IActionResult> GetActiveOnlineDesk()
+    public async Task<IActionResult> GetActiveOnlineDesk([FromQuery] DateOnly? fromDate = null, [FromQuery] DateOnly? toDate = null)
     {
         try
         {
-            var result = await _systemDesksService.GetActiveOnlineDeskAsync(GetBranchId(), await this.GetShiftIdAsync());
+            var result = await _systemDesksService.GetActiveOnlineDeskAsync(GetBranchId(), await this.GetShiftIdAsync(), fromDate, toDate);
             return Ok(new { success = true, data = result });
         }
         catch (Exception ex)

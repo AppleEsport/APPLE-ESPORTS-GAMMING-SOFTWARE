@@ -10,21 +10,25 @@ namespace AppleEsportsErp.Api.Services;
 /// Everything else in this system captures a row once, at the moment it changes, and trusts
 /// that single capture to eventually reach Head Office (see SyncCapture). That is right for a
 /// bill or a login - each happens once, so the capture and the delivery attempt it creates are
-/// the same event. Shift and CashRegister rows are different: they stay open for hours, and
-/// nothing else ever touches them again while they do. A single missed capture - a stale JWT
-/// claim attaching a new cash register to the wrong shift, a bug not yet found, a crash before
-/// the save that would have captured it - had no second chance, because nothing about an open
-/// shift ever changes again to give the capture path another try. That is exactly how a real
-/// cash register opened at Citylight sat with zero delivery attempts, forever, until someone
-/// opened the database by hand and asked why its opening balance never reached the server.
+/// the same event. Shift, CashRegister and Operator rows are different: a shift or register
+/// stays open for hours with nothing else touching it again while it does, and an operator can
+/// go quiet for months once created - either way, a single missed capture (a stale JWT claim
+/// attaching a new cash register to the wrong shift, a bug not yet found, a crash before the
+/// save that would have captured it) had no second chance, because nothing about the row ever
+/// changes again to give the capture path another try. That is exactly how a real cash register
+/// opened at Citylight sat with zero delivery attempts, forever, until someone opened the
+/// database by hand and asked why its opening balance never reached the server - and, separately,
+/// how the "system_admin_&lt;branch&gt;" operator Quick Admin Switch creates the first time
+/// anyone uses it sat unsynced for good, taking every session, bill and payment it ever touched
+/// down with it.
 ///
 /// This asks a much simpler, much more robust question instead of trying to catch every way a
-/// capture can be missed: for every row that is still genuinely open right now, is a delivery
-/// attempt already sitting undelivered in the outbox? If not, queue a fresh one. It does not
-/// need to know why the first attempt is missing - it just guarantees a still-open row is never
-/// more than one sweep away from another try. SyncInboxController applies these as an upsert
-/// keyed on the row's own id, so re-queuing a row that actually arrived fine already is a no-op
-/// at the other end, not a duplicate.
+/// capture can be missed: for every row worth re-checking, is a delivery attempt already sitting
+/// undelivered in the outbox? If not, queue a fresh one. It does not need to know why the first
+/// attempt is missing - it just guarantees the row is never more than one sweep away from
+/// another try. SyncInboxController applies these as an upsert keyed on the row's own id, so
+/// re-queuing a row that actually arrived fine already is a no-op at the other end, not a
+/// duplicate.
 ///
 /// Branch-only, like PcAgentWatchdogService: Head Office's own copy of these rows is what
 /// branches sync TO, not a source to sync FROM - see BranchOnlyBackgroundService.
@@ -106,6 +110,24 @@ public class SyncReconciliationService : BranchOnlyBackgroundService
             .ToListAsync(ct);
         foreach (var credit in pendingCredits)
             queued += await RequeueIfNeededAsync(db, credit, ct);
+
+        // Operators have no "still open" state to filter by the way a shift or a register
+        // does - once created, nothing about a quiet operator ever changes again either, so
+        // the same gap applies just as badly. Confirmed live at Citylight 144Hz: the
+        // "system_admin_<branch>" operator that GetOperatorIdAsync creates the first time
+        // anyone uses Quick Admin Switch is created once, via AddAsync, and never saved again
+        // - so if that single capture was missed (this exact operator predated Operator being
+        // added to SyncCapture.Watched at all), there was no second chance, ever. Every
+        // session, bill and payment it went on to touch sat permanently stuck at Head Office
+        // with "no operator X", because the one row that would have unstuck them never had a
+        // delivery attempt queued in the first place.
+        //
+        // Swept in full rather than filtered, since there is no equivalent of "still open" to
+        // narrow it by - a branch's whole operator list is a handful of rows, so this costs
+        // nothing next to the shift/register sweep above.
+        var allOperators = await db.Operators.ToListAsync(ct);
+        foreach (var op in allOperators)
+            queued += await RequeueIfNeededAsync(db, op, ct);
 
         if (queued > 0)
         {

@@ -19,7 +19,8 @@ public class SystemDesksService : ISystemDesksService
         _unitOfWork = unitOfWork;
     }
 
-    public async Task<OnlineDeskSummaryDto> GetActiveOnlineDeskAsync(Guid branchId, Guid shiftId)
+    public async Task<OnlineDeskSummaryDto> GetActiveOnlineDeskAsync(
+        Guid branchId, Guid shiftId, DateOnly? fromDate = null, DateOnly? toDate = null)
     {
         var shift = await _unitOfWork.Repository<Shift>().Query()
             .FirstOrDefaultAsync(s => s.Id == shiftId && s.BranchId == branchId);
@@ -36,7 +37,13 @@ public class SystemDesksService : ISystemDesksService
         // one day's takings into three sets of figures that reconcile against nothing.
         //
         // How often somebody logs in is their business. The day's money is the day's money.
-        var (dayStart, dayEnd) = IndiaTime.BusinessDayRangeFor(DateTimeOffset.UtcNow);
+        //
+        // Overridable to a chosen day or range, the same as Wallet Desk - no dates given still
+        // means today, unchanged.
+        var resolvedFrom = fromDate ?? IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow);
+        var resolvedTo = toDate ?? fromDate ?? IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow);
+        var (dayStart, _) = IndiaTime.BusinessDayRange(resolvedFrom);
+        var (_, dayEnd) = IndiaTime.BusinessDayRange(resolvedTo);
 
         var payments = await _unitOfWork.Repository<Payment>().Query()
             .Where(p => p.BranchId == branchId

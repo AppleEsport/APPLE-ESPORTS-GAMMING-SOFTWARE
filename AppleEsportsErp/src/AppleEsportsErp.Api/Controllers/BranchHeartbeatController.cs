@@ -336,6 +336,25 @@ public class BranchHeartbeatController : ControllerBase
         if (command.Status is BranchCommandStatus.Succeeded or BranchCommandStatus.Failed)
             return Ok(ApiResponse<object>.Ok(new { alreadyClosed = true }));
 
+        // Not done, not genuinely failed either - the member this command is for simply has not
+        // reached this branch's own database yet. This is the actual fix for "the member got a
+        // success message but still cannot log in": the old code had no third option here, so a
+        // branch reporting exactly this situation as Succeeded=true closed the command outright
+        // - Head Office had already told the customer their reset worked, and nothing was left
+        // to ever tell the branch to store it, even once the member arrived moments later.
+        //
+        // Left exactly as it is - Pending or Sent, whichever it already was - which is what
+        // keeps it inside BranchHeartbeatController's own "open" query (Pending or Sent) for the
+        // next heartbeat to pick straight back up, same as a genuine delivery failure already
+        // does. GiveUpAfterFor's 48-hour window is still what closes this out for a member that
+        // truly never arrives - this only stops the FIRST beat from mistaking "not yet" for "no".
+        if (!dto.Succeeded && dto.Message == AppleEsportsErp.Api.Services.BranchCommands.MemberNotYetSyncedMessage)
+        {
+            command.ResultMessage = dto.Message;
+            await _db.SaveChangesAsync(ct);
+            return Ok(ApiResponse<object>.Ok(new { willRetry = true }));
+        }
+
         command.Status = dto.Succeeded ? BranchCommandStatus.Succeeded : BranchCommandStatus.Failed;
         command.ResultMessage = dto.Message;
         command.CompletedAt = DateTimeOffset.UtcNow;
@@ -494,12 +513,34 @@ public class BranchHeartbeatController : ControllerBase
             })
             .ToListAsync(ct);
 
+        // Every Admin-level Users-table account, not just this branch's - the same "reachable
+        // from any counter" reasoning as the Global Admin operators above, and the actual fix
+        // for Quick Admin Switch showing nobody: an Admin made at Head Office had never once
+        // been sent to any branch at all, on any beat, ever - Users was simply never in this
+        // list, so there was nothing stale to invalidate and nothing a cache header could have
+        // fixed.
+        var admins = await _db.Users.AsNoTracking()
+            .Where(u => u.Role == Roles.Admin)
+            .OrderBy(u => u.Id)
+            .Select(u => new BranchAdminConfigDto
+            {
+                Id = u.Id,
+                FullName = u.FullName,
+                Email = u.Email,
+                PasswordHash = u.PasswordHash,
+                AccessPin = u.AccessPin,
+                DashboardPermissions = u.DashboardPermissions,
+                IsBlocked = u.Status == UserStatus.Suspended || u.Status == UserStatus.Disabled,
+            })
+            .ToListAsync(ct);
+
         var config = new BranchConfigDto
         {
             Operators = operators,
             MenuItems = menuItems,
             Members = members,
             PricingProfiles = pricingProfiles,
+            Admins = admins,
         };
         config.Version = Fingerprint(config);
 
@@ -534,7 +575,10 @@ public class BranchHeartbeatController : ControllerBase
             string.Join('|', p.Packages.Select(pkg => string.Join(',',
                 pkg.Id, pkg.Name, pkg.DurationMinutes, pkg.Price, pkg.SortOrder, pkg.IsActive))))));
 
-        var canonical = string.Join("\n---\n", operatorsPart, menuPart, membersPart, pricingPart);
+        var adminsPart = string.Join('\n', config.Admins.Select(a => string.Join("",
+            a.Id, a.FullName, a.Email, a.PasswordHash, a.AccessPin, a.DashboardPermissions, a.IsBlocked)));
+
+        var canonical = string.Join("\n---\n", operatorsPart, menuPart, membersPart, pricingPart, adminsPart);
 
         return Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))[..16];

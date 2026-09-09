@@ -5,6 +5,7 @@ using AppleEsportsErp.Application.DTOs.Common;
 using AppleEsportsErp.Application.DTOs.Reservations;
 using AppleEsportsErp.Application.Exceptions;
 using AppleEsportsErp.Application.Interfaces;
+using AppleEsportsErp.Application.Services;
 using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Domain.Enums;
 using AppleEsportsErp.Infrastructure.Configuration;
@@ -66,6 +67,25 @@ public class ReservationService : IReservationService
 
         var dtos = items.Select(MapToDto).ToList();
         return new PaginatedResult<ReservationDto>(dtos, total, page, pageSize);
+    }
+
+    /// <summary>
+    /// Every reservation in a date range, any state - unlike GetActiveReservationsAsync, which
+    /// deliberately shows only Pending because that is the operator's own to-do list. A look
+    /// back at a past day wants everything that was booked that day, arrived or not.
+    /// </summary>
+    public async Task<List<ReservationDto>> GetReservationHistoryAsync(Guid branchId, DateOnly fromDate, DateOnly toDate)
+    {
+        var (dayStart, _) = IndiaTime.BusinessDayRange(fromDate);
+        var (_, dayEnd) = IndiaTime.BusinessDayRange(toDate);
+
+        var reservations = await _unitOfWork.Repository<Reservation>().Query()
+            .Include(r => r.Pc)
+            .Where(r => r.BranchId == branchId && r.ReservationTime >= dayStart && r.ReservationTime < dayEnd)
+            .OrderByDescending(r => r.ReservationTime)
+            .ToListAsync();
+
+        return reservations.Select(MapToDto).ToList();
     }
 
     public async Task<ReservationDto> GetReservationAsync(Guid id)

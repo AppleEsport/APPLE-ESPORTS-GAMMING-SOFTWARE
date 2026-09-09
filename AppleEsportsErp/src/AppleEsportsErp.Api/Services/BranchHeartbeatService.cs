@@ -727,10 +727,18 @@ public class BranchHeartbeatService : BackgroundService
         var db = scoped.GetRequiredService<AppDbContext>();
         var member = await db.Set<Member>().FirstOrDefaultAsync(m => m.Id == memberId, ct);
 
-        // Not a failure. A member created at another branch, or one this branch has never seen,
-        // simply has nothing here to update - and reporting that as an error would have Head
-        // Office retrying a command that can never apply.
-        if (member is null) return (true, "This member does not exist at this branch.");
+        // Genuinely absent (a member deleted at Head Office, say) and merely "not synced here
+        // yet" look identical from this query alone - a member created seconds ago, or a
+        // password reset requested moments after signup, simply has not reached this branch's
+        // own copy through the ordinary heartbeat push yet. Treating that as done would be
+        // exactly the old bug: Head Office already told the customer their reset succeeded, and
+        // nothing would ever tell the branch to actually store it. See
+        // BranchCommands.MemberNotYetSyncedMessage for why this exact wording matters: Head
+        // Office's CommandResult handler leaves the command Pending for this one message
+        // instead of closing it, so it keeps trying on later heartbeats until the member has
+        // arrived and this can actually apply - or the ordinary 48-hour give-up closes it for
+        // a member that truly never will.
+        if (member is null) return (false, BranchCommands.MemberNotYetSyncedMessage);
 
         member.PasswordHash = passwordHash;
         member.ResetToken = null;
@@ -783,9 +791,10 @@ public class BranchHeartbeatService : BackgroundService
         var db = scoped.GetRequiredService<AppDbContext>();
         var member = await db.Set<Member>().AsNoTracking().FirstOrDefaultAsync(m => m.Id == memberId, ct);
 
-        // Same reasoning as RunSetMemberPasswordAsync: a member this branch has never seen has
-        // nothing here to edit, and that is not a failure worth retrying forever.
-        if (member is null) return (true, "This member does not exist at this branch.");
+        // Same reasoning as RunSetMemberPasswordAsync just above - see that comment. A member
+        // this branch has not yet received via its own heartbeat push is not distinguishable
+        // here from one that never will arrive, so this retries rather than closing quietly.
+        if (member is null) return (false, BranchCommands.MemberNotYetSyncedMessage);
 
         try
         {
@@ -1829,7 +1838,7 @@ public class BranchHeartbeatService : BackgroundService
 
         if (config is null) return;
         if (config.Operators.Count == 0 && config.MenuItems.Count == 0 && config.Members.Count == 0
-            && config.PricingProfiles.Count == 0) return;
+            && config.PricingProfiles.Count == 0 && config.Admins.Count == 0) return;
 
         // Every row gets its own scope and its own SaveChangesAsync - deliberately, and this is
         // the fix for a real, silent, permanent failure mode found on Citylight. All of an
@@ -1851,6 +1860,7 @@ public class BranchHeartbeatService : BackgroundService
         var menuAdded = 0;
         var membersAdded = 0;
         var pricingAdded = 0;
+        var adminsAdded = 0;
 
         foreach (var incoming in config.Operators)
         {
@@ -1916,16 +1926,34 @@ public class BranchHeartbeatService : BackgroundService
             }
         }
 
-        if (opsAdded + menuAdded + membersAdded + pricingAdded > 0)
+        foreach (var item in config.Admins)
+        {
+            try
+            {
+                using var scope = _serviceProvider.CreateAsyncScope();
+                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                if (await ApplyOneAdminAsync(db, item, ct)) adminsAdded++;
+                if (db.ChangeTracker.HasChanges()) await db.SaveChangesAsync(ct);
+            }
+            catch (Exception ex)
+            {
+                anyFailed = true;
+                LogConfigRowFailure("admin", item.FullName, item.Id, ex);
+            }
+        }
+
+        if (opsAdded + menuAdded + membersAdded + pricingAdded + adminsAdded > 0)
         {
             _logger.LogInformation(
                 "Settings updated from Head Office: {OpCount} operator(s), {OpNew} new; " +
                 "{MenuCount} menu item(s), {MenuNew} new; {MemberCount} member(s), {MemberNew} new; " +
-                "{PricingCount} pricing profile(s), {PricingNew} new. Version {Version}.",
+                "{PricingCount} pricing profile(s), {PricingNew} new; {AdminCount} admin(s), {AdminNew} new. " +
+                "Version {Version}.",
                 config.Operators.Count, opsAdded,
                 config.MenuItems.Count, menuAdded,
                 config.Members.Count, membersAdded,
                 config.PricingProfiles.Count, pricingAdded,
+                config.Admins.Count, adminsAdded,
                 config.Version);
         }
 
@@ -2201,6 +2229,51 @@ public class BranchHeartbeatService : BackgroundService
             member.Status = MemberStatus.Suspended;
         else if (!item.IsBlocked && member.Status is MemberStatus.Suspended)
             member.Status = MemberStatus.Active;
+
+        return isNew;
+    }
+
+    /// <summary>
+    /// Creates or updates one Admin-level Users-table account locally, so Quick Admin Switch at
+    /// this branch can actually find someone made "the right way" at Head Office - see
+    /// BranchConfigDto.Admins for why nothing here ever arrived before.
+    ///
+    /// Never touches Role - a row this loop creates is always an Admin, and a row it finds
+    /// already local stays whatever it already is, so this can never turn a branch's own local
+    /// SuperAdmin (created at that branch's own first-time setup, entirely unrelated to Head
+    /// Office's copy) into anything else.
+    /// </summary>
+    private static async Task<bool> ApplyOneAdminAsync(
+        AppDbContext db, BranchAdminConfigDto item, CancellationToken ct)
+    {
+        var admin = await db.Users.FirstOrDefaultAsync(u => u.Id == item.Id, ct);
+        var isNew = admin is null;
+
+        if (admin is null)
+        {
+            admin = new User
+            {
+                Id = item.Id,
+                Role = Roles.Admin,
+                CreatedAt = DateTimeOffset.UtcNow,
+            };
+            db.Users.Add(admin);
+        }
+
+        admin.FullName = item.FullName;
+        admin.Email = item.Email;
+        admin.PasswordHash = item.PasswordHash;
+        admin.AccessPin = item.AccessPin;
+        admin.DashboardPermissions = item.DashboardPermissions;
+        admin.UpdatedAt = DateTimeOffset.UtcNow;
+
+        // Same rule as operators and members: only the barred decision comes down, and only in
+        // the direction that actually enforces it - never used to quietly reinstate someone
+        // whatever this branch's own local record already says about them.
+        if (item.IsBlocked && admin.Status is not UserStatus.Suspended)
+            admin.Status = UserStatus.Suspended;
+        else if (!item.IsBlocked && admin.Status is UserStatus.Suspended)
+            admin.Status = UserStatus.Active;
 
         return isNew;
     }
