@@ -103,8 +103,11 @@ public class AuthService : IAuthService
     /// </summary>
     public async Task<LoginResponseDto> LoginAdminAsync(AdminLoginDto dto)
     {
-        // 1. Find admin user
-        var user = await _db.Users.FirstOrDefaultAsync(u => u.Email == dto.Email);
+        // 1. Find admin user. Case-insensitive: Postgres `text` equality is case-sensitive, so
+        // an admin stored as "Manager@Apple.com" could never log in typing "manager@apple.com"
+        // - it fell straight through to "Invalid email/username or password" with no hint why.
+        var email = dto.Email.Trim().ToLower();
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.Email.ToLower() == email);
         if (user != null)
         {
             // 2. Check account status
@@ -565,11 +568,15 @@ public class AuthService : IAuthService
     /// </summary>
     public async Task<LoginResponseDto> LoginMemberAsync(MemberLoginDto dto)
     {
-        // Find member by Username, MobileNumber, or Email
-        var member = await _db.Members.FirstOrDefaultAsync(m => 
-            (m.Username != null && m.Username == dto.Identifier) || 
-            (m.MobileNumber != null && m.MobileNumber == dto.Identifier) || 
-            (m.Email != null && m.Email == dto.Identifier));
+        // Find member by Username, MobileNumber, or Email. Email compared case-insensitively,
+        // same reason as LoginAdminAsync - Postgres text equality is case-sensitive and a
+        // member typing their own email in a different case should not be told it's wrong.
+        var identifier = dto.Identifier.Trim();
+        var identifierLower = identifier.ToLower();
+        var member = await _db.Members.FirstOrDefaultAsync(m =>
+            (m.Username != null && m.Username == identifier) ||
+            (m.MobileNumber != null && m.MobileNumber == identifier) ||
+            (m.Email != null && m.Email.ToLower() == identifierLower));
 
         if (member == null)
             throw new AuthenticationException("Invalid credentials", "INVALID_CREDENTIALS");
@@ -1423,13 +1430,18 @@ public class AuthService : IAuthService
         // Same email can belong to both a Member and a staff (User/Operator) account.
         // Scope the lookup to whichever screen the request came from so the reset never
         // lands on the wrong account type.
-        var user = accountType == "member" ? null : await _db.Users.FirstOrDefaultAsync(u => u.Email == email);
-        var op = accountType == "member" ? null : await _db.Operators.FirstOrDefaultAsync(o => o.Email == email);
+        // Compared case-insensitively on both sides - `email` above is already lowered, but a
+        // stored address saved in mixed case (e.g. "John@Gmail.com") would otherwise never
+        // match, and this method fails silent by design (see below), so the person requesting
+        // a reset would see "check your email" and genuinely never receive one, with no error
+        // anywhere to explain why.
+        var user = accountType == "member" ? null : await _db.Users.FirstOrDefaultAsync(u => u.Email.ToLower() == email);
+        var op = accountType == "member" ? null : await _db.Operators.FirstOrDefaultAsync(o => o.Email.ToLower() == email);
         // Members can end up with duplicate rows sharing an email (e.g. abandoned re-registrations).
         // Prefer the active one so a reset never lands on a stale/suspended duplicate instead of
         // the account the person is actually trying to log into.
         var member = accountType == "staff" ? null : await _db.Members
-            .Where(m => m.Email == email)
+            .Where(m => m.Email.ToLower() == email)
             .OrderByDescending(m => m.Status == MemberStatus.Active)
             .ThenByDescending(m => m.UpdatedAt)
             .FirstOrDefaultAsync();
@@ -1621,6 +1633,11 @@ public class AuthService : IAuthService
 
     public async Task AdminSwitchOutAsync(Guid adminId, Guid shiftId)
     {
+        // Same split AdminSwitchInAsync itself has to bridge: a switched-in admin can be a
+        // genuine Users-table Admin, or an operator promoted with IsGlobalAdmin (e.g.
+        // "Ankur"/"Nazmin", managed from the Operators tab, not the Admins list). Checking
+        // Users alone meant every switch-out by a promoted operator produced no audit row at
+        // all - the switch-in was logged, the switch-out silently wasn't.
         var admin = await _db.Users.FindAsync(adminId);
         if (admin != null)
         {
@@ -1629,6 +1646,20 @@ public class AuthService : IAuthService
                 UserId = admin.Id,
                 UserRole = Roles.Admin,
                 UserName = admin.FullName,
+                Action = AuditActions.AdminSwitchOut,
+                Details = new { shiftId }
+            });
+            return;
+        }
+
+        var adminOp = await _db.Operators.FindAsync(adminId);
+        if (adminOp != null && adminOp.IsGlobalAdmin)
+        {
+            await _audit.LogAsync(new AuditEntry
+            {
+                UserId = adminOp.Id,
+                UserRole = Roles.Admin,
+                UserName = adminOp.FullName,
                 Action = AuditActions.AdminSwitchOut,
                 Details = new { shiftId }
             });

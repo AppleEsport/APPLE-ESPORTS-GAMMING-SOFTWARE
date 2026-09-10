@@ -29,17 +29,22 @@ public static class SessionPricingCalculator
     }
 
     /// <summary>
-    /// Rounds a final bill total to the nearest ₹10 — down for a remainder of 0-5,
-    /// up for 6-9 — so the amount actually charged never lands on an awkward figure.
-    /// Applied only at the point a bill's TotalAmount is finalized; never on line
-    /// items, Subtotal, DiscountAmount, or wallet top-ups.
+    /// Rounds a final bill total to the nearest ₹10 — down for a remainder of 0-4,
+    /// up for 5-9 (standard round-half-up) — so the amount actually charged never
+    /// lands on an awkward figure. Applied only at the point a bill's TotalAmount
+    /// is finalized; never on line items, Subtotal, DiscountAmount, or wallet top-ups.
+    ///
+    /// A remainder of exactly 5 rounds UP, not down. It used to round down, which
+    /// silently took ₹5 off every fairly-priced total that landed exactly on a ₹5
+    /// remainder - a genuine ₹75 custom package (1 hr = ₹50, played 1.5 hr) was
+    /// charged ₹70 with no discount, adjustment, or explanation anywhere on the bill.
     /// </summary>
     public static decimal RoundBillTotal(decimal amount)
     {
         if (amount <= 0m) return 0m;
 
         decimal remainder = amount % 10m;
-        return remainder <= 5m
+        return remainder < 5m
             ? amount - remainder
             : amount + (10m - remainder);
     }
@@ -68,8 +73,8 @@ public static class SessionPricingCalculator
     /// will be a little late, and the stop must still be affordable when it is.
     ///
     /// This is not a nicety. Without it the obvious answer — the most play the balance covers —
-    /// lands exactly on a rounding boundary, because ₹15 of play at a ₹10 rounding rounds down to
-    /// ₹10 and ₹15.01 rounds up to ₹20. Sitting on that edge, a few seconds of lateness moves the
+    /// lands exactly on a rounding boundary, because ₹14 of play at a ₹10 rounding rounds down to
+    /// ₹10 and ₹15 rounds up to ₹20. Sitting on that edge, a few seconds of lateness moves the
     /// bill by a whole ₹10 and hands the member a debt. Tested across four branch rates and 200
     /// balances: parked on the boundary, two thirds of cases left the member owing money.
     /// </param>
@@ -81,9 +86,10 @@ public static class SessionPricingCalculator
         if (ratePerHour <= 0m) return decimal.MaxValue;
         if (balance <= 0m) return bufferMinutes;
 
-        // Start above the balance, not at it. Rounding can come *down* by as much as ₹5, so play
-        // worth ₹15 is charged ₹10 — a member with ₹10 can afford fifteen minutes at ₹60/hour,
-        // and starting the search at the balance would cut them off five minutes early.
+        // Start above the balance, not at it. Rounding can come *down* by as much as ₹4, so play
+        // worth ₹14 is charged ₹10 — a member with ₹10 can afford fourteen minutes at ₹60/hour,
+        // and starting the search at the balance would cut them off short. The +5 headroom here
+        // is deliberately more than that ₹4 max, so the search always starts above the true edge.
         decimal raw = balance + 5m;
 
         // The test is what the bill would be if the stop arrives late — so the answer holds when
