@@ -267,6 +267,13 @@ public static class BranchCommands
     public const string ApplyDiscount = "apply_discount";
 
     /// <summary>
+    /// Corrects an already-completed bill's payment method at the branch that actually holds
+    /// the bill, its register, and its cash - same reasoning as ApplyDiscount and ProcessPayment.
+    /// The actor is carried explicitly, for the same accountability reason ApplyDiscount does.
+    /// </summary>
+    public const string EditPaymentMethod = "edit_payment_method";
+
+    /// <summary>
     /// Removes a menu item from the branch's own catalogue - permanently deletes it there too
     /// if nothing local references it, deactivates it otherwise. Without this, a delete at Head
     /// Office only ever removed Head Office's copy: the branch's row sat there untouched, and

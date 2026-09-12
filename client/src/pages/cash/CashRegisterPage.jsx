@@ -1,12 +1,26 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Lock, AlertTriangle, Calculator, LogOut, ArrowLeft } from 'lucide-react';
+import { Lock, AlertTriangle, Calculator, LogOut, ArrowLeft, Calendar, Download, History, ChevronDown, ChevronRight } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useBranch } from '../../contexts/BranchContext';
 import api from '../../config/api';
+import { getCashReconciliationReport } from '../../api/reports.api';
 import PageHeader from '../../components/layout/PageHeader';
 import DenominationCounter from '../../components/cash/DenominationCounter';
 import { generateIdempotencyKey } from '../../utils/idempotency';
+import { format } from 'date-fns';
+import { createReport, addTable, save } from '../../utils/pdfReport';
+
+const todayIso = () => format(new Date(), 'yyyy-MM-dd');
+
+// Same per-browser remembered range as Cash Desk/Food Orders history.
+const readStoredDate = (key) => {
+  try {
+    return localStorage.getItem(key) || todayIso();
+  } catch {
+    return todayIso();
+  }
+};
 
 export default function CashRegisterPage() {
   const navigate = useNavigate();
@@ -39,6 +53,88 @@ export default function CashRegisterPage() {
 
   const targetBranchId = isSuperAdmin ? activeBranch?.id : user?.branchId;
 
+  // Read-only history — a look back at what an operator counted opening/closing on a past
+  // day, separate from the live counter above. Same date-range-plus-print pattern already on
+  // Cash Desk/Online Desk/Food Orders History, and the same reconciliation report Cash Desk's
+  // own history already uses (opened/closed, expected vs counted, difference, denominations).
+  const [historyFrom, setHistoryFrom] = useState(() => readStoredDate('cashRegister.historyFrom'));
+  const [historyTo, setHistoryTo] = useState(() => readStoredDate('cashRegister.historyTo'));
+  const [history, setHistory] = useState(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState(null);
+  const [historyOperator, setHistoryOperator] = useState('all');
+  const [expandedRegisterId, setExpandedRegisterId] = useState(null);
+
+  useEffect(() => {
+    try { localStorage.setItem('cashRegister.historyFrom', historyFrom); } catch { /* ignore */ }
+  }, [historyFrom]);
+
+  useEffect(() => {
+    try { localStorage.setItem('cashRegister.historyTo', historyTo); } catch { /* ignore */ }
+  }, [historyTo]);
+
+  const fetchHistory = useCallback(async () => {
+    if (isSuperAdmin && !targetBranchId) {
+      setHistory(null);
+      return;
+    }
+    setHistoryLoading(true);
+    try {
+      setHistoryError(null);
+      const { data } = await getCashReconciliationReport({
+        branchId: targetBranchId,
+        startDate: historyFrom,
+        endDate: historyTo,
+      });
+      setHistory(data.data || []);
+    } catch (err) {
+      setHistoryError(err.response?.data?.error || 'Failed to fetch cash register history.');
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [targetBranchId, isSuperAdmin, historyFrom, historyTo]);
+
+  useEffect(() => { fetchHistory(); }, [fetchHistory]);
+
+  const historyOperators = useMemo(
+    () => Array.from(new Set((history || []).map(r => r.operatorName))).sort(),
+    [history]
+  );
+  const filteredHistory = useMemo(
+    () => (history || []).filter(r => historyOperator === 'all' || r.operatorName === historyOperator),
+    [history, historyOperator]
+  );
+
+  const resetHistoryToToday = () => {
+    setHistoryFrom(todayIso());
+    setHistoryTo(todayIso());
+    setHistoryOperator('all');
+  };
+
+  const handleDownloadHistoryPdf = () => {
+    if (filteredHistory.length === 0) return;
+    const rangeLabel = historyFrom === historyTo ? historyFrom : `${historyFrom} to ${historyTo}`;
+    const operatorLabel = historyOperator === 'all' ? '' : `  •  ${historyOperator}`;
+    const subtitle = `${activeBranch?.name || 'Branch'}  •  ${rangeLabel}${operatorLabel}`;
+    const { doc } = createReport({ title: 'Cash Register History', subtitle });
+
+    addTable(doc, 90, {
+      title: 'Cash Register History', subtitle,
+      head: ['Opened', 'Closed', 'Operator', 'Expected', 'Counted', 'Difference', 'Status'],
+      body: filteredHistory.map(r => [
+        format(new Date(r.openedAt), 'MMM d, hh:mm a'),
+        r.closedAt ? format(new Date(r.closedAt), 'MMM d, hh:mm a') : 'Still open',
+        r.operatorName,
+        `Rs ${r.expectedDrawerCash.toFixed(2)}`,
+        `Rs ${r.physicalCashCounted.toFixed(2)}`,
+        `Rs ${r.difference.toFixed(2)}`,
+        r.isVerified ? 'Verified' : 'Unverified',
+      ]),
+    });
+
+    save(doc, `cash-register-history-${historyFrom}${historyFrom !== historyTo ? `_to_${historyTo}` : ''}.pdf`);
+  };
+
   const fetchActiveRegister = useCallback(async () => {
     if (isSuperAdmin && !targetBranchId) {
       setRegister(null);
@@ -64,6 +160,21 @@ export default function CashRegisterPage() {
   useEffect(() => {
     setIsLoading(true);
     fetchActiveRegister();
+  }, [fetchActiveRegister]);
+
+  // Defense-in-depth for the live ForceLogout push (see SocketContext.jsx): a missed socket
+  // event - a reconnect gap, the tab was backgrounded when it fired - must not leave this
+  // screen showing a register as open indefinitely after a Super Admin has force-closed the
+  // shift behind it. Refetching on focus/visibility catches up within one glance at the tab,
+  // without polling constantly while nobody is looking at it.
+  useEffect(() => {
+    const onFocus = () => { if (document.visibilityState !== 'hidden') fetchActiveRegister(); };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
   }, [fetchActiveRegister]);
 
   const handleStartVerification = async () => {
@@ -162,6 +273,153 @@ export default function CashRegisterPage() {
     }
   };
 
+  // Built once here rather than duplicated in every branch below — it is a past-day lookup,
+  // not today's live drawer, so it renders the same regardless of whether a register happens
+  // to be open right now (same reasoning as CashDeskPage's own historySection).
+  const historySection = (
+    <div className="mt-6 bg-bg-2 border border-border rounded-xl p-4 max-w-4xl mx-auto w-full">
+      <h3 className="text-text font-bold uppercase tracking-wider text-sm mb-4 border-b border-border pb-3 flex items-center gap-2">
+        <History className="w-4 h-4" /> Cash Register History
+      </h3>
+
+      <div className="flex flex-wrap items-center gap-3 mb-4">
+        <Calendar className="w-4 h-4 text-text-3 shrink-0" />
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-text-3 uppercase tracking-wider">From</label>
+          <input
+            type="date"
+            value={historyFrom}
+            max={historyTo}
+            onChange={(e) => setHistoryFrom(e.target.value)}
+            className="bg-bg-3 border border-border rounded-lg px-3 py-1.5 text-sm text-text"
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-text-3 uppercase tracking-wider">To</label>
+          <input
+            type="date"
+            value={historyTo}
+            min={historyFrom}
+            max={todayIso()}
+            onChange={(e) => setHistoryTo(e.target.value)}
+            className="bg-bg-3 border border-border rounded-lg px-3 py-1.5 text-sm text-text"
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-text-3 uppercase tracking-wider">Operator</label>
+          <select
+            value={historyOperator}
+            onChange={(e) => setHistoryOperator(e.target.value)}
+            className="bg-bg-3 border border-border rounded-lg px-3 py-1.5 text-sm text-text"
+          >
+            <option value="all">All operators</option>
+            {historyOperators.map(name => <option key={name} value={name}>{name}</option>)}
+          </select>
+        </div>
+        <button
+          onClick={resetHistoryToToday}
+          className="text-xs font-medium text-accent hover:text-accent/80 transition-colors ml-auto"
+        >
+          Today
+        </button>
+        <button
+          onClick={handleDownloadHistoryPdf}
+          disabled={filteredHistory.length === 0}
+          className="btn-secondary py-1.5 px-3 flex items-center gap-1.5 text-xs font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <Download className="w-3.5 h-3.5" /> Download PDF
+        </button>
+      </div>
+
+      {historyError && (
+        <div className="bg-neon-red/10 border border-neon-red/30 text-neon-red p-3 rounded-xl mb-4 flex items-center gap-2 text-sm">
+          <AlertTriangle className="w-4 h-4" /> {historyError}
+        </div>
+      )}
+
+      {historyLoading ? (
+        <div className="flex justify-center py-8">
+          <div className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+        </div>
+      ) : filteredHistory.length === 0 ? (
+        <div className="text-center text-text-3 text-xs italic py-8 border border-dashed border-border rounded-lg">
+          No cash registers found in this range.
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse text-xs whitespace-nowrap">
+            <thead>
+              <tr className="border-b border-border text-text-3 uppercase tracking-wider font-bold text-[10px]">
+                <th className="py-2 px-3"></th>
+                <th className="py-2 px-3">Opened</th>
+                <th className="py-2 px-3">Closed</th>
+                <th className="py-2 px-3">Operator</th>
+                <th className="py-2 px-3 text-right">Expected</th>
+                <th className="py-2 px-3 text-right">Counted</th>
+                <th className="py-2 px-3 text-right">Difference</th>
+                <th className="py-2 px-3 text-center">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/40 font-mono">
+              {filteredHistory.map(r => {
+                const isExpanded = expandedRegisterId === r.cashRegisterId;
+                const denominations = [
+                  ['₹2000', r.notes2000], ['₹500', r.notes500], ['₹200', r.notes200],
+                  ['₹100', r.notes100], ['₹50', r.notes50], ['₹20', r.notes20], ['₹10', r.notes10],
+                  ['₹5', r.coins5], ['₹2', r.coins2], ['₹1', r.coins1],
+                ].filter(([, count]) => count > 0);
+                return (
+                  <Fragment key={r.cashRegisterId}>
+                    <tr
+                      className="cursor-pointer hover:bg-bg-3/50"
+                      onClick={() => setExpandedRegisterId(isExpanded ? null : r.cashRegisterId)}
+                    >
+                      <td className="py-2 px-3 text-text-3">
+                        {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                      </td>
+                      <td className="py-2 px-3 text-text-2">{format(new Date(r.openedAt), 'MMM d, hh:mm a')}</td>
+                      <td className="py-2 px-3 text-text-2">{r.closedAt ? format(new Date(r.closedAt), 'MMM d, hh:mm a') : 'Still open'}</td>
+                      <td className="py-2 px-3 text-neon-blue font-bold font-sans">{r.operatorName}</td>
+                      <td className="py-2 px-3 text-right text-text">₹{r.expectedDrawerCash.toFixed(2)}</td>
+                      <td className="py-2 px-3 text-right text-text">₹{r.physicalCashCounted.toFixed(2)}</td>
+                      <td className={`py-2 px-3 text-right font-bold ${r.difference === 0 ? 'text-text-2' : r.difference < 0 ? 'text-neon-red' : 'text-neon-orange'}`}>
+                        ₹{r.difference.toFixed(2)}
+                      </td>
+                      <td className="py-2 px-3 text-center">
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded border uppercase tracking-wider font-bold ${
+                          r.isVerified ? 'text-neon-green bg-neon-green/10 border-neon-green/20' : 'text-neon-orange bg-neon-orange/10 border-neon-orange/20'
+                        }`}>
+                          {r.isVerified ? 'Verified' : 'Unverified'}
+                        </span>
+                      </td>
+                    </tr>
+                    {isExpanded && (
+                      <tr>
+                        <td colSpan={8} className="py-2 px-3 bg-bg-3/30">
+                          {denominations.length === 0 ? (
+                            <span className="text-text-3 italic">No denomination count recorded.</span>
+                          ) : (
+                            <div className="flex flex-wrap gap-x-5 gap-y-1">
+                              {denominations.map(([label, count]) => (
+                                <span key={label} className="text-text-2">
+                                  {label} <span className="text-text font-bold">× {count}</span>
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+
   if (isSuperAdmin && !activeBranch) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
@@ -180,18 +438,22 @@ export default function CashRegisterPage() {
     );
   }
 
-  // 1. If no active register, nothing to close.
+  // 1. If no active register, nothing to close — history still shows underneath.
   if (!register) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
-        <AlertTriangle className="w-12 h-12 text-neon-orange mb-4" />
-        <h2 className="text-xl font-heading font-bold text-text mb-2">No Active Shift</h2>
-        <p className="text-text-2">There is no active cash register open for this shift.</p>
-      </div>
+      <>
+        <div className="flex flex-col items-center justify-center min-h-[40vh] text-center">
+          <AlertTriangle className="w-12 h-12 text-neon-orange mb-4" />
+          <h2 className="text-xl font-heading font-bold text-text mb-2">No Active Shift</h2>
+          <p className="text-text-2">There is no active cash register open for this shift.</p>
+        </div>
+        {historySection}
+      </>
     );
   }
 
   return (
+    <>
     <div className="h-full flex flex-col max-w-4xl mx-auto">
       <div className="mb-6 flex items-center gap-4">
         {register.status !== 'Verified' && (
@@ -393,5 +655,7 @@ export default function CashRegisterPage() {
         </div>
       )}
     </div>
+    {historySection}
+    </>
   );
 }

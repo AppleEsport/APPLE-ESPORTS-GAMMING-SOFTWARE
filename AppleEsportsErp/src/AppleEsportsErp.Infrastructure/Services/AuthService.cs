@@ -80,8 +80,9 @@ public class AuthService : IAuthService
 
     private readonly IAdminNotifier _adminNotifier;
     private readonly IShiftTakeoverService _takeover;
+    private readonly IHubNotificationService _hubNotifications;
 
-    public AuthService(AppDbContext db, JwtTokenService jwt, IAuditService audit, ILogger<AuthService> logger, ITokenRevocationService tokenRevocation, IEmailService emailService, IConfiguration configuration, IAppUrlProvider appUrls, IAdminNotifier adminNotifier, IShiftTakeoverService takeover, IOutboxService outbox)
+    public AuthService(AppDbContext db, JwtTokenService jwt, IAuditService audit, ILogger<AuthService> logger, ITokenRevocationService tokenRevocation, IEmailService emailService, IConfiguration configuration, IAppUrlProvider appUrls, IAdminNotifier adminNotifier, IShiftTakeoverService takeover, IOutboxService outbox, IHubNotificationService hubNotifications)
     {
         _adminNotifier = adminNotifier;
         _takeover = takeover;
@@ -94,6 +95,7 @@ public class AuthService : IAuthService
         _configuration = configuration;
         _outbox = outbox;
         _appUrls = appUrls;
+        _hubNotifications = hubNotifications;
     }
 
     /// <summary>
@@ -1126,6 +1128,22 @@ public class AuthService : IAuthService
         // Force revoke all existing tokens for this operator
         await _tokenRevocation.RevokeUserTokensAsync(operatorId, TimeSpan.FromDays(7));
 
+        // The one-line gap between "Super Admin sees the shift closed" (their dashboard just
+        // re-queries the DB) and "the operator sees it" - without this, the operator's own
+        // screen kept showing the shift as open until their token happened to expire or they
+        // reloaded the page. SocketContext.jsx has been listening for this event the whole
+        // time; nothing on the server ever sent it.
+        try
+        {
+            await _hubNotifications.SendForceLogoutAsync(operatorId, "Forced logout by Super Admin");
+        }
+        catch (Exception ex)
+        {
+            // The DB work above already committed - a dead hub must never turn a successful
+            // force-logout into a failed one. The operator falls back to their token expiring.
+            _logger.LogWarning(ex, "Could not push a live ForceLogout to operator {OperatorId}.", operatorId);
+        }
+
         return new ForceLogoutResponseDto { Success = true, Operator = op.FullName };
     }
 
@@ -1738,10 +1756,32 @@ public class AuthService : IAuthService
         if (string.IsNullOrWhiteSpace(dto.Token))
             throw new AuthorizationException("Invalid or expired reset token.");
 
+        // Matched on ResetToken ALONE, not "Email AND ResetToken" - the token is already the
+        // unguessable, single-use credential here (a random 32-char hex string, minted only
+        // when a reset was actually requested), so it is what should decide this, not an email
+        // address that can go stale independently of it. It very much does: an operator can
+        // correct a member's email at the branch (a routine, common edit) with nothing syncing
+        // that change up to Head Office - see MemberService.UpdateMemberAsync's member.updated
+        // fix - so Head Office's copy of Email can lag what was actually emailed to the member
+        // for the reset link that carries this exact token. Requiring both meant a perfectly
+        // valid, unspent, correctly-delivered token was rejected as "invalid or expired" purely
+        // because of an unrelated sync lag on a field that was never the credential.
+        //
+        // dto.Email is still read and normalized below, kept only as a non-blocking sanity
+        // signal (logged on mismatch) - never a second gate the token has to also clear.
         var email = dto.Email.Trim().ToLowerInvariant();
-        var user = await _db.Users.FirstOrDefaultAsync(u => u.Email == email && u.ResetToken == dto.Token);
-        var op = await _db.Operators.FirstOrDefaultAsync(o => o.Email == email && o.ResetToken == dto.Token);
-        var member = await _db.Members.FirstOrDefaultAsync(m => m.Email == email && m.ResetToken == dto.Token);
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.ResetToken == dto.Token);
+        var op = await _db.Operators.FirstOrDefaultAsync(o => o.ResetToken == dto.Token);
+        var member = await _db.Members.FirstOrDefaultAsync(m => m.ResetToken == dto.Token);
+
+        var matchedEmail = (user?.Email ?? op?.Email ?? member?.Email)?.Trim().ToLowerInvariant();
+        if (matchedEmail != null && matchedEmail != email)
+        {
+            _logger.LogInformation(
+                "Password reset token matched an account whose stored email ({StoredEmail}) " +
+                "differs from the one submitted ({SubmittedEmail}) - proceeding on the token, " +
+                "which is the actual credential here.", matchedEmail, email);
+        }
 
         if (user == null && op == null && member == null)
         {
@@ -1882,7 +1922,11 @@ public class AuthService : IAuthService
             var entryEmail = root.TryGetProperty("email", out var e) ? e.GetString() : null;
             var entryToken = root.TryGetProperty("resetToken", out var t) ? t.GetString() : null;
 
-            if (!string.Equals(entryEmail, email, StringComparison.OrdinalIgnoreCase) || entryToken != token)
+            // Token alone, same reasoning as the main lookup above: this entry's own "email"
+            // field was captured at the moment the reset was requested and can just as easily
+            // have gone stale if the branch corrected the member's email afterward, before Head
+            // Office ever got a member.created row to check it against.
+            if (entryToken != token)
                 continue;
 
             _db.Add(new BranchCommand

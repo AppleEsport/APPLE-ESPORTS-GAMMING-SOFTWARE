@@ -439,6 +439,9 @@ public class BranchHeartbeatService : BackgroundService
             case BranchCommands.ApplyDiscount:
                 return await RunApplyDiscountAsync(scoped, command.Payload, ct);
 
+            case BranchCommands.EditPaymentMethod:
+                return await RunEditPaymentMethodAsync(scoped, command.Payload, ct);
+
             case BranchCommands.DeleteInventoryItem:
                 return await RunDeleteInventoryItemAsync(scoped, command.Payload, ct);
 
@@ -771,6 +774,7 @@ public class BranchHeartbeatService : BackgroundService
         IServiceProvider scoped, string payload, CancellationToken ct)
     {
         Guid memberId, adminId;
+        string? adminName;
         Application.DTOs.Members.AdminEditMemberValuesDto dto;
         try
         {
@@ -778,6 +782,7 @@ public class BranchHeartbeatService : BackgroundService
             var root = doc.RootElement;
             memberId = root.GetProperty("memberId").GetGuid();
             adminId = root.GetProperty("adminId").GetGuid();
+            adminName = root.TryGetProperty("adminName", out var n) ? n.GetString() : null;
             dto = JsonSerializer.Deserialize<Application.DTOs.Members.AdminEditMemberValuesDto>(
                 root.GetProperty("dto").GetRawText(),
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
@@ -799,8 +804,13 @@ public class BranchHeartbeatService : BackgroundService
         try
         {
             var memberService = scoped.GetRequiredService<IMemberService>();
+            // remoteAdminName (never null here - this command only ever comes from Head Office)
+            // is what tells AdminEditValuesAsync this actor's id is a Head Office id, not a
+            // local one: WalletTransaction.AdminId is FK'd to this branch's own `users` table,
+            // which has never heard of a Head Office account, so writing adminId there failed
+            // outright on every single remote balance edit. See that method's own comment.
             var result = await memberService.AdminEditValuesAsync(
-                member.HomeBranchId ?? Guid.Empty, adminId, memberId, dto);
+                member.HomeBranchId ?? Guid.Empty, adminId, memberId, dto, adminName ?? "Head Office");
 
             return (true, $"Updated at this branch. Gaming balance now Rs {result.GamingBalance}.");
         }
@@ -1799,6 +1809,51 @@ public class BranchHeartbeatService : BackgroundService
                 bill.BranchId, actorId, actorRole, billId, dto);
 
             return (true, $"Discount applied. New total Rs {result.TotalAmount}.");
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.GetBaseException().Message);
+        }
+    }
+
+    /// <summary>
+    /// Corrects a bill's payment method at the branch that actually holds it - same reasoning
+    /// as RunApplyDiscountAsync, actor carried explicitly for the same accountability reason.
+    /// </summary>
+    private static async Task<(bool, string)> RunEditPaymentMethodAsync(
+        IServiceProvider scoped, string payload, CancellationToken ct)
+    {
+        Guid billId, actorId;
+        string actorRole;
+        Application.DTOs.Billing.EditPaymentMethodDto dto;
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            var root = doc.RootElement;
+            billId = root.GetProperty("billId").GetGuid();
+            actorId = root.GetProperty("actorId").GetGuid();
+            actorRole = root.GetProperty("actorRole").GetString() ?? Roles.SuperAdmin;
+            dto = JsonSerializer.Deserialize<Application.DTOs.Billing.EditPaymentMethodDto>(
+                payload, new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                ?? throw new InvalidOperationException("Empty payment-correction payload.");
+        }
+        catch
+        {
+            return (false, "The payment-correction command arrived without a readable bill id and amounts.");
+        }
+
+        var db = scoped.GetRequiredService<AppDbContext>();
+        var bill = await db.Bills.AsNoTracking().FirstOrDefaultAsync(b => b.Id == billId, ct);
+
+        if (bill is null) return (false, "No such bill exists at this branch.");
+
+        try
+        {
+            var billingService = scoped.GetRequiredService<IBillingService>();
+            await billingService.EditPaymentMethodAsync(
+                bill.BranchId, actorId, actorRole, billId, dto);
+
+            return (true, $"Payment method corrected to {dto.NewPaymentType}.");
         }
         catch (Exception ex)
         {

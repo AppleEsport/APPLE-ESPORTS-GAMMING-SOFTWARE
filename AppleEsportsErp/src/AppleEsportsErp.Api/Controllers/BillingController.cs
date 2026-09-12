@@ -238,6 +238,62 @@ public class BillingController : ControllerBase
         return Ok(ApiResponse<BillDto>.Ok(result));
     }
 
+    /// <summary>
+    /// Corrects only the payment method on an already-completed bill (e.g. marked Online, the
+    /// bank declined it, the customer paid Cash instead) - line items, totals, and discounts
+    /// stay locked. Same role/permission gate as ApplyDiscount, and the same reason: this
+    /// revises a financial record after the fact.
+    /// </summary>
+    [HttpPatch("{id:guid}/payment-method")]
+    [Idempotent]
+    [Authorize]
+    public async Task<IActionResult> EditPaymentMethod(Guid id, [FromBody] EditPaymentMethodDto dto, CancellationToken ct)
+    {
+        var role = User.FindFirstValue(ClaimTypes.Role);
+        var permissionsStr = User.FindFirstValue("dashboardPermissions");
+
+        bool canCorrect = role == AppleEsportsErp.Application.Constants.Roles.SuperAdmin;
+        if (!canCorrect && role == AppleEsportsErp.Application.Constants.Roles.Admin && !string.IsNullOrEmpty(permissionsStr))
+        {
+            try
+            {
+                var permissions = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, bool>>(permissionsStr);
+                if (permissions != null && permissions.TryGetValue("paymentMethodCorrection", out var hasPermission) && hasPermission)
+                {
+                    canCorrect = true;
+                }
+            }
+            catch { }
+        }
+
+        if (!canCorrect) return Forbid();
+
+        var actorId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+
+        if (_remote.MustTravel)
+        {
+            var branchId = await _db.Set<AppleEsportsErp.Domain.Entities.Bill>().AsNoTracking()
+                .Where(b => b.Id == id).Select(b => b.BranchId).FirstOrDefaultAsync(ct);
+
+            if (branchId == Guid.Empty)
+                return NotFound(ApiResponse<object>.Fail("Head Office has no such bill.", "BILL_NOT_FOUND"));
+
+            return await SendToBranchAsync(branchId, AppleEsportsErp.Api.Services.BranchCommands.EditPaymentMethod, new
+            {
+                billId = id,
+                dto.NewPaymentType,
+                dto.CashAmount,
+                dto.OnlineAmount,
+                dto.Reason,
+                actorId,
+                actorRole = role,
+            }, ct);
+        }
+
+        var result = await _billingService.EditPaymentMethodAsync(GetBranchId(), actorId, role!, id, dto);
+        return Ok(ApiResponse<BillDto>.Ok(result));
+    }
+
     [HttpDelete("{id:guid}/items/{itemId:guid}")]
     public async Task<IActionResult> RemoveBillItem(Guid id, Guid itemId)
     {

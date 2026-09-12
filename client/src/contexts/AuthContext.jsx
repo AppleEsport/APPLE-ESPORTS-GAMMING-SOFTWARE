@@ -296,6 +296,19 @@ export function AuthProvider({ children }) {
     return false;
   }, [user, adminSwitchUser]);
 
+  // ── Can this person correct a completed bill's payment method? ──
+  // Mirrors BillingController.EditPaymentMethod exactly, same reasoning as canApplyDiscount:
+  // this revises a financial record after the fact, so it needs the same explicit gate rather
+  // than a button the server refuses anyway.
+  const canCorrectPaymentMethod = useCallback(() => {
+    const checkUser = adminSwitchUser || user;
+    if (!checkUser) return false;
+    const role = checkUser.role || checkUser.Role;
+    if (role === ROLES.SUPER_ADMIN) return true;
+    if (role === ROLES.ADMIN) return checkUser.dashboardPermissions?.paymentMethodCorrection === true;
+    return false;
+  }, [user, adminSwitchUser]);
+
   const value = {
     user: adminSwitchUser || user,
     baseUser: user, // Keep track of the original operator
@@ -314,6 +327,7 @@ export function AuthProvider({ children }) {
     fetchAvailableAdminsForSwitch,
     hasDashboardAccess,
     canApplyDiscount,
+    canCorrectPaymentMethod,
     fetchCurrentUser,
     setError,
   };

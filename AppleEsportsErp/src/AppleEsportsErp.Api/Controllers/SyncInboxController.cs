@@ -378,6 +378,7 @@ public class SyncInboxController : ControllerBase
         // Behind member.created, ahead of everything money-shaped: it needs its member to exist
         // and nothing else needs it, so it neither blocks a batch nor gets blocked by one.
         "member.reset_requested" => 1,
+        "member.updated" => 1,
 
         "bill.changed" => 1,
         "reservation.changed" => 1,
@@ -424,6 +425,14 @@ public class SyncInboxController : ControllerBase
 
             case "member.reset_requested":
                 await ApplyMemberResetTokenAsync(held, root);
+                break;
+
+            // A member's profile edited at the branch after they were first created - most
+            // commonly adding/correcting their email on a walk-in registration that started
+            // with none. See MemberService.UpdateMemberAsync's own comment for the exact bug
+            // this closes: Head Office's copy silently going stale forever.
+            case "member.updated":
+                await ApplyMemberUpdateAsync(held, root);
                 break;
 
             // An operator created or edited at a branch's own counter - see SyncCapture.
@@ -854,6 +863,28 @@ public class SyncInboxController : ControllerBase
             CreatedAt = ReadDate(root, "createdAt") ?? held.OccurredAt,
             UpdatedAt = held.ReceivedAt,
         });
+    }
+
+    /// <summary>
+    /// Patches an existing Head Office member row with a branch-side profile edit - most
+    /// commonly the email being added or corrected after a walk-in registration. Throws if the
+    /// member isn't here yet rather than upserting a partial row: member.created carries the
+    /// full profile and is a tier below this one, so it should already have arrived; if it
+    /// genuinely hasn't, this entry is retried once it has, same as ApplyMemberResetTokenAsync's
+    /// own reasoning for member.reset_requested.
+    /// </summary>
+    private async Task ApplyMemberUpdateAsync(SyncInboxEntry held, JsonElement root)
+    {
+        var memberId = held.AggregateId;
+        var member = await _db.Members.FirstOrDefaultAsync(m => m.Id == memberId)
+            ?? throw new InvalidOperationException(
+                $"Head Office has no member {memberId}. The member.created event should arrive first.");
+
+        member.FullName = ReadString(root, "fullName") ?? member.FullName;
+        member.MobileNumber = ReadString(root, "mobileNumber") ?? member.MobileNumber;
+        member.Email = ReadString(root, "email");
+        member.Username = ReadString(root, "username");
+        member.UpdatedAt = ReadDate(root, "updatedAt") ?? held.ReceivedAt;
     }
 
     /// <summary>
