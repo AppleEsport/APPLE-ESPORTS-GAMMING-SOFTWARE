@@ -263,9 +263,10 @@ public class SessionService : ISessionService
             // (DurationMinutes 0) and any duration with no matching package keep trusting the
             // caller's figure, same as before, since there is nothing here to check it against.
             decimal expectedAmount = dto.ExpectedAmount;
+            PricingPackage? matchingPackage = null;
             if (dto.DurationMinutes > 0)
             {
-                var matchingPackage = await _db.Set<PricingPackage>().AsNoTracking()
+                matchingPackage = await _db.Set<PricingPackage>().AsNoTracking()
                     .Where(pkg => pkg.PricingProfileId == pc.PricingProfileId
                         && pkg.IsActive && pkg.DurationMinutes == (int)dto.DurationMinutes)
                     .OrderBy(pkg => pkg.SortOrder)
@@ -289,6 +290,11 @@ public class SessionService : ISessionService
                 PlannedDurationMin = dto.DurationMinutes > 0 ? (int)dto.DurationMinutes : null,
                 TotalAmount = expectedAmount,
                 GamingAmount = expectedAmount,
+                // Only a real catalog package is a committed prepaid price Stop should honor
+                // later — a plain duration with no matching package is just the client's guess,
+                // same as before this field existed.
+                PricingPackageId = matchingPackage?.Id,
+                PackagePrice = matchingPackage?.Price,
                 GamingType = dto.PackageName,
                 State = SessionState.Active,
                 Notes = dto.Notes,
@@ -312,10 +318,10 @@ public class SessionService : ISessionService
                 ShiftId = shiftId == Guid.Empty ? null : shiftId,
                 CustomerName = dto.CustomerName,
                 MemberId = dto.MemberId,
-                GamingAmount = dto.ExpectedAmount,
+                GamingAmount = expectedAmount,
                 FoodAmount = 0,
-                Subtotal = dto.ExpectedAmount,
-                TotalAmount = dto.ExpectedAmount,
+                Subtotal = expectedAmount,
+                TotalAmount = expectedAmount,
                 Status = BillStatus.Pending,
                 CreatedAt = now,
                 UpdatedAt = now
@@ -330,8 +336,8 @@ public class SessionService : ISessionService
                 ItemType = "gaming",
                 ItemName = $"Base Session ({dto.DurationMinutes}m)",
                 Quantity = 1,
-                UnitPrice = dto.ExpectedAmount,
-                TotalPrice = dto.ExpectedAmount,
+                UnitPrice = expectedAmount,
+                TotalPrice = expectedAmount,
                 CreatedAt = now
             };
             
@@ -457,21 +463,35 @@ public class SessionService : ISessionService
             // guess) is the honest fallback for legacy sessions that predate that enforcement.
             decimal ratePerHour = session.Pc?.PricingProfile?.BaseHourlyRate ?? SessionPricingCalculator.DefaultRatePerHour;
 
-            // 2. Apply the branch's buffer/grace period & bill for exact elapsed time — unless
-            // the customer played exactly the plan they were sold a fixed price for.
-            // session.GamingAmount currently still holds whatever was set at Start/Extend (the
-            // plan's price, e.g. a "4 hrs - Rs 180" package's Rs 180, or the old linear
-            // multiples' rate*hours). Anything other than an exact match - ending early OR
-            // running over - forfeits that fixed price entirely and bills the honest elapsed
-            // rate for the whole session: a discount package is a prepaid block bought at an
-            // exact size, not a discount blended with however much more or less got played.
-            // (For the old linear multiples this produces the same number either way, since
-            // rate*hours already equals elapsed-time billing at every duration.)
+            // 2. Honor a genuine prepaid package (PackagePrice, set only from a real catalog
+            // PricingPackage at Start/Extend - never from a client's own guess) within a grace
+            // window equal to the branch's own buffer, in either direction. Ending a few minutes
+            // early still pays the prepaid block in full, same as any prepaid deal; running a few
+            // minutes over still honors it too, rather than re-pricing the whole session pro-rata
+            // for landing just outside an exact minute. Only a genuine overrun - past the grace
+            // window - adds pro-rata billing for the extra minutes on top of the package price,
+            // instead of discarding the deal and rebilling everything from zero.
+            //
+            // A session with no PackagePrice (Pay-As-You-Go, or a plain duration with no matching
+            // catalog package) was never a committed price to begin with, so it always bills the
+            // honest elapsed rate - same as before this existed.
+            //
+            // The buffer's free-cancellation window comes first and wins outright, package or
+            // not: stopping inside it has always meant Rs 0 (see the "Cancelled" labelling right
+            // below), and a package must not override that free window into a full charge just
+            // because a price was committed - nobody signed up to pay for a session they ended
+            // before it ever really started.
             int bufferMinutes = session.Pc?.PricingProfile?.BufferMinutes ?? SessionPricingCalculator.DefaultBufferMinutes;
-            decimal plannedAmount = session.GamingAmount;
-            if (session.PlannedDurationMin.HasValue && session.ActualDurationMin!.Value == session.PlannedDurationMin.Value)
+            if (session.ActualDurationMin!.Value <= bufferMinutes)
             {
-                session.GamingAmount = plannedAmount;
+                session.GamingAmount = 0m;
+            }
+            else if (session.PackagePrice.HasValue && session.PlannedDurationMin.HasValue)
+            {
+                int overrunMinutes = session.ActualDurationMin!.Value - session.PlannedDurationMin.Value;
+                session.GamingAmount = overrunMinutes <= bufferMinutes
+                    ? session.PackagePrice.Value
+                    : session.PackagePrice.Value + SessionPricingCalculator.CalculateGamingAmount(ratePerHour, 0, overrunMinutes);
             }
             else
             {
@@ -862,6 +882,13 @@ public class SessionService : ISessionService
             }
             session.GamingAmount += additionalAmount;
             session.TotalAmount += additionalAmount;
+
+            // Every extension - matched to a real package or the hourly pro-rata fallback - is a
+            // charge already committed to the customer the moment it's added, same reasoning as
+            // the original package price at Start. Stop honors this running total within a grace
+            // window rather than forfeiting it for landing a few minutes off the combined plan.
+            session.PricingPackageId ??= matchingPackage?.Id;
+            session.PackagePrice = (session.PackagePrice ?? 0m) + additionalAmount;
             
             var newGamingType = $"{session.GamingType} + {dto.PackageName}";
             if (newGamingType.Length > 150)

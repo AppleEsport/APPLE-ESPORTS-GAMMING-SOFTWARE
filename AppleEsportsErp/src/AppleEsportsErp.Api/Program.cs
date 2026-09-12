@@ -177,7 +177,14 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
                 if (!hasBearer)
                 {
-                    var cookieToken = context.Request.Cookies["accessToken"];
+                    // Checked first, and used instead of accessToken when present: this is
+                    // what carries an Admin Quick-Switch. It is a wholly separate cookie from
+                    // accessToken/refreshToken so switching in and out never touches the
+                    // operator's own session - see AuthController's admin-switch endpoints.
+                    var switchToken = context.Request.Cookies["adminSwitchToken"];
+                    var cookieToken = !string.IsNullOrEmpty(switchToken)
+                        ? switchToken
+                        : context.Request.Cookies["accessToken"];
                     if (!string.IsNullOrEmpty(cookieToken))
                         context.Token = cookieToken;
                 }

@@ -23,4 +23,19 @@ public interface IHubNotificationService
     /// </summary>
     Task SendWalletFinishedToAgentAsync(Guid pcId);
     Task TriggerDashboardRefreshAsync();
+
+    /// <summary>
+    /// Tells this operator's own browser, right now, that Super Admin ended their shift out
+    /// from under them - the DB/token-revocation side of a force-logout already happened by
+    /// the time this is called. Without this the operator's screen kept showing the shift as
+    /// open until their token separately expired or they reloaded - Super Admin saw the
+    /// closure immediately (their view re-queries the DB), the operator did not, for however
+    /// long they happened to keep working unaware.
+    /// </summary>
+    Task SendForceLogoutAsync(Guid operatorId, string reason);
+
+    /// <summary>A member's wallet balance changed - local branch edit or a Head Office remote
+    /// command applied here - so the operator PC screen showing it (session start, wallet
+    /// desk) can update in place instead of waiting for its next manual refresh.</summary>
+    Task BroadcastMemberBalanceUpdateAsync(Guid branchId, Guid memberId);
 }

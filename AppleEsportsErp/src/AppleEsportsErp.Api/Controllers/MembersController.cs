@@ -145,6 +145,7 @@ public class MembersController : ControllerBase
                 memberId = id,
                 dto,
                 adminId,
+                adminName = User.FindFirstValue(ClaimTypes.Name),
             }, adminId, ct);
         }
 

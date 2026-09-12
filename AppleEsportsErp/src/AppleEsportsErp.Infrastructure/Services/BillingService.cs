@@ -310,6 +310,146 @@ public class BillingService : IBillingService
         return MapToDto(bill);
     }
 
+    /// <summary>
+    /// Corrects only the payment method on an already-completed bill — e.g. marked Online, the
+    /// bank later declined it, the customer paid Cash instead. Line items, totals, and discounts
+    /// stay exactly as they were; only PaymentType/CashAmount/OnlineAmount move, and the delta is
+    /// booked as a NEW cash-register adjustment dated now, not folded into the original payment's
+    /// own CashTransaction. That original row is left untouched deliberately: it is what that
+    /// day's (possibly already-closed, already-reported) register actually recorded at the time,
+    /// and rewriting it would silently change a day's numbers that may have already been handed
+    /// over and signed off. The correction belongs to today, because today is when it happened.
+    /// </summary>
+    public async Task<BillDto> EditPaymentMethodAsync(
+        Guid branchId, Guid actorId, string actorRole, Guid id, EditPaymentMethodDto dto)
+    {
+        RefuseIfHeadOffice("payment-corrected");
+
+        if (dto.NewPaymentType == PaymentType.Wallet)
+            throw new AppException(
+                "Payment method cannot be corrected to or from Wallet here - a wallet payment's " +
+                "Gaming/Food split isn't retained per-payment, so it can't be safely reversed or " +
+                "re-applied from this screen. Use a fresh payment/refund for that instead.",
+                System.Net.HttpStatusCode.BadRequest, "WALLET_CORRECTION_NOT_SUPPORTED");
+
+        var bill = await _unitOfWork.Repository<Bill>().Query()
+            .Include(b => b.Payments)
+            .Include(b => b.Pc)
+            .FirstOrDefaultAsync(b => b.Id == id && b.BranchId == branchId)
+            ?? throw new NotFoundException("Bill not found.");
+
+        if (bill.Status != BillStatus.Completed)
+            throw new AppException(
+                "Only a completed bill's payment method can be corrected.",
+                System.Net.HttpStatusCode.BadRequest, "BILL_NOT_COMPLETED");
+
+        if (bill.PaymentType == PaymentType.Wallet || bill.WalletAmount > 0)
+            throw new AppException(
+                "This bill was paid (at least partly) from a member's wallet, so its payment " +
+                "method cannot be corrected here - see EditPaymentMethodAsync's wallet note.",
+                System.Net.HttpStatusCode.BadRequest, "WALLET_CORRECTION_NOT_SUPPORTED");
+
+        if (dto.CashAmount < 0 || dto.OnlineAmount < 0)
+            throw new AppException(
+                "A payment cannot contain a negative amount.",
+                System.Net.HttpStatusCode.BadRequest, "NEGATIVE_PAYMENT_AMOUNT");
+
+        if (Math.Round(dto.CashAmount + dto.OnlineAmount, 2) != Math.Round(bill.TotalAmount, 2))
+            throw new AppException(
+                $"The corrected split must still add up to the bill's total of {bill.TotalAmount:0.00} " +
+                $"(cash {dto.CashAmount:0.00} + online {dto.OnlineAmount:0.00} = " +
+                $"{dto.CashAmount + dto.OnlineAmount:0.00}).",
+                System.Net.HttpStatusCode.BadRequest, "PAYMENT_SPLIT_MISMATCH");
+
+        var oldPaymentType = bill.PaymentType;
+        var oldCashAmount = bill.CashAmount;
+        var oldOnlineAmount = bill.OnlineAmount;
+        decimal cashDelta = dto.CashAmount - oldCashAmount;
+
+        bill.PaymentType = dto.NewPaymentType;
+        bill.CashAmount = dto.CashAmount;
+        bill.OnlineAmount = dto.OnlineAmount;
+        // ActualCashCollected/CashReceived/ChangeReturned describe a specific tendering moment
+        // that already happened and isn't being redone here - only left consistent so a cash
+        // amount of zero doesn't leave a stale "collected" figure sitting behind it.
+        bill.ActualCashCollected = dto.CashAmount;
+        if (dto.CashAmount == 0)
+        {
+            bill.CashReceived = 0;
+            bill.ChangeReturned = 0;
+        }
+        bill.UpdatedAt = DateTimeOffset.UtcNow;
+        _unitOfWork.Repository<Bill>().Update(bill);
+
+        // Book the cash delta into TODAY's drawer, not the original day's - see the method
+        // comment. Looked up by branch alone, not the correcting actor's own shift: a Super
+        // Admin correcting from Head Office is not on any shift here at all, and even locally
+        // the bill's OWN (probably long-closed) original shift is exactly the wrong one to ask
+        // - the point is whichever register is open right now, today. No open register right
+        // now (e.g. corrected outside branch hours) means there is nothing to adjust; the bill
+        // and audit trail still record the correction either way.
+        CashRegister? activeRegister = null;
+        if (cashDelta != 0)
+        {
+            activeRegister = await _unitOfWork.Repository<CashRegister>().Query()
+                .FirstOrDefaultAsync(cr => cr.BranchId == branchId && cr.Status == CashRegisterStatus.Open);
+
+            if (activeRegister != null)
+            {
+                activeRegister.ExpectedDrawerCash += cashDelta;
+                activeRegister.TotalCashSales += cashDelta;
+                _unitOfWork.Repository<CashRegister>().Update(activeRegister);
+
+                await _unitOfWork.Repository<CashTransaction>().AddAsync(new CashTransaction
+                {
+                    CashRegisterId = activeRegister.Id,
+                    BillId = bill.Id,
+                    BranchId = branchId,
+                    OperatorId = actorId,
+                    PcNumber = bill.Pc?.PcNumber,
+                    CustomerName = bill.CustomerName ?? "Walk-in",
+                    TransactionType = "payment_method_correction",
+                    CashAmount = cashDelta,
+                    CashReceived = 0,
+                    ChangeReturned = 0,
+                    ActualCashCollected = cashDelta,
+                    GamingAmount = 0,
+                    FoodAmount = 0,
+                    CreatedAt = DateTimeOffset.UtcNow
+                });
+            }
+        }
+
+        await _auditService.LogAsync(new AuditEntry
+        {
+            OperatorId = actorId,
+            UserId = actorId,
+            UserRole = actorRole,
+            UserName = string.Empty,
+            Action = AuditActions.PaymentMethodEdit,
+            BranchId = branchId,
+            TargetType = "bill",
+            TargetId = bill.Id,
+            Details = new
+            {
+                OldPaymentType = oldPaymentType?.ToString(),
+                NewPaymentType = dto.NewPaymentType.ToString(),
+                OldCashAmount = oldCashAmount,
+                NewCashAmount = dto.CashAmount,
+                OldOnlineAmount = oldOnlineAmount,
+                NewOnlineAmount = dto.OnlineAmount,
+                Reason = dto.Reason,
+            }
+        });
+
+        await _unitOfWork.SaveChangesAsync();
+        await _hubNotification.BroadcastBillingUpdateAsync(branchId, bill.Id);
+        if (activeRegister != null)
+            await _hubNotification.BroadcastCashRegisterUpdateAsync(branchId, activeRegister.Id);
+
+        return MapToDto(bill);
+    }
+
     public async Task<BillDto> ProcessPaymentAsync(Guid branchId, Guid operatorId, Guid shiftId, Guid id, ProcessPaymentDto dto)
     {
         RefuseIfHeadOffice("paid");

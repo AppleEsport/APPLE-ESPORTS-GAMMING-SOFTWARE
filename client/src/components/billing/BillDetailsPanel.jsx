@@ -2,10 +2,10 @@ import { useState, useEffect } from 'react';
 import {
   Receipt, Gamepad2, Coffee, Tag, CheckCircle,
   Banknote, CreditCard, Wallet, ArrowLeftRight, Smartphone,
-  KeyRound, ShieldCheck, ShieldAlert, Eye, EyeOff, Trash2, Clock
+  KeyRound, ShieldCheck, ShieldAlert, Eye, EyeOff, Trash2, Clock, Pencil
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
-import { applyDiscount, processPayment, getMemberById, removeBillItem, requestWalletApproval } from '../../api/billing.api';
+import { applyDiscount, processPayment, getMemberById, removeBillItem, requestWalletApproval, editPaymentMethod } from '../../api/billing.api';
 import { useSocket } from '../../contexts/SocketContext';
 import { useToast } from '../ui/Toast';
 import { formatMoney } from '../../utils/money';
@@ -15,9 +15,18 @@ const DENOMINATIONS = [10, 20, 50, 100, 200, 500];
 const DISC_PRESETS   = [0, 5, 10, 15, 20];
 
 export default function BillDetailsPanel({ bill, onBillUpdate, onPaymentSuccess, defaultPaymentMethod }) {
-  const { isSuperAdmin, canApplyDiscount } = useAuth();
+  const { isSuperAdmin, canApplyDiscount, canCorrectPaymentMethod } = useAuth();
   const { subscribe, SIGNALR_HUBS } = useSocket();
   const toast = useToast();
+
+  // ── Payment-method correction on a completed bill ──
+  const [editingPayMethod, setEditingPayMethod] = useState(false);
+  const [correctMethod, setCorrectMethod] = useState('cash');
+  const [correctCash, setCorrectCash] = useState('');
+  const [correctOnline, setCorrectOnline] = useState('');
+  const [correctReason, setCorrectReason] = useState('');
+  const [correctBusy, setCorrectBusy] = useState(false);
+  const [correctError, setCorrectError] = useState(null);
 
   /* ── All hooks MUST come before any conditional return ── */
   const [discLoading, setDiscLoading] = useState(false);
@@ -51,6 +60,9 @@ export default function BillDetailsPanel({ bill, onBillUpdate, onPaymentSuccess,
     setWalletWaiting(false);
     setCustomerName(bill?.customerName || '');
     setCustomerPhone(bill?.customerPhone || '');
+    setEditingPayMethod(false);
+    setCorrectError(null);
+    setCorrectReason('');
   }, [bill?.id, defaultPaymentMethod]);
 
   useEffect(() => {
@@ -252,6 +264,52 @@ export default function BillDetailsPanel({ bill, onBillUpdate, onPaymentSuccess,
     }
   };
 
+  const openCorrectPayMethod = () => {
+    const p = bill.payments?.[0];
+    setCorrectMethod(p?.onlineAmount > 0 && !p?.cashAmount ? 'online' : p?.cashAmount > 0 && !p?.onlineAmount ? 'cash' : 'split');
+    setCorrectCash(String(p?.cashAmount ?? 0));
+    setCorrectOnline(String(p?.onlineAmount ?? 0));
+    setCorrectReason('');
+    setCorrectError(null);
+    setEditingPayMethod(true);
+  };
+
+  const handleCorrectPayMethod = async () => {
+    const total = Number(bill.totalAmount) || 0;
+    let cashAmount = 0, onlineAmount = 0, newPaymentType;
+    if (correctMethod === 'cash') { cashAmount = total; newPaymentType = 'Cash'; }
+    else if (correctMethod === 'online') { onlineAmount = total; newPaymentType = 'Online'; }
+    else {
+      cashAmount = Number(correctCash) || 0;
+      onlineAmount = Number(correctOnline) || 0;
+      newPaymentType = 'Split';
+    }
+
+    if (Math.round((cashAmount + onlineAmount) * 100) !== Math.round(total * 100)) {
+      setCorrectError(`Cash + Online must add up to ₹${formatMoney(total)}.`);
+      return;
+    }
+    if (!correctReason.trim()) {
+      setCorrectError('A reason is required.');
+      return;
+    }
+
+    setCorrectBusy(true);
+    setCorrectError(null);
+    try {
+      const updatedBill = await editPaymentMethod(bill.id, {
+        newPaymentType, cashAmount, onlineAmount, reason: correctReason.trim(),
+      });
+      toast.success('Payment method corrected');
+      setEditingPayMethod(false);
+      onBillUpdate?.(updatedBill);
+    } catch (err) {
+      setCorrectError(err.response?.data?.error || err.message || 'Failed to correct payment method');
+    } finally {
+      setCorrectBusy(false);
+    }
+  };
+
   /* ── Render ── */
   return (
     <div className="flex flex-col h-full bg-bg-2 border border-border rounded-xl overflow-hidden shadow-lg">
@@ -322,7 +380,87 @@ export default function BillDetailsPanel({ bill, onBillUpdate, onPaymentSuccess,
 
         {/* Paid: show payment breakdown */}
         {isPaid && bill.payments?.length > 0 && (
-          <PaidBreakdown payments={bill.payments} />
+          <PaidBreakdown
+            payments={bill.payments}
+            canEdit={canCorrectPaymentMethod() && !(bill.payments[0]?.walletAmount > 0)}
+            onEdit={openCorrectPayMethod}
+          />
+        )}
+
+        {/* Payment-method correction form — cash/online only, see EditPaymentMethodDto */}
+        {isPaid && editingPayMethod && (
+          <div className="bg-bg-3 border border-accent/40 rounded-lg p-3 space-y-2.5">
+            <div className="text-[10px] font-bold text-accent uppercase tracking-widest">
+              Correct Payment Method
+            </div>
+            <div className="grid grid-cols-3 gap-1.5">
+              {['cash', 'online', 'split'].map(m => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setCorrectMethod(m)}
+                  className={`py-1.5 rounded border text-[11px] font-bold uppercase tracking-wider transition-all ${
+                    correctMethod === m
+                      ? 'bg-accent/20 border-accent text-accent'
+                      : 'bg-bg-2 border-border text-text-3 hover:border-accent/50'
+                  }`}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+            {correctMethod === 'split' && (
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] text-text-3 uppercase tracking-wider">Cash</label>
+                  <input
+                    type="number"
+                    value={correctCash}
+                    onChange={e => setCorrectCash(e.target.value)}
+                    className="w-full bg-bg-2 border border-border rounded px-2 py-1.5 text-sm font-mono text-text"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-text-3 uppercase tracking-wider">Online</label>
+                  <input
+                    type="number"
+                    value={correctOnline}
+                    onChange={e => setCorrectOnline(e.target.value)}
+                    className="w-full bg-bg-2 border border-border rounded px-2 py-1.5 text-sm font-mono text-text"
+                  />
+                </div>
+              </div>
+            )}
+            <div>
+              <label className="text-[10px] text-text-3 uppercase tracking-wider">Reason (required)</label>
+              <input
+                type="text"
+                value={correctReason}
+                onChange={e => setCorrectReason(e.target.value)}
+                placeholder="e.g. bank declined the online payment, customer paid cash instead"
+                className="w-full bg-bg-2 border border-border rounded px-2 py-1.5 text-xs text-text"
+              />
+            </div>
+            {correctError && <div className="text-[11px] text-neon-red">{correctError}</div>}
+            <div className="flex gap-2 pt-1">
+              <button
+                type="button"
+                disabled={correctBusy}
+                onClick={() => setEditingPayMethod(false)}
+                className="flex-1 py-1.5 rounded border border-border text-text-3 text-xs font-bold uppercase tracking-wider hover:bg-bg-2 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={correctBusy}
+                onClick={handleCorrectPayMethod}
+                className="flex-1 py-1.5 rounded border border-accent bg-accent/10 text-accent text-xs font-bold uppercase tracking-wider hover:bg-accent/20 disabled:opacity-50"
+              >
+                {correctBusy ? 'Saving…' : 'Save Correction'}
+              </button>
+            </div>
+          </div>
         )}
       </div>
 
@@ -684,12 +822,24 @@ function ItemSection({ icon, label, items, accentCls, canRemove, onRemove }) {
   );
 }
 
-function PaidBreakdown({ payments }) {
+function PaidBreakdown({ payments, canEdit, onEdit }) {
   const p = payments[0];
   if (!p) return null;
   return (
     <div className="bg-neon-blue/5 border border-neon-blue/20 rounded-lg p-3 space-y-1.5 text-xs">
-      <div className="text-[10px] font-bold text-neon-blue uppercase tracking-widest mb-1">Payment Received</div>
+      <div className="flex items-center justify-between mb-1">
+        <div className="text-[10px] font-bold text-neon-blue uppercase tracking-widest">Payment Received</div>
+        {canEdit && (
+          <button
+            type="button"
+            onClick={onEdit}
+            title="Change payment method"
+            className="text-text-3 hover:text-accent transition-colors p-0.5"
+          >
+            <Pencil className="w-3.5 h-3.5" />
+          </button>
+        )}
+      </div>
       {p.cashAmount > 0    && <TRow label="Cash"           value={`₹${p.cashAmount}`}    />}
       {p.cashReceived > p.cashAmount && <>
         <TRow label="  Tendered"       value={`₹${p.cashReceived}`}  cls="text-text-3" />

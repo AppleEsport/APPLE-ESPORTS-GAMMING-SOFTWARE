@@ -27,8 +27,9 @@ public class MemberService : IMemberService
 
     private readonly IOutboxService _outbox;
     private readonly IConfiguration _configuration;
+    private readonly IHubNotificationService _hubNotifications;
 
-    public MemberService(IUnitOfWork unitOfWork, IAuditService auditService, JwtTokenService jwt, IEmailService emailService, IAppUrlProvider appUrls, IOutboxService outbox, IConfiguration configuration)
+    public MemberService(IUnitOfWork unitOfWork, IAuditService auditService, JwtTokenService jwt, IEmailService emailService, IAppUrlProvider appUrls, IOutboxService outbox, IConfiguration configuration, IHubNotificationService hubNotifications)
     {
         _outbox = outbox;
         _unitOfWork = unitOfWork;
@@ -37,6 +38,7 @@ public class MemberService : IMemberService
         _emailService = emailService;
         _appUrls = appUrls;
         _configuration = configuration;
+        _hubNotifications = hubNotifications;
     }
 
     private static bool IsLocked(DateTimeOffset? lockedUntil) => lockedUntil.HasValue && lockedUntil.Value > DateTimeOffset.UtcNow;
@@ -312,6 +314,25 @@ public class MemberService : IMemberService
 
         _unitOfWork.Repository<Member>().Update(member);
 
+        // Head Office's own copy of this member never moved when this changed - UpdateMemberAsync
+        // never emitted anything, and no "member.updated" event type existed anywhere in the sync
+        // system at all. A walk-in registration with no/placeholder email, corrected here minutes
+        // or days later (an extremely common real workflow), left Head Office holding the ORIGINAL
+        // stale email forever. That mismatch is exactly why a member's first password-setup email -
+        // sent to the branch's current, correct address - later failed "invalid or expired reset
+        // token": CompletePasswordResetAsync matches on Email AND Token together, the token was
+        // right, and Head Office's stale Email never matched what was actually emailed to them.
+        await _outbox.RecordEventAsync(branchId, "Member", member.Id, "member.updated", new
+        {
+            memberId = member.Id,
+            fullName = member.FullName,
+            mobileNumber = member.MobileNumber,
+            email = member.Email,
+            username = member.Username,
+            updatedAt = member.UpdatedAt,
+            updatedBy = operatorId,
+        });
+
         await _auditService.LogAsync(new AuditEntry
         {
             OperatorId = operatorId,
@@ -392,8 +413,18 @@ public class MemberService : IMemberService
 
     /// <summary>Super Admin only: direct override of any value on a member's profile.
     /// Gaming/Food balance changes also create a "Correction" wallet transaction for an audit trail;
-    /// every other field just changes directly, with a single audit log entry summarizing the edit.</summary>
-    public async Task<MemberDto> AdminEditValuesAsync(Guid branchId, Guid adminId, Guid id, AdminEditMemberValuesDto dto)
+    /// every other field just changes directly, with a single audit log entry summarizing the edit.
+    ///
+    /// <paramref name="remoteAdminName"/> is set only when this is being applied here on behalf
+    /// of a Head Office admin (via a branch command), never for a genuinely local edit. WalletTransaction.AdminId
+    /// is foreign-keyed to THIS branch's own local `users` table, and a Head Office admin's id
+    /// has never been synced down to any branch - Users accounts are Head Office's own, unlike
+    /// Operators/Members/menu items. Writing a Head Office id into AdminId therefore failed
+    /// with a foreign key violation on every single remote balance edit, unconditionally. When
+    /// <paramref name="remoteAdminName"/> is supplied, the actor goes into the non-FK-constrained
+    /// RemoteAdminId/RemoteAdminName columns instead, and AdminId is left null.</summary>
+    public async Task<MemberDto> AdminEditValuesAsync(
+        Guid branchId, Guid adminId, Guid id, AdminEditMemberValuesDto dto, string? remoteAdminName = null)
     {
         // Head Office's own copy of a member is not what the gaming PC at the counter checks -
         // the branch's own row is. Writing here would show the new number on Head Office's
@@ -427,7 +458,9 @@ public class MemberService : IMemberService
             {
                 MemberId = id,
                 BranchId = branchId,
-                AdminId = adminId,
+                AdminId = remoteAdminName is null ? adminId : (Guid?)null,
+                RemoteAdminId = remoteAdminName is null ? (Guid?)null : adminId,
+                RemoteAdminName = remoteAdminName,
                 Action = WalletAction.Correction,
                 TargetWallet = wallet,
                 Amount = newValue.Value - before,
@@ -470,7 +503,7 @@ public class MemberService : IMemberService
         {
             OperatorId = adminId,
             UserRole = "SuperAdmin",
-            UserName = "System",
+            UserName = remoteAdminName ?? "System",
             Action = "admin_member_value_edit",
             BranchId = branchId,
             TargetType = "member",
