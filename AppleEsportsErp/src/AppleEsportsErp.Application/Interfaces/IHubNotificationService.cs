@@ -10,7 +10,20 @@ public interface IHubNotificationService
     Task BroadcastCashRegisterUpdateAsync(Guid branchId, Guid registerId);
     Task BroadcastPcManagementUpdateAsync(Guid branchId, Guid pcId, string action);
     Task BroadcastPricingProfileUpdateAsync(Guid branchId);
-    Task SendUnlockCommandToAgentAsync(Guid pcId, int durationMinutes, string? customerName);
+    /// <summary>
+    /// The pricing fields (everything after <paramref name="customerName"/>) exist so the
+    /// customer's own PC shows what they're actually being charged, not just a countdown -
+    /// see the Session Pricing PRD, issue 07. <paramref name="packagePrice"/>/
+    /// <paramref name="plannedDurationMin"/> are the session's own committed package, if it has
+    /// one; null means genuine Pay-As-You-Go, priced purely from
+    /// <paramref name="ratePerHour"/>/<paramref name="bufferMinutes"/>. <paramref name="sessionStartUtc"/>
+    /// lets the agent tick the live amount itself between pushes, the same way it already
+    /// ticks the countdown, instead of showing a number frozen at whatever moment this was sent.
+    /// </summary>
+    Task SendUnlockCommandToAgentAsync(
+        Guid pcId, int durationMinutes, string? customerName,
+        decimal? packagePrice = null, int? plannedDurationMin = null, string? packageName = null,
+        decimal ratePerHour = 0m, int bufferMinutes = 0, DateTimeOffset? sessionStartUtc = null);
     Task SendLockCommandToAgentAsync(Guid pcId);
 
     /// <summary>Warns the member at this PC that their balance is nearly used up.</summary>

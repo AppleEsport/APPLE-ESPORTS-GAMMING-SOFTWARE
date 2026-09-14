@@ -38,6 +38,17 @@ public class Pc
     public DateTimeOffset? CurrentSessionStartTime { get; set; }
     public DateTimeOffset? CurrentSessionEndTime { get; set; }
 
+    /// <summary>
+    /// The same snapshot idea as the two fields above, for the same reason: Head Office has no
+    /// local Session row, so without these its live PC-card amount could only ever be
+    /// hours x BaseHourlyRate - a session genuinely running under "4 hrs - Rs 180" showed a
+    /// flat hourly number there with nothing to do with the package it was actually sold
+    /// under, even while the branch's own screen showed it correctly. Display only, same as
+    /// CurrentSessionStartTime - never a source of truth for billing.
+    /// </summary>
+    public decimal? CurrentSessionPackagePrice { get; set; }
+    public int? CurrentSessionPlannedDurationMin { get; set; }
+
     public Guid? CurrentReservationId { get; set; }
     public DateTimeOffset? LastActiveAt { get; set; }
     public Guid? LastOperatorId { get; set; }

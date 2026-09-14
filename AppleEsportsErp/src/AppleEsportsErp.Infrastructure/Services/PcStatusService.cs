@@ -138,9 +138,12 @@ public class PcStatusService : IPcStatusService
                 {
                     // Still running — compute the live charge with the exact same formula
                     // StopSessionAsync will use, so this number never diverges from the real bill.
+                    // Package-aware: a session running under a fixed package shows that price,
+                    // not hours x BaseHourlyRate - see CalculateLiveGamingAmount.
                     decimal elapsedMinutes = SessionTimeCalculator.ElapsedMinutes(
                         session.StartTime, session.PausedSeconds, now);
-                    decimal liveGamingAmount = SessionPricingCalculator.CalculateGamingAmount(calculatedRate, bufferMinutes, elapsedMinutes);
+                    decimal liveGamingAmount = SessionPricingCalculator.CalculateLiveGamingAmount(
+                        session.PackagePrice, session.PlannedDurationMin, calculatedRate, bufferMinutes, elapsedMinutes);
                     dto.TotalAmount = liveGamingAmount + session.FoodAmount;
                 }
                 else
@@ -172,7 +175,11 @@ public class PcStatusService : IPcStatusService
                 {
                     decimal elapsedMinutes = SessionTimeCalculator.ElapsedMinutes(
                         pc.CurrentSessionStartTime.Value, 0, now);
-                    dto.TotalAmount = SessionPricingCalculator.CalculateGamingAmount(calculatedRate, bufferMinutes, elapsedMinutes);
+                    // Package-aware from the heartbeat snapshot (Pc.CurrentSessionPackagePrice) -
+                    // Head Office has no local Session row to read this from directly.
+                    dto.TotalAmount = SessionPricingCalculator.CalculateLiveGamingAmount(
+                        pc.CurrentSessionPackagePrice, pc.CurrentSessionPlannedDurationMin,
+                        calculatedRate, bufferMinutes, elapsedMinutes);
                 }
             }
             else if (recentCompletedSessions.TryGetValue(pc.Id, out var lastSession) && lastSession != null)

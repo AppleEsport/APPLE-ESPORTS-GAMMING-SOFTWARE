@@ -174,7 +174,12 @@ public class PublicController : ControllerBase
             bufferMinutes = pc.PricingProfile.BufferMinutes;
         }
 
-        decimal liveGamingCharges = AppleEsportsErp.Application.Services.SessionPricingCalculator.CalculateGamingAmount(ratePerHour, bufferMinutes, (decimal)elapsedMinutes);
+        // Package-aware - see SessionPricingCalculator.CalculateLiveGamingAmount. This session's
+        // own committed package (if any) wins, the same as everywhere else that shows a live
+        // amount; activePackages below is only ever a list of what's available, never what this
+        // particular session is actually running under.
+        decimal liveGamingCharges = AppleEsportsErp.Application.Services.SessionPricingCalculator.CalculateLiveGamingAmount(
+            session.PackagePrice, session.PlannedDurationMin, ratePerHour, bufferMinutes, (decimal)elapsedMinutes);
 
         decimal? walletBalance = null;
         decimal? gamingBalance = null;

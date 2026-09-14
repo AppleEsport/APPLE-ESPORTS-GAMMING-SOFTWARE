@@ -82,6 +82,11 @@ public class PcStateDto
     public DateTimeOffset? SessionStartTime { get; set; }
     public DateTimeOffset? SessionEndTime { get; set; }
 
+    /// <summary>The session's own committed package price/duration, if it has one - see
+    /// Pc.CurrentSessionPackagePrice for why Head Office needs this snapshot at all.</summary>
+    public decimal? SessionPackagePrice { get; set; }
+    public int? SessionPlannedDurationMin { get; set; }
+
     /// <summary>
     /// True if PcStatusHub's shutdown command was sent to this PC and it has not reconnected
     /// since (see Pc.PoweredOff). Missing from this DTO for as long as the heartbeat has

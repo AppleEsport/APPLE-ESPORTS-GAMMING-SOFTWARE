@@ -391,8 +391,17 @@ public class SessionService : ISessionService
                 $"Session started for {dto.CustomerName} on {pc.PcNumber} - Duration: {dto.DurationMinutes}m, Amount: ₹{dto.ExpectedAmount}",
                 dto.ExpectedAmount);
 
-            // Dispatch Unlock Command to the actual PC Agent
-            await _hubNotifier.SendUnlockCommandToAgentAsync(pc.Id, (int)dto.DurationMinutes, dto.CustomerName);
+            // Dispatch Unlock Command to the actual PC Agent - with the actual price the
+            // customer is being charged (package or hourly), see the Session Pricing PRD's
+            // issue 07. The customer's own PC had never shown any price before this at all.
+            var agentPricingProfile = await _db.Set<PricingProfile>().AsNoTracking()
+                .FirstOrDefaultAsync(pp => pp.Id == pc.PricingProfileId);
+            await _hubNotifier.SendUnlockCommandToAgentAsync(
+                pc.Id, (int)dto.DurationMinutes, dto.CustomerName,
+                packagePrice: session.PackagePrice, plannedDurationMin: session.PlannedDurationMin,
+                packageName: matchingPackage?.Name, ratePerHour: agentPricingProfile?.BaseHourlyRate ?? 0m,
+                bufferMinutes: agentPricingProfile?.BufferMinutes ?? SessionPricingCalculator.DefaultBufferMinutes,
+                sessionStartUtc: session.StartTime);
 
             return new SessionDto
             {
@@ -482,21 +491,13 @@ public class SessionService : ISessionService
             // because a price was committed - nobody signed up to pay for a session they ended
             // before it ever really started.
             int bufferMinutes = session.Pc?.PricingProfile?.BufferMinutes ?? SessionPricingCalculator.DefaultBufferMinutes;
-            if (session.ActualDurationMin!.Value <= bufferMinutes)
-            {
-                session.GamingAmount = 0m;
-            }
-            else if (session.PackagePrice.HasValue && session.PlannedDurationMin.HasValue)
-            {
-                int overrunMinutes = session.ActualDurationMin!.Value - session.PlannedDurationMin.Value;
-                session.GamingAmount = overrunMinutes <= bufferMinutes
-                    ? session.PackagePrice.Value
-                    : session.PackagePrice.Value + SessionPricingCalculator.CalculateGamingAmount(ratePerHour, 0, overrunMinutes);
-            }
-            else
-            {
-                session.GamingAmount = SessionPricingCalculator.CalculateGamingAmount(ratePerHour, bufferMinutes, session.ActualDurationMin!.Value);
-            }
+            // Now the same shared call every live-amount screen uses too (see
+            // CalculateLiveGamingAmount's own comment) - this was the one place that already
+            // got the package-vs-hourly branching right; it now just calls the version of
+            // itself every other screen calls, instead of keeping its own private copy of it.
+            session.GamingAmount = SessionPricingCalculator.CalculateLiveGamingAmount(
+                session.PackagePrice, session.PlannedDurationMin,
+                ratePerHour, bufferMinutes, session.ActualDurationMin!.Value);
 
             if (session.ActualDurationMin <= bufferMinutes)
             {
@@ -804,7 +805,14 @@ public class SessionService : ISessionService
                     ? Math.Max(0, session.PlannedDurationMin.Value - (int)elapsed)
                     : 0;   // open/pay-as-you-go session — no countdown to hand the agent
 
-                await _hubNotifier.SendUnlockCommandToAgentAsync(pc.Id, remaining, session.CustomerName ?? "Guest");
+                var resumePricingProfile = await _db.Set<PricingProfile>().AsNoTracking()
+                    .FirstOrDefaultAsync(pp => pp.Id == pc.PricingProfileId);
+                await _hubNotifier.SendUnlockCommandToAgentAsync(
+                    pc.Id, remaining, session.CustomerName ?? "Guest",
+                    packagePrice: session.PackagePrice, plannedDurationMin: session.PlannedDurationMin,
+                    ratePerHour: resumePricingProfile?.BaseHourlyRate ?? 0m,
+                    bufferMinutes: resumePricingProfile?.BufferMinutes ?? SessionPricingCalculator.DefaultBufferMinutes,
+                    sessionStartUtc: session.StartTime);
                 await _hubNotifier.BroadcastPcStatusChangeAsync(branchId, pc.Id);
                 await _hubNotifier.BroadcastSessionUpdateAsync(branchId, session.Id);
             }
@@ -945,6 +953,25 @@ public class SessionService : ISessionService
                 TargetId = session.Id,
                 Details = new { dto.AdditionalMinutes, AdditionalAmount = additionalAmount, PcNumber = session.Pc?.PcNumber }
             });
+
+            // The customer's own PC never learned about an extension before this at all - no
+            // agent push existed here whatsoever, so its countdown (and, now, its price) sat
+            // frozen at whatever the session was started with until the next full unlock. This
+            // re-unlocks with the new totals; LockScreen.UnlockPc is safe to call while already
+            // unlocked (it just refreshes the remaining time and price, no visible flash).
+            if (session.Pc != null)
+            {
+                var elapsedNow = SessionTimeCalculator.ElapsedMinutes(session.StartTime, session.PausedSeconds, now);
+                var remainingNow = session.PlannedDurationMin.HasValue
+                    ? Math.Max(0, session.PlannedDurationMin.Value - (int)elapsedNow)
+                    : 0;
+                await _hubNotifier.SendUnlockCommandToAgentAsync(
+                    session.PcId, remainingNow, session.CustomerName,
+                    packagePrice: session.PackagePrice, plannedDurationMin: session.PlannedDurationMin,
+                    ratePerHour: session.Pc.PricingProfile?.BaseHourlyRate ?? 0m,
+                    bufferMinutes: session.Pc.PricingProfile?.BufferMinutes ?? SessionPricingCalculator.DefaultBufferMinutes,
+                    sessionStartUtc: session.StartTime);
+            }
 
             await _hubNotifier.BroadcastSessionUpdateAsync(branchId, session.Id);
             await _hubNotifier.BroadcastPcStatusChangeAsync(branchId, session.PcId);

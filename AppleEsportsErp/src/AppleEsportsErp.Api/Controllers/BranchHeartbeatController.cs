@@ -709,6 +709,8 @@ public class BranchHeartbeatController : ControllerBase
                 && pc.CurrentSessionId == reported.CurrentSessionId
                 && pc.CurrentSessionStartTime == reported.SessionStartTime
                 && pc.CurrentSessionEndTime == reported.SessionEndTime
+                && pc.CurrentSessionPackagePrice == reported.SessionPackagePrice
+                && pc.CurrentSessionPlannedDurationMin == reported.SessionPlannedDurationMin
                 && pc.PoweredOff == reported.PoweredOff)
                 continue;
 
@@ -740,6 +742,8 @@ public class BranchHeartbeatController : ControllerBase
             pc.CurrentSessionId = reported.CurrentSessionId;
             pc.CurrentSessionStartTime = reported.SessionStartTime;
             pc.CurrentSessionEndTime = reported.SessionEndTime;
+            pc.CurrentSessionPackagePrice = reported.SessionPackagePrice;
+            pc.CurrentSessionPlannedDurationMin = reported.SessionPlannedDurationMin;
             pc.PoweredOff = reported.PoweredOff;
             pc.LastActiveAt = DateTimeOffset.UtcNow;
             pc.UpdatedAt = DateTimeOffset.UtcNow;
