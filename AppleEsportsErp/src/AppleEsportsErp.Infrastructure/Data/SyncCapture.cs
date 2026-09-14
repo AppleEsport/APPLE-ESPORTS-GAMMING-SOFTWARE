@@ -61,6 +61,13 @@ public static class SyncCapture
         [typeof(CashTransaction)] = "cash_transaction",
         [typeof(CustomerCredit)] = "customer_credit",
 
+        // The note-by-note breakdown behind a register's own counted total (CashRegister
+        // itself carries only PhysicalCashCounted, one number). Never in this list, so it was
+        // saved correctly at every branch and never once reached Head Office - confirmed live:
+        // the branch's own count was right there, Head Office's copy of the same register
+        // showed nothing at all, on every single register that had ever been counted.
+        [typeof(DenominationCount)] = "denomination_count",
+
         // The cash/online/wallet breakdown behind every completed bill. Watched here for the
         // same reason the four above are: "bill.paid" and "payment.recorded" exist as handlers
         // at Head Office's receiving end, but nothing anywhere in this codebase ever emits

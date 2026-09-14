@@ -4,7 +4,7 @@ import { ROLES } from '../../config/constants';
 import api from '../../config/api';
 import {
   CheckCircle2, Clock, Download, AlertCircle, Loader2, History,
-  Send, RefreshCw, XCircle,
+  Send, RefreshCw, XCircle, ChevronDown, ChevronRight, MonitorX,
 } from 'lucide-react';
 
 /**
@@ -508,6 +508,32 @@ function BranchCard({ branch, latest, busy, onSetAutoUpdate, onInstallVersion })
   const [showInstall, setShowInstall] = useState(false);
   const [installTarget, setInstallTarget] = useState('');
 
+  // Which exact PCs are behind, not just a count - a PC that is switched on and still hasn't
+  // moved needs someone to walk over and reinstall it by hand; one that is simply off does not.
+  // Fetched only when opened, on the same PC list every other screen already uses.
+  const [showStuckPcs, setShowStuckPcs] = useState(false);
+  const [pcs, setPcs] = useState(null);
+  const [pcsLoading, setPcsLoading] = useState(false);
+
+  const loadStuckPcs = async () => {
+    setShowStuckPcs((v) => !v);
+    if (pcs !== null || pcsLoading) return;
+    setPcsLoading(true);
+    try {
+      const { data } = await api.get('/pcs', { params: { branchId: branch.branchId } });
+      setPcs(data?.data || []);
+    } catch {
+      setPcs([]);
+    } finally {
+      setPcsLoading(false);
+    }
+  };
+
+  const targetVersion = latest?.currentVersion;
+  const stuckPcs = (pcs || []).filter(
+    (pc) => !pc.poweredOff && targetVersion && pc.appVersion !== targetVersion
+  );
+
   // The server's own updateAvailable only checks "different", not "newer" - correct here
   // rather than there, since this is display only and nothing downstream gates on it. A
   // branch sent a version directly (see the control below) and later left behind when that
@@ -554,6 +580,42 @@ function BranchCard({ branch, latest, busy, onSetAutoUpdate, onInstallVersion })
             : `${upToDate} of ${total} gaming PCs up to date`}
         </p>
       </div>
+
+      {total > 0 && upToDate < total && (
+        <div>
+          <button
+            type="button"
+            onClick={loadStuckPcs}
+            className="text-xs text-neon-orange font-medium flex items-center gap-1 hover:text-neon-orange/80"
+          >
+            {showStuckPcs ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+            Which PCs?
+          </button>
+          {showStuckPcs && (
+            <div className="mt-2 space-y-1.5">
+              {pcsLoading ? (
+                <p className="text-text-3 text-xs">Checking…</p>
+              ) : stuckPcs.length === 0 ? (
+                <p className="text-text-3 text-xs">
+                  Every switched-on PC here has already reported this version - the rest are just
+                  switched off right now, and will catch up the next time they're on.
+                </p>
+              ) : (
+                stuckPcs.map((pc) => (
+                  <div key={pc.id} className="flex items-center gap-2 text-xs bg-bg/60 rounded px-2 py-1.5">
+                    <MonitorX className="w-3.5 h-3.5 text-neon-orange shrink-0" />
+                    <span className="font-mono font-bold text-text">{pc.name}</span>
+                    <span className="text-text-3">
+                      is on and still on {pc.appVersion || 'an unreported version'} - it should be
+                      manually reinstalled.
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* The owner can switch a branch to automatic from here, rather than asking the operator
           at that branch to do it themselves. */}

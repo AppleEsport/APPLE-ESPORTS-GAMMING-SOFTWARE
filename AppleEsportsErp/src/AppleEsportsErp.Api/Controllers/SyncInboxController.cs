@@ -392,6 +392,7 @@ public class SyncInboxController : ControllerBase
         "payment.changed" => 2,   // depends on bill.changed (tier 1)
 
         "cash_transaction.changed" => 3,
+        "denomination_count.changed" => 3,
         "bill.paid" => 3,
         "payment.recorded" => 3,
         "wallet.topped_up" => 3,
@@ -493,6 +494,10 @@ public class SyncInboxController : ControllerBase
 
             case "cash_transaction.changed":
                 await UpsertRowAsync<CashTransaction>(held, root);
+                break;
+
+            case "denomination_count.changed":
+                await UpsertRowAsync<DenominationCount>(held, root);
                 break;
 
             case "customer_credit.changed":
