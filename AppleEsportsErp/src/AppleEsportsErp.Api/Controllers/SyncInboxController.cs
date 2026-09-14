@@ -379,6 +379,7 @@ public class SyncInboxController : ControllerBase
         // and nothing else needs it, so it neither blocks a batch nor gets blocked by one.
         "member.reset_requested" => 1,
         "member.updated" => 1,
+        "member.balance_adjusted" => 1,
 
         "bill.changed" => 1,
         "reservation.changed" => 1,
@@ -433,6 +434,15 @@ public class SyncInboxController : ControllerBase
             // this closes: Head Office's copy silently going stale forever.
             case "member.updated":
                 await ApplyMemberUpdateAsync(held, root);
+                break;
+
+            // A member's wallet balance or lifetime stat changed at the branch - via
+            // MemberService.AdminEditValuesAsync, whether that edit was made locally by a
+            // branch admin or relayed here from a Head Office Super Admin. Neither path ever
+            // told Head Office's own copy of this member before, so its dashboard kept showing
+            // the balance from before the edit until something unrelated happened to resync it.
+            case "member.balance_adjusted":
+                await ApplyMemberBalanceAdjustAsync(held, root);
                 break;
 
             // An operator created or edited at a branch's own counter - see SyncCapture.
@@ -884,6 +894,34 @@ public class SyncInboxController : ControllerBase
         member.MobileNumber = ReadString(root, "mobileNumber") ?? member.MobileNumber;
         member.Email = ReadString(root, "email");
         member.Username = ReadString(root, "username");
+        member.UpdatedAt = ReadDate(root, "updatedAt") ?? held.ReceivedAt;
+    }
+
+    /// <summary>
+    /// Patches Head Office's copy of a member's wallet balance and lifetime stats after
+    /// MemberService.AdminEditValuesAsync changed them at the branch - see that method's own
+    /// comment. Every field here is the branch's authoritative, post-edit value, not a delta,
+    /// so this always lands correctly regardless of what Head Office's stale copy previously
+    /// held. Throws (not upserts) if the member isn't here yet, same reasoning as
+    /// ApplyMemberUpdateAsync just above: member.created is a lower tier and should already
+    /// have landed.
+    /// </summary>
+    private async Task ApplyMemberBalanceAdjustAsync(SyncInboxEntry held, JsonElement root)
+    {
+        var memberId = held.AggregateId;
+        var member = await _db.Members.FirstOrDefaultAsync(m => m.Id == memberId)
+            ?? throw new InvalidOperationException(
+                $"Head Office has no member {memberId}. The member.created event should arrive first.");
+
+        member.GamingBalance = ReadDecimal(root, "gamingBalance") ?? member.GamingBalance;
+        member.FoodBalance = ReadDecimal(root, "foodBalance") ?? member.FoodBalance;
+        member.TotalGamingTopUps = ReadDecimal(root, "totalGamingTopUps") ?? member.TotalGamingTopUps;
+        member.TotalGamingBonusEarned = ReadDecimal(root, "totalGamingBonusEarned") ?? member.TotalGamingBonusEarned;
+        member.TotalGamingSpend = ReadDecimal(root, "totalGamingSpend") ?? member.TotalGamingSpend;
+        member.TotalFoodSpend = ReadDecimal(root, "totalFoodSpend") ?? member.TotalFoodSpend;
+        member.GamingPoints = ReadInt(root, "gamingPoints") ?? member.GamingPoints;
+        member.FoodPoints = ReadInt(root, "foodPoints") ?? member.FoodPoints;
+        member.TotalPoints = ReadInt(root, "totalPoints") ?? member.TotalPoints;
         member.UpdatedAt = ReadDate(root, "updatedAt") ?? held.ReceivedAt;
     }
 
