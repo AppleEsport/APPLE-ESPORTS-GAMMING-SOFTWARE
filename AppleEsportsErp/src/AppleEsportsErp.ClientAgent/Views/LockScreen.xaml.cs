@@ -8,6 +8,40 @@ using System.Windows.Input;
 namespace AppleEsportsErp.ClientAgent.Views;
 
 /// <summary>
+/// What a session is actually being charged, as sent by SendUnlockCommandToAgentAsync - see
+/// the Session Pricing PRD's issue 07. This ClientAgent project deliberately has no reference
+/// to the main backend's own AppleEsportsErp.Application project (it is a small, independently
+/// updated app; pulling in that whole dependency chain for one formula is a worse trade than a
+/// second, small, clearly-labelled copy of it) - so PriceForElapsed below is a deliberate,
+/// minimal mirror of SessionPricingCalculator.CalculateLiveGamingAmount. Keep the two in step
+/// by hand if that formula ever changes.
+/// </summary>
+public sealed record SessionPricingInfo(
+    decimal? PackagePrice, int? PlannedDurationMin, string? PackageName,
+    decimal RatePerHour, int BufferMinutes, DateTimeOffset? SessionStartUtc)
+{
+    public static readonly SessionPricingInfo None = new(null, null, null, 0m, 0, null);
+
+    /// <summary>Mirrors SessionPricingCalculator.CalculateLiveGamingAmount exactly - see that
+    /// method's own comment for the full reasoning. Returns null when there is nothing to
+    /// price (no start time known yet).</summary>
+    public decimal? PriceForElapsed(decimal elapsedMinutes)
+    {
+        if (SessionStartUtc is null) return null;
+        if (elapsedMinutes <= BufferMinutes) return 0m;
+
+        if (PackagePrice.HasValue && PlannedDurationMin.HasValue)
+        {
+            decimal overrunMinutes = elapsedMinutes - PlannedDurationMin.Value;
+            if (overrunMinutes <= BufferMinutes) return PackagePrice.Value;
+            return PackagePrice.Value + Math.Round((overrunMinutes / 60m) * RatePerHour, 2);
+        }
+
+        return Math.Round((elapsedMinutes / 60m) * RatePerHour, 2);
+    }
+}
+
+/// <summary>
 /// Lock Screen code-behind — manages UI state, timer display, and connection status.
 /// The actual session control and dual-connection logic lives in the Services.
 /// </summary>
@@ -18,6 +52,7 @@ public partial class LockScreen : Window
     private readonly Services.DualConnectionService _dualConnection;
     private readonly Services.SessionControlService _sessionControl;
     private int _remainingSeconds = 0;
+    private SessionPricingInfo _pricing = SessionPricingInfo.None;
 
     public LockScreen()
     {
@@ -86,23 +121,55 @@ public partial class LockScreen : Window
         Application.Current.Shutdown();
     }
 
-    /// <summary>Called by SessionControlService when an unlock command is received</summary>
-    public void UnlockPc(int durationMinutes, string? customerName)
+    /// <summary>
+    /// Called by SessionControlService when an unlock command is received - including a
+    /// mid-session extension re-sending this with updated totals (see
+    /// SessionService.ExtendSessionAsync). Safe to call while already unlocked: nothing here
+    /// re-shows the window, so an extension never visibly flashes locked-then-unlocked.
+    /// </summary>
+    public void UnlockPc(int durationMinutes, string? customerName, SessionPricingInfo? pricing = null)
     {
         Dispatcher.Invoke(() =>
         {
             _systemLock.DisableLock();
+            _pricing = pricing ?? SessionPricingInfo.None;
 
             if (durationMinutes > 0)
             {
                 _remainingSeconds = durationMinutes * 60;
                 TimerText.Visibility = Visibility.Visible;
+                UpdatePriceText();
                 _sessionTimer.Start();
             }
 
             // Hide the lock screen (don't close — we need to show it again later)
             Hide();
         });
+    }
+
+    /// <summary>Refreshes PriceText from the live elapsed time - ticked alongside the
+    /// countdown, same reasoning as the Session Pricing PRD's issue 07: a static number shown
+    /// once at unlock goes stale the moment a minute passes.</summary>
+    private void UpdatePriceText()
+    {
+        if (_pricing.SessionStartUtc is null)
+        {
+            PriceText.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var elapsedMinutes = (decimal)(DateTimeOffset.UtcNow - _pricing.SessionStartUtc.Value).TotalMinutes;
+        var amount = _pricing.PriceForElapsed(elapsedMinutes);
+        if (amount is null)
+        {
+            PriceText.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        PriceText.Text = _pricing.PackagePrice.HasValue
+            ? $"{_pricing.PackageName ?? "Package"} — ₹{amount:0.##}"
+            : $"₹{amount:0.##} so far (₹{_pricing.RatePerHour:0.##}/hr)";
+        PriceText.Visibility = Visibility.Visible;
     }
 
     /// <summary>Called by SessionControlService when a lock command is received</summary>
@@ -112,7 +179,9 @@ public partial class LockScreen : Window
         {
             _sessionTimer.Stop();
             TimerText.Visibility = Visibility.Collapsed;
+            PriceText.Visibility = Visibility.Collapsed;
             _remainingSeconds = 0;
+            _pricing = SessionPricingInfo.None;
 
             _systemLock.EnableLock();
             Show();
@@ -172,5 +241,7 @@ public partial class LockScreen : Window
                 ? new SolidColorBrush(Color.FromRgb(255, 50, 50))
                 : new SolidColorBrush(Color.FromRgb(255, 215, 0));
         }
+
+        UpdatePriceText();
     }
 }

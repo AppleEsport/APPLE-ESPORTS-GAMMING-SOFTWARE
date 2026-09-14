@@ -90,9 +90,17 @@
                       FontFamily="Segoe UI"/>
 
             <!-- Timer (shown during active session countdown) -->
-            <TextBlock x:Name="TimerText" Text="" 
+            <TextBlock x:Name="TimerText" Text=""
                       FontSize="48" FontWeight="Bold" Foreground="#FFD700"
                       HorizontalAlignment="Center" Margin="0,30,0,0"
+                      FontFamily="Segoe UI" Visibility="Collapsed"/>
+
+            <!-- What this session is actually being charged - a package's name/price, or the
+                 hourly rate and running total for genuine Pay-As-You-Go. Ticks alongside the
+                 timer above; was never shown at all before the Session Pricing PRD's issue 07. -->
+            <TextBlock x:Name="PriceText" Text=""
+                      FontSize="18" FontWeight="SemiBold" Foreground="#00FF88"
+                      HorizontalAlignment="Center" Margin="0,8,0,0"
                       FontFamily="Segoe UI" Visibility="Collapsed"/>
         </StackPanel>
 

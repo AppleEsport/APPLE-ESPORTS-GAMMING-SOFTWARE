@@ -30,12 +30,14 @@ public class SessionControlService
             var duration = command?.DurationMinutes ?? 60;
             var customerName = command?.CustomerName;
 
-            _lockScreen.UnlockPc(duration, customerName);
+            _lockScreen.UnlockPc(duration, customerName, new Views.SessionPricingInfo(
+                command?.PackagePrice, command?.PlannedDurationMin, command?.PackageName,
+                command?.RatePerHour ?? 0m, command?.BufferMinutes ?? 0, command?.SessionStartUtc));
         }
         catch
         {
             // Fallback — unlock with default 60 minutes
-            _lockScreen.UnlockPc(60, null);
+            _lockScreen.UnlockPc(60, null, Views.SessionPricingInfo.None);
         }
     }
 
@@ -73,4 +75,17 @@ internal class UnlockCommand
 {
     public int DurationMinutes { get; set; }
     public string? CustomerName { get; set; }
+
+    /// <summary>The session's own committed package price/duration, if it has one - null
+    /// means genuine Pay-As-You-Go, priced from RatePerHour/BufferMinutes instead. See the
+    /// Session Pricing PRD's issue 07 - this PC used to show a countdown and nothing else.</summary>
+    public decimal? PackagePrice { get; set; }
+    public int? PlannedDurationMin { get; set; }
+    public string? PackageName { get; set; }
+    public decimal RatePerHour { get; set; }
+    public int BufferMinutes { get; set; }
+
+    /// <summary>Lets LockScreen tick the live amount itself between pushes, the same way it
+    /// already ticks the countdown, instead of showing a number frozen at send time.</summary>
+    public DateTimeOffset? SessionStartUtc { get; set; }
 }

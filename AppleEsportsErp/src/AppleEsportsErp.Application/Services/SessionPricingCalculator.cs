@@ -29,6 +29,43 @@ public static class SessionPricingCalculator
     }
 
     /// <summary>
+    /// What a session actually costs right now, package or not - the one calculation every
+    /// screen showing a live amount must call, instead of each re-deriving its own hourly
+    /// number from <see cref="CalculateGamingAmount"/> directly.
+    ///
+    /// Before this existed as a shared call, five separate places (the billing counter's live
+    /// bill, applying a discount, the PC card, Head Office's remote view, and the
+    /// customer-facing public display) each recomputed the amount purely as
+    /// hours &#215; BaseHourlyRate - ignoring a session's own committed package price entirely,
+    /// even though the session was genuinely running under "4 hrs - Rs 180" or similar. Only
+    /// the final Stop settlement ever got this right, so every screen a customer or operator
+    /// actually watches *while a session is running* showed a number with nothing to do with
+    /// what they would really be charged - and a mid-session discount was computed off that
+    /// wrong number too. This is that same, now-shared, logic.
+    ///
+    /// <paramref name="packagePrice"/>/<paramref name="plannedDurationMin"/> are a session's own
+    /// <c>PackagePrice</c>/<c>PlannedDurationMin</c> - null for a genuine Pay-As-You-Go session,
+    /// which always remains pure hourly here, exactly as before.
+    /// </summary>
+    public static decimal CalculateLiveGamingAmount(
+        decimal? packagePrice, int? plannedDurationMin,
+        decimal ratePerHour, int bufferMinutes, decimal elapsedMinutes)
+    {
+        if (elapsedMinutes <= bufferMinutes)
+            return 0m;
+
+        if (packagePrice.HasValue && plannedDurationMin.HasValue)
+        {
+            decimal overrunMinutes = elapsedMinutes - plannedDurationMin.Value;
+            return overrunMinutes <= bufferMinutes
+                ? packagePrice.Value
+                : packagePrice.Value + CalculateGamingAmount(ratePerHour, 0, overrunMinutes);
+        }
+
+        return CalculateGamingAmount(ratePerHour, bufferMinutes, elapsedMinutes);
+    }
+
+    /// <summary>
     /// Rounds a final bill total to the nearest ₹10 — down for a remainder of 0-4,
     /// up for 5-9 (standard round-half-up) — so the amount actually charged never
     /// lands on an awkward figure. Applied only at the point a bill's TotalAmount

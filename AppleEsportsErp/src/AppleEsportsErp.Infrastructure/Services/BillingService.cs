@@ -143,7 +143,12 @@ public class BillingService : IBillingService
             decimal ratePerHour = bill.Pc?.PricingProfile?.BaseHourlyRate ?? Application.Services.SessionPricingCalculator.DefaultRatePerHour;
             int bufferMinutes = bill.Pc?.PricingProfile?.BufferMinutes ?? Application.Services.SessionPricingCalculator.DefaultBufferMinutes;
             decimal elapsedMinutes = (decimal)(DateTimeOffset.UtcNow - bill.Session.StartTime).TotalMinutes;
-            decimal liveGamingAmount = Application.Services.SessionPricingCalculator.CalculateGamingAmount(ratePerHour, bufferMinutes, elapsedMinutes);
+            // Package-aware, not hours x BaseHourlyRate alone - see CalculateLiveGamingAmount.
+            // A session running under "4 hrs - Rs 180" now shows Rs 180 climbing exactly the
+            // way the final Stop bill would, instead of a flat hourly number nobody is really
+            // being charged.
+            decimal liveGamingAmount = Application.Services.SessionPricingCalculator.CalculateLiveGamingAmount(
+                bill.Session.PackagePrice, bill.Session.PlannedDurationMin, ratePerHour, bufferMinutes, elapsedMinutes);
 
             // The sticker price first — what the customer sees with no discount — THEN the
             // discount comes off that. See ApplyDiscountAsync for why: rounding the raw
@@ -215,8 +220,11 @@ public class BillingService : IBillingService
             int bufferMinutes = bill.Pc?.PricingProfile?.BufferMinutes
                 ?? Application.Services.SessionPricingCalculator.DefaultBufferMinutes;
             decimal elapsedMinutes = (decimal)(DateTimeOffset.UtcNow - bill.Session.StartTime).TotalMinutes;
-            rawGaming = Application.Services.SessionPricingCalculator.CalculateGamingAmount(
-                ratePerHour, bufferMinutes, elapsedMinutes);
+            // Package-aware - see CalculateLiveGamingAmount. A discount on a package session
+            // must come off the package's real price (plus any overrun), not off a plain
+            // hours x BaseHourlyRate figure that was never the customer's actual charge.
+            rawGaming = Application.Services.SessionPricingCalculator.CalculateLiveGamingAmount(
+                bill.Session.PackagePrice, bill.Session.PlannedDurationMin, ratePerHour, bufferMinutes, elapsedMinutes);
         }
 
         var (stickerGaming, stickerFood, preDiscountTotal) = Application.Services.SessionPricingCalculator.ComputeRoundedBreakdown(

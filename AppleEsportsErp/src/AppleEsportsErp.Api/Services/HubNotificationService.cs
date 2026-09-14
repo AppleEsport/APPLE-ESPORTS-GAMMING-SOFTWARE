@@ -173,12 +173,21 @@ public class HubNotificationService : IHubNotificationService
         await InvalidateDashboardCacheAsync(branchId);
     }
 
-    public async Task SendUnlockCommandToAgentAsync(Guid pcId, int durationMinutes, string? customerName)
+    public async Task SendUnlockCommandToAgentAsync(
+        Guid pcId, int durationMinutes, string? customerName,
+        decimal? packagePrice = null, int? plannedDurationMin = null, string? packageName = null,
+        decimal ratePerHour = 0m, int bufferMinutes = 0, DateTimeOffset? sessionStartUtc = null)
     {
         await _pcStatusHub.Clients.Group($"agent:{pcId}").SendAsync("UnlockSession", new
         {
             DurationMinutes = durationMinutes,
             CustomerName = customerName,
+            PackagePrice = packagePrice,
+            PlannedDurationMin = plannedDurationMin,
+            PackageName = packageName,
+            RatePerHour = ratePerHour,
+            BufferMinutes = bufferMinutes,
+            SessionStartUtc = sessionStartUtc,
             Timestamp = DateTimeOffset.UtcNow
         });
     }
