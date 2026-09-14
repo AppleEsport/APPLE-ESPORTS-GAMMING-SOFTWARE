@@ -11,7 +11,9 @@
     End-Task'd the app mid-session did it on purpose, almost always to dodge the lock screen or
     the timer. Simply reopening the app hands them exactly what they were trying to get - a
     quiet gap with no lock and no clock. A restart costs them the seconds it takes to reboot,
-    the app reopens automatically once Windows is back (see setup-autostart.ps1), and the
+    the app reopens automatically once Windows is back (the installer's own [Registry] Run
+    key, self-repaired on every launch by KioskGuard.EnsureStartsOnBoot - already there
+    before this feature, nothing new needed for it), and the
     session itself was never touched: its start and end time are rows in the branch's own
     database, not something this PC was keeping in memory, so the customer is billed exactly
     what they would have been billed anyway.
