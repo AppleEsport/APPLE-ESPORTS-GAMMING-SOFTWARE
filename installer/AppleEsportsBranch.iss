@@ -72,6 +72,13 @@ Source: "branch\end-session-cleanup.ps1"; DestDir: "{app}"; Components: core; Fl
 ; The SYSTEM updater. Ships to every role: this is what installs updates with nothing to click,
 ; on counter PCs and gaming PCs alike. See KioskGuard.EnsureAutoUpdateTask.
 Source: "branch\apply-update.ps1"; DestDir: "{app}"; Components: core; Flags: ignoreversion
+; Restarts this PC if AppleEsports.exe ends without going through its own exit - a Task Manager
+; "End Task" in particular. See restart-on-kill.ps1 for the full reasoning.
+Source: "branch\restart-on-kill.ps1"; DestDir: "{app}"; Components: core; Flags: ignoreversion
+Source: "branch\setup-restart-on-kill.ps1"; DestDir: "{app}"; Components: core; Flags: ignoreversion
+; Makes the app relaunch itself the moment the kiosk account signs back in - including right
+; after the restart above, which is what turns it into a fix rather than a longer outage.
+Source: "branch\setup-autostart.ps1"; DestDir: "{app}"; Components: core; Flags: ignoreversion
 ; NOTE: AppleEsports.config.json is deliberately NOT shipped. It is written by
 ; WriteClientConfig below, per machine, because what belongs in it depends on which kind
 ; of PC this is. The version in the repo is a developer's, pointed at a public server and
@@ -167,6 +174,12 @@ Name: "{autodesktop}\Apple Esports Agent"; Filename: "{app}\agent\AppleEsportsAg
 ; is exactly what this needs.
 Filename: "powershell.exe"; Parameters: "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{app}\apply-update.ps1"" -Register"; StatusMsg: "Setting up automatic updates..."; Flags: runhidden waituntilterminated; Components: core
 
+; Same elevation reasoning as the auto-update registration just above - both of these need
+; admin rights that only Setup has right now, and both must be re-run on every upgrade in case
+; anything about them (the auditing policy, the exe's own path) needs restoring.
+Filename: "powershell.exe"; Parameters: "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{app}\setup-restart-on-kill.ps1"" -AppExePath ""{app}\AppleEsports.exe"""; StatusMsg: "Setting up unexpected-close protection..."; Flags: runhidden waituntilterminated; Components: core
+Filename: "powershell.exe"; Parameters: "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{app}\setup-autostart.ps1"" -AppExePath ""{app}\AppleEsports.exe"""; StatusMsg: "Setting up automatic startup..."; Flags: runhidden waituntilterminated; Components: core
+
 Filename: "{app}\AppleEsports.exe"; Description: "Set up this PC now"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
@@ -180,6 +193,8 @@ Filename: "sc.exe"; Parameters: "delete AppleEsportsDb";  Flags: runhidden; RunO
 ; trying to launch an executable that has just been deleted, every two minutes, for ever.
 Filename: "schtasks.exe"; Parameters: "/Delete /F /TN ""AppleEsports Kiosk Guard"""; Flags: runhidden; RunOnceId: "DelKioskGuard"
 Filename: "schtasks.exe"; Parameters: "/Delete /F /TN ""AppleEsports Auto Update"""; Flags: runhidden; RunOnceId: "DelAutoUpdate"
+Filename: "schtasks.exe"; Parameters: "/Delete /F /TN ""AppleEsports Restart On Kill"""; Flags: runhidden; RunOnceId: "DelRestartOnKill"
+Filename: "schtasks.exe"; Parameters: "/Delete /F /TN ""AppleEsports Auto Start"""; Flags: runhidden; RunOnceId: "DelAutoStart"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{localappdata}\AppleEsports"

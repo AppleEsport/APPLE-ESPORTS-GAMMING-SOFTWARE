@@ -1,5 +1,6 @@
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
+using Microsoft.Win32;
 
 namespace AppleEsports.Desktop;
 
@@ -145,6 +146,15 @@ public sealed class MainForm : Form
     public MainForm(AppConfig config)
     {
         _config = config;
+
+        // A real, legitimate reason this process is about to end that has nothing to do with
+        // the operator's own Ctrl+Alt+Q: Windows itself shutting down, restarting, or the
+        // kiosk account logging off. Without this, restarting the PC for routine maintenance
+        // (or any ordinary reboot) would look identical to a Task Manager kill to
+        // restart-on-kill.ps1 and needlessly restart it a second time. Windows gives an app a
+        // real, if short, window to respond to this before forcing it closed - long enough to
+        // write one small file.
+        SystemEvents.SessionEnding += (_, _) => WriteIntentionalExitMarker();
 
         // Says where this window is pointed from the moment it opens. Previously this was
         // only filled in once a page finished loading, so a PC that could not reach its
@@ -1191,8 +1201,36 @@ public sealed class MainForm : Form
 
     private void ForceExit()
     {
+        WriteIntentionalExitMarker();
         _allowClose = true;
         Application.Exit();
+    }
+
+    /// <summary>
+    /// Proves to restart-on-kill.ps1 (a SYSTEM-level task reacting to this process ending -
+    /// see the installer) that this particular exit was legitimate: the operator's own
+    /// Ctrl+Alt+Q, or Windows itself shutting the machine down. A Task Manager "End Task" runs
+    /// none of this app's own code at all - it cannot write this file, which is exactly what
+    /// makes its absence a reliable signal.
+    ///
+    /// Timestamped and re-written every call, so a stale marker from a much earlier legitimate
+    /// exit (this app can sit closed for a while between customers) can never be mistaken for
+    /// permission covering a *later*, different exit - restart-on-kill.ps1 only accepts one
+    /// written in roughly the last minute.
+    /// </summary>
+    private static void WriteIntentionalExitMarker()
+    {
+        try
+        {
+            var dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Apple Esports");
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, "intentional-exit.marker"), DateTimeOffset.UtcNow.ToString("O"));
+        }
+        catch
+        {
+            // Best effort - a failure here must never be the reason the app cannot close.
+        }
     }
 
     /// <summary>
