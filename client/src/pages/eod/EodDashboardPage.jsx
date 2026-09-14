@@ -1046,8 +1046,12 @@ export default function EodDashboardPage() {
                             </span>
                           </td>
                         </tr>
-                        {group.bills.map(bill => (
-                      <tr key={bill.billId} className="hover:bg-bg-3/40 transition-colors">
+                        {group.bills.map(bill => {
+                        const auditBillId = bill.billId || bill.id;
+                        const isEditingThisAudit = editingBillId === auditBillId;
+                        return (
+                      <Fragment key={auditBillId}>
+                      <tr className="hover:bg-bg-3/40 transition-colors">
                         <td className="py-3 px-4 text-text-2">
                           {new Date(bill.date).toLocaleDateString()}
                         </td>
@@ -1086,7 +1090,19 @@ export default function EodDashboardPage() {
                               {bill.paymentType}
                             </span>
                           ) : (
-                            <span className="text-text-3 uppercase">{bill.paymentType}</span>
+                            <span className="inline-flex items-center gap-1.5">
+                              <span className="text-text-3 uppercase">{bill.paymentType}</span>
+                              {canEditPayment(bill) && (
+                                <button
+                                  type="button"
+                                  onClick={() => openCorrectPayMethod(bill)}
+                                  title="Change payment method"
+                                  className="text-text-3 hover:text-accent transition-colors"
+                                >
+                                  <Pencil className="w-3 h-3" />
+                                </button>
+                              )}
+                            </span>
                           )}
                         </td>
                         <td className="py-3 px-4 text-right text-text">₹{bill.gamingRevenue.toFixed(2)}</td>
@@ -1105,7 +1121,72 @@ export default function EodDashboardPage() {
                           </button>
                         </td>
                       </tr>
-                        ))}
+                      {isEditingThisAudit && (
+                        <tr>
+                          <td colSpan={13} className="bg-bg-3/40 px-4 py-3">
+                            <div className="max-w-md space-y-2.5 font-sans normal-case">
+                              <div className="flex items-center justify-between">
+                                <div className="text-[10px] font-bold text-accent uppercase tracking-widest">
+                                  Correct Payment Method — {bill.customer}, ₹{bill.totalRevenue.toFixed(2)}
+                                </div>
+                                <button type="button" onClick={() => setEditingBillId(null)} className="text-text-3 hover:text-text">
+                                  <X className="w-4 h-4" />
+                                </button>
+                              </div>
+                              <div className="grid grid-cols-3 gap-1.5">
+                                {['cash', 'online', 'split'].map(m => (
+                                  <button
+                                    key={m}
+                                    type="button"
+                                    onClick={() => setCorrectMethod(m)}
+                                    className={`py-1.5 rounded border text-[11px] font-bold uppercase tracking-wider transition-all ${
+                                      correctMethod === m
+                                        ? 'bg-accent/20 border-accent text-accent'
+                                        : 'bg-bg-2 border-border text-text-3 hover:border-accent/50'
+                                    }`}
+                                  >
+                                    {m}
+                                  </button>
+                                ))}
+                              </div>
+                              {correctMethod === 'split' && (
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div>
+                                    <label className="text-[10px] text-text-3 uppercase tracking-wider">Cash</label>
+                                    <input type="number" value={correctCash} onChange={e => setCorrectCash(e.target.value)}
+                                      className="w-full bg-bg-2 border border-border rounded px-2 py-1.5 text-sm font-mono text-text" />
+                                  </div>
+                                  <div>
+                                    <label className="text-[10px] text-text-3 uppercase tracking-wider">Online</label>
+                                    <input type="number" value={correctOnline} onChange={e => setCorrectOnline(e.target.value)}
+                                      className="w-full bg-bg-2 border border-border rounded px-2 py-1.5 text-sm font-mono text-text" />
+                                  </div>
+                                </div>
+                              )}
+                              <div>
+                                <label className="text-[10px] text-text-3 uppercase tracking-wider">Reason (required)</label>
+                                <input type="text" value={correctReason} onChange={e => setCorrectReason(e.target.value)}
+                                  placeholder="e.g. bank declined the online payment, customer paid cash instead"
+                                  className="w-full bg-bg-2 border border-border rounded px-2 py-1.5 text-xs text-text" />
+                              </div>
+                              {correctError && <div className="text-[11px] text-neon-red">{correctError}</div>}
+                              <div className="flex gap-2 pt-1">
+                                <button type="button" disabled={correctBusy} onClick={() => setEditingBillId(null)}
+                                  className="flex-1 py-1.5 rounded border border-border text-text-3 text-xs font-bold uppercase tracking-wider hover:bg-bg-2 disabled:opacity-50">
+                                  Cancel
+                                </button>
+                                <button type="button" disabled={correctBusy} onClick={() => handleCorrectPayMethod(bill)}
+                                  className="flex-1 py-1.5 rounded border border-accent bg-accent/10 text-accent text-xs font-bold uppercase tracking-wider hover:bg-accent/20 disabled:opacity-50">
+                                  {correctBusy ? 'Saving…' : 'Save Correction'}
+                                </button>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                      </Fragment>
+                        );
+                        })}
                       </Fragment>
                     ))}
                   </tbody>
