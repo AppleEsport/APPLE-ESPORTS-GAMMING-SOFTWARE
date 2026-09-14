@@ -92,6 +92,14 @@ function OverlayContent({ isMinimized, setIsMinimized }) {
   // there is no session to reopen and nothing here for a customer to click.
   const isUnderMaintenance = pcState === 'UnderMaintenance';
 
+  // Tells the native shell to start/stop recording this PC's own screen while it's under
+  // maintenance - see MainForm.cs's HandleOverlayLayoutMessage. Posted on every transition
+  // (not just once) so a page reload mid-maintenance still gets the host into the right state,
+  // since the host has no other way to learn this than being told.
+  useEffect(() => {
+    postToHost({ type: 'maintenance-recording', active: isUnderMaintenance });
+  }, [isUnderMaintenance]);
+
   // Tells the native shell that somebody is playing here right now, so it can hold an update
   // back instead of restarting the machine's app under them - MainForm.IsSessionRunningAsync
   // looks for exactly this attribute before it installs anything.

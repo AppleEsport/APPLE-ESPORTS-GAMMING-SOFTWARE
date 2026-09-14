@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Lock, AlertTriangle, Calculator, LogOut, ArrowLeft, Calendar, Download, History, ChevronDown, ChevronRight } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
@@ -135,10 +135,21 @@ export default function CashRegisterPage() {
     save(doc, `cash-register-history-${historyFrom}${historyFrom !== historyTo ? `_to_${historyTo}` : ''}.pdf`);
   };
 
-  const fetchActiveRegister = useCallback(async () => {
+  // True only until the very first fetch (success or failure) has completed. A cold app
+  // launch on the kiosk PC can call this before WebView2's own persisted cookie store has
+  // finished attaching to the request - the page believes it is logged in (from the cached
+  // user in localStorage) a moment before the browser layer actually has the session cookie
+  // to prove it, so the very first /cash/active call can 404 even though a shift genuinely
+  // is open. Reported as "sometimes shows no active shift, fixed by closing and reopening the
+  // app" - a full relaunch just gives that race more time to resolve before this page asks.
+  // Retrying a couple of times, a moment apart, gives it that same time without the relaunch.
+  const isFirstFetch = useRef(true);
+
+  const fetchActiveRegister = useCallback(async (attempt = 1) => {
     if (isSuperAdmin && !targetBranchId) {
       setRegister(null);
       setIsLoading(false);
+      isFirstFetch.current = false;
       return;
     }
 
@@ -146,19 +157,27 @@ export default function CashRegisterPage() {
       setError(null);
       const { data } = await api.get('/cash/active', { params: { branchId: targetBranchId } });
       setRegister(data.data);
+      isFirstFetch.current = false;
     } catch (err) {
       if (err.response?.status === 404) {
+        if (isFirstFetch.current && attempt < 3) {
+          setTimeout(() => fetchActiveRegister(attempt + 1), 1500);
+          return;   // still loading - not yet a real "no active shift" answer
+        }
         setRegister(null);
+        isFirstFetch.current = false;
       } else {
         setError(err.response?.data?.error || err.response?.data?.message || 'Failed to fetch cash register');
+        isFirstFetch.current = false;
       }
     } finally {
-      setIsLoading(false);
+      if (!isFirstFetch.current) setIsLoading(false);
     }
   }, [targetBranchId, isSuperAdmin]);
 
   useEffect(() => {
     setIsLoading(true);
+    isFirstFetch.current = true;
     fetchActiveRegister();
   }, [fetchActiveRegister]);
 

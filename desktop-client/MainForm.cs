@@ -1,6 +1,7 @@
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using Microsoft.Win32;
+using System.Drawing.Imaging;
 
 namespace AppleEsports.Desktop;
 
@@ -1252,6 +1253,111 @@ public sealed class MainForm : Form
         catch { /* nothing else to do if Windows itself refuses to shut down */ }
     }
 
+    private CancellationTokenSource? _recordingCts;
+
+    /// <summary>
+    /// How often a frame is taken while a PC is under maintenance. A still image every few
+    /// seconds, not video: enough to see what was actually done on the PC during maintenance -
+    /// a real game update versus a customer let on to play - without a video encoder, without
+    /// the file sizes real video would produce over a maintenance window that could run for
+    /// hours, and without anything here that could itself hang or crash mid-recording.
+    /// </summary>
+    private static readonly TimeSpan MaintenanceFrameEvery = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Starts saving still frames of this PC's own screen to
+    /// %ProgramData%\Apple Esports\maintenance-recordings\&lt;when maintenance started&gt;\ -
+    /// local to this machine only, nothing uploaded anywhere, kept until whoever runs this
+    /// branch deletes the folder themselves. Idempotent: a second "active: true" while one is
+    /// already running (a page reload mid-maintenance re-sends its current state) does nothing.
+    ///
+    /// Stops only when maintenance itself ends (StopMaintenanceRecording, posted the same way)
+    /// or this process exits for any reason - there is deliberately no separate control inside
+    /// the app to pause or cancel it while maintenance is still active.
+    /// </summary>
+    private void StartMaintenanceRecording()
+    {
+        if (_recordingCts != null) return;
+
+        string dir;
+        try
+        {
+            var root = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                "Apple Esports", "maintenance-recordings",
+                DateTimeOffset.Now.ToString("yyyy-MM-dd_HH-mm-ss"));
+            Directory.CreateDirectory(root);
+            dir = root;
+        }
+        catch
+        {
+            return;   // nowhere to save to - nothing this app can do about that from in here
+        }
+
+        var cts = new CancellationTokenSource();
+        _recordingCts = cts;
+        var token = cts.Token;
+
+        _ = Task.Run(async () =>
+        {
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    CaptureScreenFrame(dir);
+                }
+                catch
+                {
+                    // One failed frame (a display that briefly went to sleep, a locked
+                    // session) must never stop the rest of the maintenance window from
+                    // being recorded.
+                }
+
+                try { await Task.Delay(MaintenanceFrameEvery, token); }
+                catch (OperationCanceledException) { break; }
+            }
+        }, token);
+    }
+
+    private void StopMaintenanceRecording()
+    {
+        _recordingCts?.Cancel();
+        _recordingCts?.Dispose();
+        _recordingCts = null;
+    }
+
+    /// <summary>
+    /// One screenshot of the full virtual desktop (every monitor this PC has, not just the
+    /// primary one - a customer or operator could easily be doing something on a second screen
+    /// during maintenance). JPEG, not PNG: a screen full of text and UI compresses far smaller
+    /// as a photo than losslessly, and a maintenance window can run for hours at one frame every
+    /// five seconds.
+    /// </summary>
+    private static void CaptureScreenFrame(string dir)
+    {
+        var bounds = SystemInformation.VirtualScreen;
+        if (bounds.Width <= 0 || bounds.Height <= 0) return;
+
+        using var bitmap = new Bitmap(bounds.Width, bounds.Height);
+        using (var g = Graphics.FromImage(bitmap))
+        {
+            g.CopyFromScreen(bounds.Location, Point.Empty, bounds.Size);
+        }
+
+        var path = Path.Combine(dir, $"{DateTimeOffset.Now:HH-mm-ss}.jpg");
+        var jpegEncoder = ImageCodecInfo.GetImageEncoders()
+            .FirstOrDefault(c => c.FormatID == ImageFormat.Jpeg.Guid);
+        if (jpegEncoder is null)
+        {
+            bitmap.Save(path, ImageFormat.Jpeg);
+            return;
+        }
+
+        using var quality = new EncoderParameters(1);
+        quality.Param[0] = new EncoderParameter(Encoder.Quality, 60L);
+        bitmap.Save(path, jpegEncoder, quality);
+    }
+
     /// <summary>
     /// Closes whatever a customer opened during their session, the moment it actually ends -
     /// triggered by the overlay page posting "session-ended" on SessionStopped (see
@@ -1313,6 +1419,11 @@ public sealed class MainForm : Form
 
                 case "overlay-drag" when root.TryGetProperty("dx", out var dxEl) && root.TryGetProperty("dy", out var dyEl):
                     DragFloatingWindow((int)Math.Round(dxEl.GetDouble()), (int)Math.Round(dyEl.GetDouble()));
+                    break;
+
+                case "maintenance-recording" when root.TryGetProperty("active", out var activeEl):
+                    if (activeEl.GetBoolean()) StartMaintenanceRecording();
+                    else StopMaintenanceRecording();
                     break;
             }
         }
