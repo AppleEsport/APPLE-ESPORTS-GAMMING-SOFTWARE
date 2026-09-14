@@ -511,7 +511,34 @@ public class MemberService : IMemberService
             Details = new { MemberNumber = member.MemberNumber, Changes = changes, Reason = dto.Reason }
         });
 
+        // This method only ever runs on a branch's own database (Head Office refuses it above)
+        // - it never once told Head Office's own mirrored copy of this member what the new
+        // balance is. A Super Admin editing a balance saw it change on the operator's screen
+        // (the branch, correctly, applied it) but their own Head Office dashboard kept showing
+        // the OLD number until something unrelated happened to resync the member. Same gap for
+        // a genuinely local branch-admin edit, not just a remote one - neither path ever synced.
+        await _outbox.RecordEventAsync(branchId, "Member", member.Id, "member.balance_adjusted", new
+        {
+            memberId = member.Id,
+            gamingBalance = member.GamingBalance,
+            foodBalance = member.FoodBalance,
+            totalGamingTopUps = member.TotalGamingTopUps,
+            totalGamingBonusEarned = member.TotalGamingBonusEarned,
+            totalGamingSpend = member.TotalGamingSpend,
+            totalFoodSpend = member.TotalFoodSpend,
+            gamingPoints = member.GamingPoints,
+            foodPoints = member.FoodPoints,
+            totalPoints = member.TotalPoints,
+            updatedAt = member.UpdatedAt,
+        });
+
         await _unitOfWork.CommitTransactionAsync();
+
+        // The operator PC (session start, wallet desk) only ever refetched on its own next
+        // action before this - a balance changed here, whether by a local branch admin or
+        // relayed from Head Office, was invisible until then.
+        try { await _hubNotifications.BroadcastMemberBalanceUpdateAsync(branchId, member.Id); }
+        catch { /* best effort - the balance change itself already succeeded */ }
 
         return MapToDto(member);
     }
