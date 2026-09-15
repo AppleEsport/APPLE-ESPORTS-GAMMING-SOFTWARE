@@ -491,12 +491,37 @@ public class SessionService : ISessionService
             // because a price was committed - nobody signed up to pay for a session they ended
             // before it ever really started.
             int bufferMinutes = session.Pc?.PricingProfile?.BufferMinutes ?? SessionPricingCalculator.DefaultBufferMinutes;
+
+            // Safety net: a session with a real planned duration (a package WAS picked at
+            // Start - GamingType and PlannedDurationMin both say so) must never fall through
+            // to plain hourly billing just because PackagePrice itself came back empty. Found
+            // live on Citylight-144Hz: two "1 hr" sessions (₹50 each per the branch's own
+            // Settings) billed ₹80 instead, because PackagePrice was null on both by the time
+            // Stop ran - Pay-As-You-Go hourly took over silently, with no sign anywhere that
+            // the committed package price had been lost. Re-deriving it fresh here, the exact
+            // same lookup Start itself uses, closes that gap regardless of how PackagePrice
+            // went missing - Stop no longer has to trust that Start's write landed.
+            var packagePrice = session.PackagePrice;
+            if (!packagePrice.HasValue && session.PlannedDurationMin is > 0 && session.Pc?.PricingProfileId is { } profileId)
+            {
+                packagePrice = await _db.Set<PricingPackage>().AsNoTracking()
+                    .Where(pkg => pkg.PricingProfileId == profileId
+                        && pkg.IsActive && pkg.DurationMinutes == session.PlannedDurationMin.Value)
+                    .OrderBy(pkg => pkg.SortOrder)
+                    .Select(pkg => (decimal?)pkg.Price)
+                    .FirstOrDefaultAsync();
+
+                // Found it - honor it exactly as if Start had captured it, so this session's
+                // own record stops disagreeing with itself the next time anything reads it.
+                if (packagePrice.HasValue) session.PackagePrice = packagePrice;
+            }
+
             // Now the same shared call every live-amount screen uses too (see
             // CalculateLiveGamingAmount's own comment) - this was the one place that already
             // got the package-vs-hourly branching right; it now just calls the version of
             // itself every other screen calls, instead of keeping its own private copy of it.
             session.GamingAmount = SessionPricingCalculator.CalculateLiveGamingAmount(
-                session.PackagePrice, session.PlannedDurationMin,
+                packagePrice, session.PlannedDurationMin,
                 ratePerHour, bufferMinutes, session.ActualDurationMin!.Value);
 
             if (session.ActualDurationMin <= bufferMinutes)
