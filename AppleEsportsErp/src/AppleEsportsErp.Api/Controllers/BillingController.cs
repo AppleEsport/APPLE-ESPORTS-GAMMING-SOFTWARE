@@ -241,8 +241,12 @@ public class BillingController : ControllerBase
     /// <summary>
     /// Corrects only the payment method on an already-completed bill (e.g. marked Online, the
     /// bank declined it, the customer paid Cash instead) - line items, totals, and discounts
-    /// stay locked. Same role/permission gate as ApplyDiscount, and the same reason: this
-    /// revises a financial record after the fact.
+    /// stay locked. Open to every logged-in role - Operator included, per the owner's explicit
+    /// call that whoever is at the counter when the mistake is noticed should be able to fix it
+    /// on the spot rather than needing an Admin/Super Admin nearby. This used to gate Operator
+    /// out entirely (Super Admin always, Admin only with the paymentMethodCorrection permission
+    /// switched on) - deliberately, the same restriction as ApplyDiscount - but that restriction
+    /// was the owner's call to make, and they made the other one.
     /// </summary>
     [HttpPatch("{id:guid}/payment-method")]
     [Idempotent]
@@ -250,21 +254,7 @@ public class BillingController : ControllerBase
     public async Task<IActionResult> EditPaymentMethod(Guid id, [FromBody] EditPaymentMethodDto dto, CancellationToken ct)
     {
         var role = User.FindFirstValue(ClaimTypes.Role);
-        var permissionsStr = User.FindFirstValue("dashboardPermissions");
-
-        bool canCorrect = role == AppleEsportsErp.Application.Constants.Roles.SuperAdmin;
-        if (!canCorrect && role == AppleEsportsErp.Application.Constants.Roles.Admin && !string.IsNullOrEmpty(permissionsStr))
-        {
-            try
-            {
-                var permissions = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, bool>>(permissionsStr);
-                if (permissions != null && permissions.TryGetValue("paymentMethodCorrection", out var hasPermission) && hasPermission)
-                {
-                    canCorrect = true;
-                }
-            }
-            catch { }
-        }
+        bool canCorrect = !string.IsNullOrEmpty(role);
 
         if (!canCorrect) return Forbid();
 
