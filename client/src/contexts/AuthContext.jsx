@@ -297,16 +297,12 @@ export function AuthProvider({ children }) {
   }, [user, adminSwitchUser]);
 
   // ── Can this person correct a completed bill's payment method? ──
-  // Mirrors BillingController.EditPaymentMethod exactly, same reasoning as canApplyDiscount:
-  // this revises a financial record after the fact, so it needs the same explicit gate rather
-  // than a button the server refuses anyway.
+  // Mirrors BillingController.EditPaymentMethod exactly: open to every logged-in role,
+  // Operator included, per the owner's explicit instruction that whoever is at the counter
+  // when the mistake is noticed should be able to fix it on the spot.
   const canCorrectPaymentMethod = useCallback(() => {
     const checkUser = adminSwitchUser || user;
-    if (!checkUser) return false;
-    const role = checkUser.role || checkUser.Role;
-    if (role === ROLES.SUPER_ADMIN) return true;
-    if (role === ROLES.ADMIN) return checkUser.dashboardPermissions?.paymentMethodCorrection === true;
-    return false;
+    return !!checkUser;
   }, [user, adminSwitchUser]);
 
   const value = {
