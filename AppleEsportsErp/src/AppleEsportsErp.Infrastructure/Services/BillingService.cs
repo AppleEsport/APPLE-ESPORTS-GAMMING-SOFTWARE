@@ -133,12 +133,21 @@ public class BillingService : IBillingService
     /// gaming charge live (same formula as the operator PC card / member overlay) instead of
     /// returning the stale amount stored at session start — this is what keeps the Billing
     /// Counter's bill panel from showing a different number than everywhere else.
+    ///
+    /// Gated on the bill's own Status too, not just the session's — a bill closes (food paid
+    /// separately, ₹0 buffer auto-close, deferred) while its session keeps running as genuine
+    /// pay-as-you-go, and that combination is completely normal. Without this check, a bill
+    /// paid two minutes into a session that is still open four days later showed its gaming
+    /// line still climbing off four days of elapsed time — a live total on a bill that had
+    /// nothing left to collect. A Completed bill is done; it shows the amount it was actually
+    /// settled for, not a number that keeps moving underneath a receipt already printed.
     /// </summary>
     private static BillDto MapToDtoWithLiveAmount(Bill bill)
     {
         var dto = MapToDto(bill);
 
-        if (bill.Session != null && bill.Session.State == Domain.Enums.SessionState.Active)
+        if (bill.Status != BillStatus.Completed
+            && bill.Session != null && bill.Session.State == Domain.Enums.SessionState.Active)
         {
             decimal ratePerHour = bill.Pc?.PricingProfile?.BaseHourlyRate ?? Application.Services.SessionPricingCalculator.DefaultRatePerHour;
             int bufferMinutes = bill.Pc?.PricingProfile?.BufferMinutes ?? Application.Services.SessionPricingCalculator.DefaultBufferMinutes;
