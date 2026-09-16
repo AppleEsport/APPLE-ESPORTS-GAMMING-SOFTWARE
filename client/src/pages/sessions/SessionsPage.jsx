@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { MonitorPlay, MonitorOff, IndianRupee, Clock, Banknote, Minus, Plus, Power } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useBranch } from '../../contexts/BranchContext';
@@ -84,6 +84,36 @@ export default function SessionsPage() {
       if (!silent) setIsLoading(false);
     }
   }, [targetBranchId]);
+
+  /**
+   * Coalesces a burst of "something changed" pushes into one refresh instead of one per push.
+   *
+   * PcStatusChanged fires once per PC, independently, straight from the server the instant that
+   * PC's own state changes - correct for one PC changing on its own, and exactly the fault on a
+   * busy evening when several do within the same couple of seconds (a rush of walk-ins starting
+   * sessions close together). Each push used to call fetchPcs() directly: a loading-state flip,
+   * a full round trip, and a full-array JSON.stringify comparison against the whole PC list -
+   * once per PC, all landing on top of each other. Ten PCs changing inside two seconds meant ten
+   * of all that stacked at once, on the one thread also responsible for drawing the screen and
+   * answering a click - confirmed live as the app going fully unresponsive specifically during
+   * those bursts, not a steady-state slowdown from simply having many PCs active.
+   *
+   * A short quiet window fixes it without losing anything: whichever PC's push arrives last
+   * within it restarts the timer, and when things finally go quiet for a moment, one fetchPcs()
+   * covers every PC that changed in the meantime - the same one call this page already relies on
+   * to reconcile the whole list, just asked once instead of once per PC.
+   */
+  const fetchPcsDebounceRef = useRef(null);
+  const scheduleFetchPcs = useCallback(() => {
+    if (fetchPcsDebounceRef.current) clearTimeout(fetchPcsDebounceRef.current);
+    fetchPcsDebounceRef.current = setTimeout(() => {
+      fetchPcsDebounceRef.current = null;
+      fetchPcs(true); // silent - a burst of live pushes should never flash the loading state
+    }, 400);
+  }, [fetchPcs]);
+  useEffect(() => () => {
+    if (fetchPcsDebounceRef.current) clearTimeout(fetchPcsDebounceRef.current);
+  }, []);
 
   const handleFlagMaintenance = async (pc, enable = true) => {
     if (enable) {
@@ -195,20 +225,31 @@ export default function SessionsPage() {
           return reqPcId !== (data.pcId || data.id) && reqPcId !== (data.name || data.Name);
         }));
       }
-      fetchPcs();
+      // Coalesced, not called directly - see scheduleFetchPcs. A burst of these (several PCs
+      // changing within the same couple of seconds) must land as one refresh, not one each.
+      scheduleFetchPcs();
     });
 
     // Super Admin changed a Pricing Profile (rate or buffer) — refetch instantly so
     // every open PC card reflects it immediately, not just newly started sessions.
     const unsubPricing = subscribe(SIGNALR_HUBS.PC_STATUS, 'PricingProfileUpdated', () => {
-      fetchPcs();
+      scheduleFetchPcs();
+    });
+
+    // A PC was flagged/unflagged for maintenance (or added/removed/transferred) —
+    // PcManagementService broadcasts this on the same hub as PcStatusChanged, but under a
+    // different event name, so without this the screen kept showing "Maintenance" (no Walk-in/
+    // Member options) after an operator restored a PC until the app was reopened.
+    const unsubPcManagement = subscribe(SIGNALR_HUBS.PC_STATUS, 'PcManagementUpdated', () => {
+      scheduleFetchPcs();
     });
 
     return () => {
       unsubPcStatus();
       unsubPricing();
+      unsubPcManagement();
     };
-  }, [isHubUp, subscribe, SIGNALR_HUBS.PC_STATUS, targetBranchId, fetchPcs]);
+  }, [isHubUp, subscribe, SIGNALR_HUBS.PC_STATUS, targetBranchId, scheduleFetchPcs]);
 
   // Immediate walk-in notification. Its own effect, gated on the notifications hub's own
   // health rather than bundled with pc-status above - the two have nothing to do with each
