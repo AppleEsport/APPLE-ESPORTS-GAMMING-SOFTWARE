@@ -23,8 +23,9 @@ public sealed record SessionPricingInfo(
     public static readonly SessionPricingInfo None = new(null, null, null, 0m, 0, null);
 
     /// <summary>Mirrors SessionPricingCalculator.CalculateLiveGamingAmount exactly - see that
-    /// method's own comment for the full reasoning. Returns null when there is nothing to
-    /// price (no start time known yet).</summary>
+    /// method's own comment for the full reasoning, including why stopping well before the
+    /// planned time falls back to honest elapsed billing instead of the flat package price.
+    /// Returns null when there is nothing to price (no start time known yet).</summary>
     public decimal? PriceForElapsed(decimal elapsedMinutes)
     {
         if (SessionStartUtc is null) return null;
@@ -33,6 +34,7 @@ public sealed record SessionPricingInfo(
         if (PackagePrice.HasValue && PlannedDurationMin.HasValue)
         {
             decimal overrunMinutes = elapsedMinutes - PlannedDurationMin.Value;
+            if (overrunMinutes < -BufferMinutes) return Math.Round((elapsedMinutes / 60m) * RatePerHour, 2);
             if (overrunMinutes <= BufferMinutes) return PackagePrice.Value;
             return PackagePrice.Value + Math.Round((overrunMinutes / 60m) * RatePerHour, 2);
         }
