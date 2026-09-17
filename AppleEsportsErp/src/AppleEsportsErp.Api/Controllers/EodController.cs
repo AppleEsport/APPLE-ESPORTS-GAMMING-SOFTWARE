@@ -109,6 +109,15 @@ public class EodController : ControllerBase
             
             return new {
                 BillId = b.BillNumber,
+                // The bill's real, internal id - BillId above is the human-readable number
+                // (e.g. "BILL-20260917-XXXX"), which every payment-affecting action on this row
+                // needs the actual id for. Correcting a payment method sends this straight to
+                // /api/bills/{id:guid}/payment-method, whose route constraint refuses anything
+                // that is not a real GUID - so sending the display number 404'd outright, with
+                // no error the operator could act on. Confirmed live: every "Save Correction"
+                // press failed this way, for every role, since this screen has existed - not
+                // something the recent Operator-access change introduced.
+                RealBillId = b.Id,
                 Date = b.CompletedAt,
                 Operator = b.Operator != null ? b.Operator.FullName : "Unknown",
                 Customer = string.IsNullOrEmpty(b.CustomerName) ? "Walk-in" : b.CustomerName,

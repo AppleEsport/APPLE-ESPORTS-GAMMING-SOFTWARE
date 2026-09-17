@@ -81,7 +81,9 @@ export default function EodDashboardPage() {
     setCorrectOnline(method === 'online' ? String(total) : '0');
     setCorrectReason('');
     setCorrectError(null);
-    setEditingBillId(bill.billId || bill.id);
+    // realBillId, never billId - billId on this row is the human-readable bill NUMBER
+    // (e.g. "BILL-20260917-XXXX"), and the correction endpoint needs the actual id.
+    setEditingBillId(bill.realBillId);
   };
 
   const handleCorrectPayMethod = async (bill) => {
@@ -103,7 +105,8 @@ export default function EodDashboardPage() {
     setCorrectBusy(true);
     setCorrectError(null);
     try {
-      await editPaymentMethod(bill.billId || bill.id, {
+      // realBillId, never billId - see openCorrectPayMethod's comment.
+      await editPaymentMethod(bill.realBillId, {
         newPaymentType, cashAmount, onlineAmount, reason: correctReason.trim(),
       });
       toast.success('Payment method corrected');
@@ -693,7 +696,9 @@ export default function EodDashboardPage() {
                             const endStr = bill.sessionEndTime ? new Date(bill.sessionEndTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true }) : '-';
 
                             const thisBillId = bill.billId || bill.id;
-                            const isEditingThis = editingBillId === thisBillId;
+                            // editingBillId is set from realBillId (see openCorrectPayMethod) -
+                            // compared against the same field here, not the display number.
+                            const isEditingThis = editingBillId === bill.realBillId;
 
                             return (
                               <Fragment key={thisBillId}>
@@ -1048,7 +1053,9 @@ export default function EodDashboardPage() {
                         </tr>
                         {group.bills.map(bill => {
                         const auditBillId = bill.billId || bill.id;
-                        const isEditingThisAudit = editingBillId === auditBillId;
+                        // editingBillId is set from realBillId (see openCorrectPayMethod) -
+                        // compared against the same field here, not the display number.
+                        const isEditingThisAudit = editingBillId === bill.realBillId;
                         return (
                       <Fragment key={auditBillId}>
                       <tr className="hover:bg-bg-3/40 transition-colors">
