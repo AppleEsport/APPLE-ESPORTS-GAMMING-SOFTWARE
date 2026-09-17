@@ -1,13 +1,26 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Calculator, Plus, AlertTriangle, WifiOff } from 'lucide-react';
+import { Calculator, Plus, AlertTriangle, WifiOff, Calendar } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useBranch } from '../../contexts/BranchContext';
 import { useSocket } from '../../contexts/SocketContext';
 import api from '../../config/api';
+import { format } from 'date-fns';
 import PageHeader from '../../components/layout/PageHeader';
 import OpenRegisterModal from '../../components/cash/OpenRegisterModal';
 import AddTransactionModal from '../../components/cash/AddTransactionModal';
 import TransactionFeed from '../../components/cash/TransactionFeed';
+
+const todayIso = () => format(new Date(), 'yyyy-MM-dd');
+
+// Remembered per-browser, same convention as Online Desk / Member Amount Desk, so reopening
+// the ledger keeps whatever range was last being looked at instead of always snapping to today.
+const readStoredDate = (key) => {
+  try {
+    return localStorage.getItem(key) || todayIso();
+  } catch {
+    return todayIso();
+  }
+};
 
 export default function CashDeskPage() {
   const { isSuperAdmin, user } = useAuth();
@@ -20,7 +33,112 @@ export default function CashDeskPage() {
 
   const [isAddTxModalOpen, setIsAddTxModalOpen] = useState(false);
 
+  // The Ledger itself is date-filterable - a shift ending must never mean the cash it moved
+  // becomes harder to find. Kept separate from `register`, which stays the live, right-now
+  // drawer regardless of what range the Ledger below is currently showing.
+  const [fromDate, setFromDate] = useState(() => readStoredDate('cashDesk.fromDate'));
+  const [toDate, setToDate] = useState(() => readStoredDate('cashDesk.toDate'));
+  const [ledger, setLedger] = useState(null);
+  const [ledgerLoading, setLedgerLoading] = useState(true);
+  const [ledgerError, setLedgerError] = useState(null);
+
+  useEffect(() => {
+    try { localStorage.setItem('cashDesk.fromDate', fromDate); } catch { /* ignore */ }
+  }, [fromDate]);
+
+  useEffect(() => {
+    try { localStorage.setItem('cashDesk.toDate', toDate); } catch { /* ignore */ }
+  }, [toDate]);
+
   const targetBranchId = isSuperAdmin ? activeBranch?.id : user?.branchId;
+
+  const fetchLedger = useCallback(async () => {
+    if (isSuperAdmin && !targetBranchId) {
+      setLedger(null);
+      setLedgerLoading(false);
+      return;
+    }
+    setLedgerLoading(true);
+    try {
+      setLedgerError(null);
+      const { data } = await api.get('/system-desks/cash/active', {
+        params: { branchId: targetBranchId, fromDate, toDate },
+      });
+      setLedger(data.data);
+    } catch (err) {
+      setLedgerError(err.response?.data?.message || 'Failed to fetch cash desk ledger.');
+    } finally {
+      setLedgerLoading(false);
+    }
+  }, [targetBranchId, isSuperAdmin, fromDate, toDate]);
+
+  useEffect(() => { fetchLedger(); }, [fetchLedger]);
+
+  // Same live events the drawer above already reacts to - a correction or a new cash
+  // transaction should appear in the Ledger immediately, not only after changing the date range.
+  useEffect(() => {
+    if (!connected || !targetBranchId) return;
+    const unsubLedger = subscribe(SIGNALR_HUBS.CASH, 'CashRegisterUpdated', () => {
+      fetchLedger();
+    });
+    return () => unsubLedger();
+  }, [connected, subscribe, SIGNALR_HUBS.CASH, targetBranchId, fetchLedger]);
+
+  const resetLedgerToToday = () => {
+    setFromDate(todayIso());
+    setToDate(todayIso());
+  };
+
+  const ledgerSection = (
+    <div className="flex-1 bg-bg-2 border border-border rounded-xl p-4 flex flex-col min-h-0">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4 border-b border-border pb-3">
+        <h3 className="text-text font-bold uppercase tracking-wider text-sm flex items-center gap-2">
+          Shift Transaction Ledger
+          <span className="bg-bg-3 px-2 py-0.5 rounded-full text-[10px] text-text-3 font-mono border border-border">Append Only</span>
+        </h3>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Calendar className="w-4 h-4 text-text-3 shrink-0" />
+          <input
+            type="date"
+            value={fromDate}
+            max={toDate}
+            onChange={(e) => setFromDate(e.target.value)}
+            className="bg-bg-3 border border-border rounded-lg px-2.5 py-1 text-xs text-text"
+          />
+          <span className="text-text-3 text-xs">to</span>
+          <input
+            type="date"
+            value={toDate}
+            min={fromDate}
+            max={todayIso()}
+            onChange={(e) => setToDate(e.target.value)}
+            className="bg-bg-3 border border-border rounded-lg px-2.5 py-1 text-xs text-text"
+          />
+          <button
+            onClick={resetLedgerToToday}
+            className="text-xs font-medium text-accent hover:text-accent/80 transition-colors"
+          >
+            Today
+          </button>
+        </div>
+      </div>
+
+      {ledgerError && (
+        <div className="bg-neon-red/10 border border-neon-red/30 text-neon-red p-3 rounded-xl mb-4 flex items-center gap-2 text-sm">
+          <AlertTriangle className="w-4 h-4" /> {ledgerError}
+        </div>
+      )}
+
+      {ledgerLoading ? (
+        <div className="flex justify-center py-8">
+          <div className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+        </div>
+      ) : (
+        <TransactionFeed transactions={ledger?.transactions || []} />
+      )}
+    </div>
+  );
 
   const fetchActiveRegister = useCallback(async () => {
     if (isSuperAdmin && !targetBranchId) {
@@ -78,9 +196,16 @@ export default function CashDeskPage() {
     );
   }
 
-  // 1. If no register is open, force the operator to open it.
+  // 1. If no register is open, force the operator to open it - the Ledger still shows
+  // underneath, since it is a look back at cash movements regardless of whether a drawer
+  // happens to be open right now.
   if (!register) {
-    return <OpenRegisterModal onRegisterOpened={fetchActiveRegister} />;
+    return (
+      <div className="flex flex-col h-full gap-6">
+        <OpenRegisterModal onRegisterOpened={fetchActiveRegister} />
+        {ledgerSection}
+      </div>
+    );
   }
 
   // 2. Active Register Dashboard
@@ -175,15 +300,7 @@ export default function CashDeskPage() {
 
       </div>
 
-      {/* Transaction Feed */}
-      <div className="flex-1 bg-bg-2 border border-border rounded-xl p-4 flex flex-col min-h-0">
-        <h3 className="text-text font-bold uppercase tracking-wider text-sm mb-4 border-b border-border pb-3 flex items-center gap-2">
-          Shift Transaction Ledger
-          <span className="bg-bg-3 px-2 py-0.5 rounded-full text-[10px] text-text-3 font-mono border border-border">Append Only</span>
-        </h3>
-
-        <TransactionFeed transactions={transactions} />
-      </div>
+      {ledgerSection}
 
       {isAddTxModalOpen && (
         <AddTransactionModal
