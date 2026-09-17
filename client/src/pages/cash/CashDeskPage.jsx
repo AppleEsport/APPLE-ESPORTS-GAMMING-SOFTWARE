@@ -8,7 +8,6 @@ import { getCashReconciliationReport } from '../../api/reports.api';
 import PageHeader from '../../components/layout/PageHeader';
 import OpenRegisterModal from '../../components/cash/OpenRegisterModal';
 import AddTransactionModal from '../../components/cash/AddTransactionModal';
-import TransactionFeed from '../../components/cash/TransactionFeed';
 import { format } from 'date-fns';
 import { createReport, addTable, save } from '../../utils/pdfReport';
 
@@ -363,16 +362,6 @@ export default function CashDeskPage() {
           )}
         </div>
 
-      </div>
-
-      {/* Transaction Feed */}
-      <div className="flex-1 bg-bg-2 border border-border rounded-xl p-4 flex flex-col min-h-0">
-        <h3 className="text-text font-bold uppercase tracking-wider text-sm mb-4 border-b border-border pb-3 flex items-center gap-2">
-          Shift Transaction Ledger
-          <span className="bg-bg-3 px-2 py-0.5 rounded-full text-[10px] text-text-3 font-mono border border-border">Append Only</span>
-        </h3>
-
-        <TransactionFeed transactions={transactions} />
       </div>
 
       {historySection}

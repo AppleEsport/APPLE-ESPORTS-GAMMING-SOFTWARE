@@ -398,6 +398,40 @@ public class BillingService : IBillingService
         bill.UpdatedAt = DateTimeOffset.UtcNow;
         _unitOfWork.Repository<Bill>().Update(bill);
 
+        // The Bill row above is what the Billing Counter and this bill's own receipt read - but
+        // End of Day's Cash/Online totals (EodService.GenerateReportAsync) sum the ORIGINAL
+        // Payment row instead, not the Bill: `payments.Sum(p => p.CashAmount/OnlineAmount)`. A
+        // correction that only touched Bill left that Payment row exactly as it was tendered,
+        // so a bill corrected from Cash to Online kept counting as Cash on End of Day forever -
+        // "online in online, cash in cash" never actually held once anything was corrected.
+        // Every non-wallet Payment tied to this bill (in practice always exactly one - a
+        // Completed bill can only be paid once) is corrected the same way as the Bill itself.
+        var nonWalletPayments = bill.Payments.Where(p => p.WalletAmount == 0).ToList();
+        if (nonWalletPayments.Count == 1)
+        {
+            var payment = nonWalletPayments[0];
+            payment.PaymentType = dto.NewPaymentType;
+            payment.CashAmount = dto.CashAmount;
+            payment.OnlineAmount = dto.OnlineAmount;
+            payment.ActualCashCollected = dto.CashAmount;
+            if (dto.CashAmount == 0)
+            {
+                payment.CashReceived = 0;
+                payment.ChangeReturned = 0;
+            }
+            _unitOfWork.Repository<Payment>().Update(payment);
+        }
+        else if (nonWalletPayments.Count > 1)
+        {
+            // Genuinely unexpected shape for a Completed bill - refuse rather than guess which
+            // of several payment rows to rewrite and risk End of Day disagreeing with itself in
+            // a new way.
+            throw new AppException(
+                "This bill has more than one payment record, so its payment method can't be " +
+                "safely corrected here - which one to change is ambiguous.",
+                System.Net.HttpStatusCode.Conflict, "AMBIGUOUS_PAYMENT_RECORDS");
+        }
+
         // Book the cash delta into TODAY's drawer, not the original day's - see the method
         // comment. Looked up by branch alone, not the correcting actor's own shift: a Super
         // Admin correcting from Head Office is not on any shift here at all, and even locally
