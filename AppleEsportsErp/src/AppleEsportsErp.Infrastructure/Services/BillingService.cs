@@ -451,12 +451,29 @@ public class BillingService : IBillingService
                 activeRegister.TotalCashSales += cashDelta;
                 _unitOfWork.Repository<CashRegister>().Update(activeRegister);
 
+                // CashTransaction.OperatorId is a non-nullable FK into THIS branch's own local
+                // Operators table - same fault class as ApplyDiscountAsync's DiscountBy note. A
+                // correction issued locally by a genuine branch Operator/Admin/Super Admin
+                // satisfies that fine; one routed down as a remote command from Head Office
+                // never can, because actorId is then a Head Office User's own id, which this
+                // branch's database has never seen. Confirmed live: every payment correction
+                // issued from Head Office failed outright with a 23503 foreign key violation,
+                // the same failure mode discounts had before that fix. Falls back to the open
+                // register's own operator - it is their drawer being adjusted either way - so
+                // the correction still applies instead of failing the whole transaction over
+                // who gets named on one internal bookkeeping row; the real actor is still
+                // recorded in full on the audit log entry below regardless.
+                var operatorIdForTransaction = await _unitOfWork.Repository<Operator>().Query()
+                    .AnyAsync(o => o.Id == actorId)
+                    ? actorId
+                    : activeRegister.OperatorId;
+
                 await _unitOfWork.Repository<CashTransaction>().AddAsync(new CashTransaction
                 {
                     CashRegisterId = activeRegister.Id,
                     BillId = bill.Id,
                     BranchId = branchId,
-                    OperatorId = actorId,
+                    OperatorId = operatorIdForTransaction,
                     PcNumber = bill.Pc?.PcNumber,
                     CustomerName = bill.CustomerName ?? "Walk-in",
                     TransactionType = "payment_method_correction",
