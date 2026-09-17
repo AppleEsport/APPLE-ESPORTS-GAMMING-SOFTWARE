@@ -99,6 +99,59 @@ public class SystemDesksService : ISystemDesksService
         return dto;
     }
 
+    public async Task<CashDeskSummaryDto> GetActiveCashDeskAsync(
+        Guid branchId, Guid shiftId, DateOnly? fromDate = null, DateOnly? toDate = null)
+    {
+        var shift = await _unitOfWork.Repository<Shift>().Query()
+            .FirstOrDefaultAsync(s => s.Id == shiftId && s.BranchId == branchId);
+
+        if (shift == null)
+            throw new Exception("Shift not found.");
+
+        // Same trading-day scope as the other desks - see GetActiveOnlineDeskAsync's note. Not
+        // scoped to whichever register happens to be open right now, deliberately: a register
+        // closes when its shift ends, but the cash it moved should stay just as easy to find the
+        // day after as it was the minute it happened.
+        var resolvedFrom = fromDate ?? IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow);
+        var resolvedTo = toDate ?? fromDate ?? IndiaTime.BusinessDayOf(DateTimeOffset.UtcNow);
+        var (dayStart, _) = IndiaTime.BusinessDayRange(resolvedFrom);
+        var (_, dayEnd) = IndiaTime.BusinessDayRange(resolvedTo);
+
+        var cashTxs = await _unitOfWork.Repository<CashTransaction>().Query()
+            .Where(t => t.BranchId == branchId && t.CreatedAt >= dayStart && t.CreatedAt < dayEnd)
+            .OrderByDescending(t => t.CreatedAt)
+            .ToListAsync();
+
+        var dto = new CashDeskSummaryDto
+        {
+            ShiftId = shiftId,
+            FromDate = resolvedFrom,
+            ToDate = resolvedTo,
+        };
+
+        foreach (var tx in cashTxs)
+        {
+            dto.TotalCashSales += tx.CashAmount;
+            dto.Transactions.Add(new AppleEsportsErp.Application.DTOs.Cash.CashTransactionDto
+            {
+                Id = tx.Id,
+                BillId = tx.BillId,
+                PcNumber = tx.PcNumber,
+                CashAmount = tx.CashAmount,
+                CashReceived = tx.CashReceived,
+                ChangeReturned = tx.ChangeReturned,
+                ActualCashCollected = tx.ActualCashCollected,
+                GamingAmount = tx.GamingAmount,
+                FoodAmount = tx.FoodAmount,
+                TransactionType = tx.TransactionType,
+                CustomerName = tx.CustomerName,
+                CreatedAt = tx.CreatedAt,
+            });
+        }
+
+        return dto;
+    }
+
     public async Task<WalletDeskSummaryDto> GetActiveWalletDeskAsync(
         Guid branchId, Guid shiftId, DateOnly? fromDate = null, DateOnly? toDate = null)
     {

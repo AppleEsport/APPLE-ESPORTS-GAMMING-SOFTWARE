@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using AppleEsportsErp.Application.DTOs.Cash;
 
 namespace AppleEsportsErp.Application.DTOs.SystemDesks;
 
@@ -17,6 +18,15 @@ public class OnlineTransactionDto
     public string Description { get; set; } = string.Empty;
     public decimal Amount { get; set; }
     public string PaymentMethod { get; set; } = string.Empty;
+}
+
+public class CashDeskSummaryDto
+{
+    public Guid ShiftId { get; set; }
+    public DateOnly FromDate { get; set; }
+    public DateOnly ToDate { get; set; }
+    public decimal TotalCashSales { get; set; }
+    public List<CashTransactionDto> Transactions { get; set; } = new();
 }
 
 public class WalletDeskSummaryDto
