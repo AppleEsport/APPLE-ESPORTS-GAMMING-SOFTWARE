@@ -61,7 +61,13 @@ export default function EodPaymentSummaryBar({ report, targetDate, height, onHei
   // counter - two counters, one till. Top-ups are split by how they were actually paid (the
   // server tracks this per row) rather than lumped into cash regardless of method, which used
   // to overstate the drawer by the full value of every UPI top-up.
-  const cashTotal = n(pm.totalCash) + n(pm.totalWalletTopUpsCash) - n(report.cash.totalPettyExpenses) - n(report.cash.totalOwnerWithdrawals);
+  //
+  // Cash In (a manual Cash Desk entry - restocking change, a found note, etc.) was computed on
+  // the server all along (report.cash.totalCashInwards) but never actually added in here, so
+  // Expected Drawer Total (driven by the register directly) went up the moment someone logged
+  // one, while this screen's own Cash/Overall End Total silently did not - the exact mismatch
+  // this fixes.
+  const cashTotal = n(pm.totalCash) + n(pm.totalWalletTopUpsCash) + n(report.cash.totalCashInwards) - n(report.cash.totalPettyExpenses) - n(report.cash.totalOwnerWithdrawals);
   const onlineTotal = n(pm.totalOnline) + n(pm.totalWalletTopUpsOnline);
   const walletDeductionsTotal = n(pm.totalWalletDeductions);
 
@@ -126,6 +132,14 @@ export default function EodPaymentSummaryBar({ report, targetDate, height, onHei
               <span className="text-text-2">Cash Sales + Member Amount Top-Ups</span>
               <span className="font-mono text-neon-green">+ ₹{report.cash.totalCashSales}</span>
             </div>
+            {/* Only when there was one - a day with no manual Cash In entries has nothing to
+                say here, same reasoning as the "differences found earlier" row below. */}
+            {n(report.cash.totalCashInwards) !== 0 && (
+              <div className="flex justify-between items-center">
+                <span className="text-text-2">Cash In</span>
+                <span className="font-mono text-neon-green">+ ₹{report.cash.totalCashInwards}</span>
+              </div>
+            )}
             <div className="flex justify-between items-center">
               <span className="text-text-2">Petty Expenses</span>
               <span className="font-mono text-neon-red">- ₹{report.cash.totalPettyExpenses}</span>
@@ -183,7 +197,7 @@ export default function EodPaymentSummaryBar({ report, targetDate, height, onHei
           <div className="space-y-1.5 text-xs">
             <div className="flex justify-between items-center">
               <span className="text-text-2">Cash</span>
-              <span className="font-mono text-text">₹{(n(pm.totalCash) + n(pm.totalWalletTopUpsCash)).toFixed(2)}</span>
+              <span className="font-mono text-text">₹{(n(pm.totalCash) + n(pm.totalWalletTopUpsCash) + n(report.cash.totalCashInwards)).toFixed(2)}</span>
             </div>
             <div className="flex justify-between items-center">
               <span className="text-text-2">Online</span>
