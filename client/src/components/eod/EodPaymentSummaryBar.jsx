@@ -132,14 +132,10 @@ export default function EodPaymentSummaryBar({ report, targetDate, height, onHei
               <span className="text-text-2">Cash Sales + Member Amount Top-Ups</span>
               <span className="font-mono text-neon-green">+ ₹{report.cash.totalCashSales}</span>
             </div>
-            {/* Only when there was one - a day with no manual Cash In entries has nothing to
-                say here, same reasoning as the "differences found earlier" row below. */}
-            {n(report.cash.totalCashInwards) !== 0 && (
-              <div className="flex justify-between items-center">
-                <span className="text-text-2">Cash In</span>
-                <span className="font-mono text-neon-green">+ ₹{report.cash.totalCashInwards}</span>
-              </div>
-            )}
+            <div className="flex justify-between items-center">
+              <span className="text-text-2">Cash In</span>
+              <span className="font-mono text-neon-green">+ ₹{report.cash.totalCashInwards}</span>
+            </div>
             <div className="flex justify-between items-center">
               <span className="text-text-2">Petty Expenses</span>
               <span className="font-mono text-neon-red">- ₹{report.cash.totalPettyExpenses}</span>
