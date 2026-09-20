@@ -36,20 +36,32 @@ public class CashRegisterService : ICashRegisterService
     }
 
     /// <summary>
-    /// The branch's currently open (or being verified/verified) drawer, whoever opened it.
+    /// THIS shift's drawer - the one this operator's own login actually opened or resumed, by
+    /// its real identity (ShiftId), never "whichever register merely looks newest."
     ///
-    /// Scoped by status only, not by calendar day: there is one physical cash box, and an
-    /// operator logging in again part-way through the evening — or well past midnight, for a
-    /// branch still trading — should carry on with the same drawer rather than be told there
-    /// isn't one. A register opened yesterday and never closed is still "the open register",
-    /// full stop; see AuthService.CloseFinishedTradingDaysAsync for what actually decides when
-    /// a branch is genuinely done trading for the night.
+    /// Used to be scoped by status only ("any non-Closed register for the branch, newest
+    /// first") on the reasoning that there is one physical cash box, so any open register must
+    /// be the right one. That reasoning breaks the moment more than one non-Closed register
+    /// exists for the branch at once - which a stray double-click (Start Verification fired
+    /// twice, or Open Register fired twice) is enough to cause - because "newest" then silently
+    /// starts pointing at whichever accidental extra register was created last, not at the real
+    /// one this shift has actually been trading against. Confirmed live: a shift's real
+    /// register, holding genuine sales, got locked into Verifying by a double-click; every
+    /// screen that asked "what's the current register?" kept answering with a second, empty
+    /// register created moments later instead - Expected Drawer Total read ₹0, cash payments
+    /// were refused, and nothing about the real register's own numbers had actually changed.
+    ///
+    /// ShiftId is safe to pin to rather than a regression: the same operator logging back in
+    /// mid-shift resumes their existing Shift row rather than getting a new one (see
+    /// AuthService.LoginOperatorAsync), so this still "carries on with the same drawer" across
+    /// a re-login exactly as before - it just can no longer be fooled by an accidental extra
+    /// register that was never actually this shift's own.
     /// </summary>
     public async Task<CashRegisterDto> GetActiveRegisterAsync(Guid branchId, Guid shiftId)
     {
         var register = await _unitOfWork.Repository<CashRegister>().Query()
             .Include(r => r.CashTransactions)
-            .Where(r => r.BranchId == branchId && r.Status != CashRegisterStatus.Closed)
+            .Where(r => r.BranchId == branchId && r.ShiftId == shiftId && r.Status != CashRegisterStatus.Closed)
             .OrderByDescending(r => r.OpenedAt)
             .FirstOrDefaultAsync()
             ?? throw new NotFoundException("No cash register has been opened for today yet.");

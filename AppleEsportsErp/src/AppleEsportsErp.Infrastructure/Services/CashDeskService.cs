@@ -30,12 +30,19 @@ public class CashDeskService : ICashDeskService
 
     public async Task StartVerificationAsync(Guid branchId, Guid operatorId, Guid shiftId)
     {
-        // The branch's currently open drawer, whatever day it was opened on. Filtering by
-        // BusinessDay == today used to mean a register opened before midnight and still open
-        // after it could no longer be found here at all, so an operator trying to count out
-        // past midnight got "no open cash register" instead of the drawer in front of them.
+        // THIS shift's own register, by ShiftId - not "any Open register for the branch". That
+        // used to be enough on its own (a branch has one physical cash box), but it silently
+        // breaks the moment more than one Open register exists at once - a double-click on this
+        // very button, firing the request twice, is enough to cause exactly that: the first
+        // click finds and locks the real register, and because the query never named which
+        // register it wanted, the second click - now with only one Open register left, if a
+        // stray duplicate exists - can lock a completely different one instead. Confirmed live:
+        // two "Start Verification" calls two seconds apart locked two different registers, one
+        // of them empty, and every later attempt to fix it kept finding and cancelling that
+        // same empty one - the real register, holding the shift's actual sales, was never
+        // touched again. Pinning to ShiftId means there is only ever one possible answer.
         var register = await _unitOfWork.Repository<CashRegister>().Query()
-            .FirstOrDefaultAsync(r => r.BranchId == branchId && r.Status == CashRegisterStatus.Open)
+            .FirstOrDefaultAsync(r => r.BranchId == branchId && r.ShiftId == shiftId && r.Status == CashRegisterStatus.Open)
             ?? throw new NotFoundException("No open cash register found to verify.");
 
         register.Status = CashRegisterStatus.Verifying;
@@ -59,13 +66,15 @@ public class CashDeskService : ICashDeskService
 
     public async Task<DenominationCountDto> SubmitDenominationsAsync(Guid branchId, Guid operatorId, Guid shiftId, SubmitDenominationDto dto)
     {
-        // Same reasoning as StartVerificationAsync above: found by status only, not by whatever
-        // calendar day the register happened to be opened on.
+        // Same reasoning as StartVerificationAsync above: THIS shift's own register, by ShiftId,
+        // not "any Verifying register for the branch" - the count being submitted must land on
+        // the same register this shift actually locked, never on an unrelated one that happens
+        // to also be Verifying.
         await _unitOfWork.BeginTransactionAsync();
         try
         {
             var register = await _unitOfWork.Repository<CashRegister>().Query()
-                .FirstOrDefaultAsync(r => r.BranchId == branchId && r.Status == CashRegisterStatus.Verifying)
+                .FirstOrDefaultAsync(r => r.BranchId == branchId && r.ShiftId == shiftId && r.Status == CashRegisterStatus.Verifying)
                 ?? throw new NotFoundException("No verifying cash register found. Must start verification first.");
 
             decimal countedTotal = 
