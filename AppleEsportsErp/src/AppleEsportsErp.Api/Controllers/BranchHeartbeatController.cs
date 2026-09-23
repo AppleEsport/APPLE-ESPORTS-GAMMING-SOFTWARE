@@ -478,6 +478,7 @@ public class BranchHeartbeatController : ControllerBase
                 MobileNumber = m.MobileNumber,
                 Email = m.Email,
                 Username = m.Username,
+                PasswordHash = m.PasswordHash,
                 GamingBalance = m.GamingBalance,
                 FoodBalance = m.FoodBalance,
                 BalanceAsOf = m.BalanceAsOf,
@@ -565,9 +566,13 @@ public class BranchHeartbeatController : ControllerBase
 
         var menuPart = string.Join('\n', config.MenuItems.Select(i => string.Join('',
             i.Id, i.ItemName, i.Category, i.Price, i.ImageUrl, i.IsDisabled)));
+        // PasswordHash included on purpose - a password-only change (Super Admin sets one, or a
+        // member resets from their phone) must move this fingerprint on its own, or this whole
+        // fix does nothing the one time it matters: nothing else about the member changed, so
+        // without it "did anything change?" answers no and the new hash never goes out.
 
         var membersPart = string.Join('\n', config.Members.Select(m => string.Join('',
-            m.Id, m.FullName, m.MemberNumber, m.MobileNumber, m.Email, m.Username,
+            m.Id, m.FullName, m.MemberNumber, m.MobileNumber, m.Email, m.Username, m.PasswordHash,
             m.GamingBalance, m.FoodBalance, m.BalanceAsOf, m.IsBlocked)));
 
         var pricingPart = string.Join('\n', config.PricingProfiles.Select(p => string.Join("",

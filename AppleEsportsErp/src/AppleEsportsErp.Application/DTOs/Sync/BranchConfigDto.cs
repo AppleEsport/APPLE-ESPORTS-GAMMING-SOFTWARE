@@ -155,6 +155,17 @@ public class BranchMemberConfigDto
     public string MobileNumber { get; set; } = string.Empty;
     public string? Email { get; set; }
     public string? Username { get; set; }
+
+    /// <summary>
+    /// Without this, a member's password only ever reached the one branch a targeted
+    /// set_member_password command happened to be addressed to - their own HomeBranchId, and
+    /// only when set via a phone reset; a password set directly by Super Admin at Head Office
+    /// reached nowhere at all, ever. Everything else about a member (name, balance, phone)
+    /// already rides down on this same beat to every branch, on the stated reasoning that a
+    /// member who joined at one shop is meant to be able to use their account at any of them -
+    /// the password is the one field that was quietly excluded from that promise.
+    /// </summary>
+    public string? PasswordHash { get; set; }
     public decimal GamingBalance { get; set; }
     public decimal FoodBalance { get; set; }
 
