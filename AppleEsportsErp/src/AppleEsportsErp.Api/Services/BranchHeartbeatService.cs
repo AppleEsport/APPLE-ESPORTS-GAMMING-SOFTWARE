@@ -2255,6 +2255,7 @@ public class BranchHeartbeatService : BackgroundService
             member = new Member
             {
                 Id = item.Id,
+                PasswordHash = item.PasswordHash,
                 GamingBalance = item.GamingBalance,
                 FoodBalance = item.FoodBalance,
                 BalanceAsOf = item.BalanceAsOf,
@@ -2277,6 +2278,14 @@ public class BranchHeartbeatService : BackgroundService
         member.MobileNumber = item.MobileNumber;
         member.Email = item.Email;
         member.Username = item.Username;
+
+        // Never store a blank hash - BCrypt.Verify against "" throws rather than returning
+        // false, so a member this branch already knew how to log in would suddenly be unable
+        // to at all, the moment a beat happened to carry an empty value. Head Office should
+        // never send one, but this stays the same "only ever move forward" rule Head Office's
+        // own RunSetMemberPasswordAsync already applies for the exact same reason.
+        if (!string.IsNullOrWhiteSpace(item.PasswordHash))
+            member.PasswordHash = item.PasswordHash;
         member.UpdatedAt = DateTimeOffset.UtcNow;
 
         // Same rule as operators: only the barred decision comes down. There is no local
