@@ -1799,6 +1799,7 @@ public class AuthService : IAuthService
         }
 
         var newHash = BCryptNet.HashPassword(dto.NewPassword);
+        var passwordChangedAt = DateTimeOffset.UtcNow;
         if (user != null)
         {
             user.PasswordHash = newHash;
@@ -1816,6 +1817,7 @@ public class AuthService : IAuthService
         else if (member != null)
         {
             member.PasswordHash = newHash;
+            member.PasswordChangedAt = passwordChangedAt;
             member.ResetToken = null;
             member.ResetTokenExpiry = null;
             member.UpdatedAt = DateTimeOffset.UtcNow;
@@ -1847,6 +1849,7 @@ public class AuthService : IAuthService
                 {
                     memberId = member.Id,
                     passwordHash = newHash,
+                    passwordChangedAt,
                 }),
                 Status = BranchCommandStatus.Pending,
                 RequestedByUserId = Guid.Empty,   // the member themselves, not a Head Office user

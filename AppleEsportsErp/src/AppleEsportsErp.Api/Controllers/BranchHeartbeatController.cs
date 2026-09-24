@@ -479,6 +479,7 @@ public class BranchHeartbeatController : ControllerBase
                 Email = m.Email,
                 Username = m.Username,
                 PasswordHash = m.PasswordHash,
+                PasswordChangedAt = m.PasswordChangedAt,
                 GamingBalance = m.GamingBalance,
                 FoodBalance = m.FoodBalance,
                 BalanceAsOf = m.BalanceAsOf,
@@ -572,7 +573,7 @@ public class BranchHeartbeatController : ControllerBase
         // without it "did anything change?" answers no and the new hash never goes out.
 
         var membersPart = string.Join('\n', config.Members.Select(m => string.Join('',
-            m.Id, m.FullName, m.MemberNumber, m.MobileNumber, m.Email, m.Username, m.PasswordHash,
+            m.Id, m.FullName, m.MemberNumber, m.MobileNumber, m.Email, m.Username, m.PasswordHash, m.PasswordChangedAt,
             m.GamingBalance, m.FoodBalance, m.BalanceAsOf, m.IsBlocked)));
 
         var pricingPart = string.Join('\n', config.PricingProfiles.Select(p => string.Join("",

@@ -392,7 +392,6 @@ public class SyncInboxController : ControllerBase
         "payment.changed" => 2,   // depends on bill.changed (tier 1)
 
         "cash_transaction.changed" => 3,
-        "denomination_count.changed" => 3,
         "bill.paid" => 3,
         "payment.recorded" => 3,
         "wallet.topped_up" => 3,
@@ -494,10 +493,6 @@ public class SyncInboxController : ControllerBase
 
             case "cash_transaction.changed":
                 await UpsertRowAsync<CashTransaction>(held, root);
-                break;
-
-            case "denomination_count.changed":
-                await UpsertRowAsync<DenominationCount>(held, root);
                 break;
 
             case "customer_credit.changed":
@@ -873,6 +868,14 @@ public class SyncInboxController : ControllerBase
             MobileNumber = ReadString(root, "mobileNumber") ?? string.Empty,
             Email = ReadString(root, "email"),
             Username = ReadString(root, "username"),
+            // Without this, a member's very first password - set at the branch the moment they
+            // registered - never reached Head Office at all. Head Office created its own copy
+            // with no password, forever, and since members are shared across every branch, any
+            // OTHER branch that later learned about this member inherited that same blank
+            // password from Head Office - the member could only ever log in at the one branch
+            // where they signed up. See MemberService.RegisterMemberAsync's own outbox event.
+            PasswordHash = ReadString(root, "passwordHash"),
+            PasswordChangedAt = ReadDate(root, "passwordChangedAt"),
             Status = MemberStatus.Active,
             HomeBranchId = held.BranchId,
             CreatedAt = ReadDate(root, "createdAt") ?? held.OccurredAt,
@@ -899,6 +902,24 @@ public class SyncInboxController : ControllerBase
         member.MobileNumber = ReadString(root, "mobileNumber") ?? member.MobileNumber;
         member.Email = ReadString(root, "email");
         member.Username = ReadString(root, "username");
+
+        // Same gap as UpsertMemberAsync's own note, just for an edit instead of a fresh
+        // registration - an operator resetting a member's password at the counter (the normal,
+        // in-person way "forgot password" gets handled) never told Head Office at all before
+        // this. Guarded by PasswordChangedAt the same way the downward push now is: only move
+        // forward in time, so a late-arriving or redelivered event can never undo a password
+        // that has already changed again since.
+        var incomingPasswordHash = ReadString(root, "passwordHash");
+        var incomingPasswordChangedAt = ReadDate(root, "passwordChangedAt");
+        if (!string.IsNullOrWhiteSpace(incomingPasswordHash)
+            && (incomingPasswordChangedAt is not { } incomingChangedAt
+                || member.PasswordChangedAt is not { } localChangedAt
+                || incomingChangedAt > localChangedAt))
+        {
+            member.PasswordHash = incomingPasswordHash;
+            member.PasswordChangedAt = incomingPasswordChangedAt;
+        }
+
         member.UpdatedAt = ReadDate(root, "updatedAt") ?? held.ReceivedAt;
     }
 
