@@ -12,7 +12,18 @@ public class Member
     public string? Email { get; set; }
     public string? Username { get; set; }       // nullable — set when operator assigns login
     public string? PasswordHash { get; set; }   // BCrypt hash
-    
+
+    /// <summary>
+    /// When this password was actually last changed - same reasoning as BalanceAsOf just below,
+    /// applied to the field it was missing on. A password can change at a branch (registration,
+    /// or an operator resetting it at the counter) or at Head Office (a phone reset, or a Super
+    /// Admin setting one directly), and without a timestamp neither side can tell whose value is
+    /// actually newer - whichever sync happened to run last would silently win, overwriting a
+    /// brand new correct password with an old one. Compared the same way BalanceAsOf is: only
+    /// overwrite local with incoming when incoming is later.
+    /// </summary>
+    public DateTimeOffset? PasswordChangedAt { get; set; }
+
     // Password Reset fields
     public string? ResetToken { get; set; }
     public DateTimeOffset? ResetTokenExpiry { get; set; }

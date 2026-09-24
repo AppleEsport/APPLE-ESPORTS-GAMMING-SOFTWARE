@@ -166,6 +166,11 @@ public class BranchMemberConfigDto
     /// the password is the one field that was quietly excluded from that promise.
     /// </summary>
     public string? PasswordHash { get; set; }
+
+    /// <summary>When this password was actually last changed - see Member.PasswordChangedAt.
+    /// Without it, whichever side's push happened to land last would win regardless of which
+    /// password was actually newer.</summary>
+    public DateTimeOffset? PasswordChangedAt { get; set; }
     public decimal GamingBalance { get; set; }
     public decimal FoodBalance { get; set; }
 

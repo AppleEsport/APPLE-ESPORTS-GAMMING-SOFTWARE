@@ -182,6 +182,7 @@ public class MemberService : IMemberService
             Email = dto.Email,
             Username = string.IsNullOrWhiteSpace(dto.Username) ? null : dto.Username.Trim().ToLowerInvariant(),
             PasswordHash = string.IsNullOrWhiteSpace(dto.Password) ? null : BCryptNet.HashPassword(dto.Password),
+            PasswordChangedAt = string.IsNullOrWhiteSpace(dto.Password) ? null : DateTimeOffset.UtcNow,
             Status = MemberStatus.Active,
             HomeBranchId = branchId,
             JoinDate = DateTimeOffset.UtcNow,
@@ -211,6 +212,14 @@ public class MemberService : IMemberService
             mobileNumber = member.MobileNumber,
             email = member.Email,
             username = member.Username,
+            // Without this, a member's very first password - set right here at registration -
+            // never reached Head Office at all: Head Office created its own copy of this person
+            // with no password, forever, and every OTHER branch that later learned about this
+            // member (members are shared across all branches) inherited that same blank
+            // password from Head Office. The member could only ever log in at the one branch
+            // where they signed up.
+            passwordHash = member.PasswordHash,
+            passwordChangedAt = member.PasswordChangedAt,
             createdAt = member.CreatedAt,
             createdBy = operatorId,
         });
@@ -293,6 +302,7 @@ public class MemberService : IMemberService
         {
             member.Username = null;
             member.PasswordHash = null;
+            member.PasswordChangedAt = DateTimeOffset.UtcNow;
         }
         else
         {
@@ -309,7 +319,10 @@ public class MemberService : IMemberService
 
             // Update password if provided
             if (!string.IsNullOrWhiteSpace(dto.Password))
+            {
                 member.PasswordHash = BCryptNet.HashPassword(dto.Password);
+                member.PasswordChangedAt = DateTimeOffset.UtcNow;
+            }
         }
 
         _unitOfWork.Repository<Member>().Update(member);
@@ -329,6 +342,13 @@ public class MemberService : IMemberService
             mobileNumber = member.MobileNumber,
             email = member.Email,
             username = member.Username,
+            // Same gap as member.created's own note: an operator resetting a member's password
+            // at the counter - the normal, in-person way "forgot password" actually gets handled
+            // - saved correctly here and then never told Head Office at all. Head Office kept
+            // holding whatever password it last knew, and would go on to push THAT one back down
+            // to every branch on the next heartbeat, silently undoing the reset that was just done.
+            passwordHash = member.PasswordHash,
+            passwordChangedAt = member.PasswordChangedAt,
             updatedAt = member.UpdatedAt,
             updatedBy = operatorId,
         });

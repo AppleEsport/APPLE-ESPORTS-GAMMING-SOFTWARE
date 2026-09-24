@@ -711,11 +711,15 @@ public class BranchHeartbeatService : BackgroundService
     {
         Guid memberId;
         string passwordHash;
+        DateTimeOffset? passwordChangedAt;
         try
         {
             using var doc = JsonDocument.Parse(payload);
             memberId = doc.RootElement.GetProperty("memberId").GetGuid();
             passwordHash = doc.RootElement.GetProperty("passwordHash").GetString() ?? "";
+            passwordChangedAt = doc.RootElement.TryGetProperty("passwordChangedAt", out var pca) && pca.TryGetDateTimeOffset(out var parsed)
+                ? parsed
+                : null;
         }
         catch
         {
@@ -745,7 +749,15 @@ public class BranchHeartbeatService : BackgroundService
         // a member that truly never will.
         if (member is null) return (false, BranchCommands.MemberNotYetSyncedMessage);
 
-        member.PasswordHash = passwordHash;
+        // Same "whichever is actually newer wins" guard the ordinary heartbeat push uses - this
+        // command can be delivered late (the branch was offline, or it simply took a few
+        // heartbeats to land), and applying it blindly could overwrite a password the member set
+        // even more recently through some other path with this older one.
+        if (passwordChangedAt is null || member.PasswordChangedAt is not { } localChangedAt || passwordChangedAt > localChangedAt)
+        {
+            member.PasswordHash = passwordHash;
+            member.PasswordChangedAt = passwordChangedAt;
+        }
         member.ResetToken = null;
         member.ResetTokenExpiry = null;
         await db.SaveChangesAsync(ct);
@@ -2256,6 +2268,7 @@ public class BranchHeartbeatService : BackgroundService
             {
                 Id = item.Id,
                 PasswordHash = item.PasswordHash,
+                PasswordChangedAt = item.PasswordChangedAt,
                 GamingBalance = item.GamingBalance,
                 FoodBalance = item.FoodBalance,
                 BalanceAsOf = item.BalanceAsOf,
@@ -2284,8 +2297,21 @@ public class BranchHeartbeatService : BackgroundService
         // to at all, the moment a beat happened to carry an empty value. Head Office should
         // never send one, but this stays the same "only ever move forward" rule Head Office's
         // own RunSetMemberPasswordAsync already applies for the exact same reason.
-        if (!string.IsNullOrWhiteSpace(item.PasswordHash))
+        //
+        // Also only ever moves forward in TIME now, same as BalanceAsOf just above: Head
+        // Office's own copy of a password can itself be the stale one (an operator resetting it
+        // at the counter never used to reach Head Office at all - see MemberService.
+        // UpdateMemberAsync's own note), and without this a branch that had just been given the
+        // real, current password could have it silently overwritten by Head Office's older one
+        // on the very next heartbeat.
+        if (!string.IsNullOrWhiteSpace(item.PasswordHash)
+            && (item.PasswordChangedAt is not { } incomingChangedAt
+                || member.PasswordChangedAt is not { } localChangedAt
+                || incomingChangedAt > localChangedAt))
+        {
             member.PasswordHash = item.PasswordHash;
+            member.PasswordChangedAt = item.PasswordChangedAt;
+        }
         member.UpdatedAt = DateTimeOffset.UtcNow;
 
         // Same rule as operators: only the barred decision comes down. There is no local
