@@ -123,15 +123,22 @@ public static class ControllerExtensions
                 "SHIFT_CLOSED");
         }
 
-        // For SuperAdmin/Admin, find or create active shift for branch
+        // For SuperAdmin/Admin: the system-admin operator's OWN active shift, never "whichever
+        // shift is Active for the branch" - a branch can easily have a real operator's shift
+        // Active at the exact same moment an admin acts on it, and the old query here could not
+        // tell the two apart. Confirmed live at Citylight: a Super Admin trying to open a cash
+        // register for an operator who had just started their shift instead created a brand new
+        // shift and register for the system-admin operator, because "most recent Active shift
+        // for the branch" happened to resolve to a real operator's own shift - the admin action
+        // silently landed nowhere near the operator it was meant to fix, with no error to say so.
+        var sysOpId = await controller.GetOperatorIdAsync();
         var activeShift = await db.Shifts
-            .Where(s => s.BranchId == branchId && s.Status == ShiftStatus.Active)
+            .Where(s => s.BranchId == branchId && s.OperatorId == sysOpId && s.Status == ShiftStatus.Active)
             .OrderByDescending(s => s.LoginTime)
             .FirstOrDefaultAsync();
 
         if (activeShift == null)
         {
-            var sysOpId = await controller.GetOperatorIdAsync();
             activeShift = new Shift
             {
                 Id = Guid.NewGuid(),
