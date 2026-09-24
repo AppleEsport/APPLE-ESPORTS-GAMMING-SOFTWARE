@@ -7,7 +7,14 @@ public interface ISessionService
 {
     Task<PaginatedResult<SessionDto>> GetActiveSessionsAsync(Guid branchId, int page, int pageSize);
     Task<SessionDto> StartSessionAsync(Guid branchId, Guid operatorId, Guid shiftId, SessionStartDto dto);
-    Task<SessionDto> StopSessionAsync(Guid branchId, Guid operatorId, Guid sessionId, bool deferPayment = false);
+    /// <summary>
+    /// <paramref name="asOfOverride"/>: bills up to this moment instead of the real current
+    /// time. Used only by the stale-session watchdog, which may run hours after a PC's agent
+    /// actually went dark - billing "now" there would charge the customer for time nobody
+    /// could have played. Every human-triggered stop leaves this null and bills to the actual
+    /// current time, same as always.
+    /// </summary>
+    Task<SessionDto> StopSessionAsync(Guid branchId, Guid operatorId, Guid sessionId, bool deferPayment = false, DateTimeOffset? asOfOverride = null);
 
     /// <summary>
     /// Puts a session held after an outage back to Active, with the customer's unused paid
