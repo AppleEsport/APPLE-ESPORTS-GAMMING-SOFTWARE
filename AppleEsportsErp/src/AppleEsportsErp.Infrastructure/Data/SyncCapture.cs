@@ -61,6 +61,15 @@ public static class SyncCapture
         [typeof(CashTransaction)] = "cash_transaction",
         [typeof(CustomerCredit)] = "customer_credit",
 
+        // The note/coin breakdown behind a register's counted total. Missing from this list
+        // entirely until now - the count itself (register.PhysicalCashCounted, via CashRegister
+        // above) always arrived, but the breakdown that explains it never did. A branch's own
+        // Cash Register History showed it fine; Head Office's remote view of the same register
+        // always read "No denomination count recorded" for every count ever taken, anywhere,
+        // because this table was simply never queued for sync - not a save failure, a missing
+        // line in this dictionary.
+        [typeof(DenominationCount)] = "denomination_count",
+
         // The cash/online/wallet breakdown behind every completed bill. Watched here for the
         // same reason the four above are: "bill.paid" and "payment.recorded" exist as handlers
         // at Head Office's receiving end, but nothing anywhere in this codebase ever emits
