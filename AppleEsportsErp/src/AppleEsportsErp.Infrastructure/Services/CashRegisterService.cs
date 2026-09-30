@@ -1,5 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Npgsql;
 using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Cash;
 using AppleEsportsErp.Application.Exceptions;
@@ -65,6 +66,24 @@ public class CashRegisterService : ICashRegisterService
             .OrderByDescending(r => r.OpenedAt)
             .FirstOrDefaultAsync()
             ?? throw new NotFoundException("No cash register has been opened for today yet.");
+
+        return MapToDto(register);
+    }
+
+    /// <summary>
+    /// Super Admin's read-only view of whatever register is actually open at this branch right
+    /// now - the real one an operator is trading against, not a system-admin placeholder that
+    /// was never meant to exist. Safe to query branch-wide with no shift at all: the unique
+    /// index on cash_register guarantees at most one non-closed register per branch.
+    /// </summary>
+    public async Task<CashRegisterDto> GetBranchActiveRegisterAsync(Guid branchId)
+    {
+        var register = await _unitOfWork.Repository<CashRegister>().Query()
+            .Include(r => r.CashTransactions)
+            .Where(r => r.BranchId == branchId && r.Status != CashRegisterStatus.Closed)
+            .OrderByDescending(r => r.OpenedAt)
+            .FirstOrDefaultAsync()
+            ?? throw new NotFoundException("No cash register is open at this branch right now.");
 
         return MapToDto(register);
     }
@@ -219,7 +238,25 @@ public class CashRegisterService : ICashRegisterService
                 : new { OpeningBalance = openingBalance }
         });
 
-        await _unitOfWork.CommitTransactionAsync();
+        try
+        {
+            await _unitOfWork.CommitTransactionAsync();
+        }
+        catch (DbUpdateException ex) when (ex.InnerException is PostgresException { SqlState: "23505" } pg
+            && pg.ConstraintName == "ux_cash_register_one_open_per_branch")
+        {
+            // Lost the race - someone else's Open Register (or a double-click of this same one)
+            // committed first. Hand back whichever register actually won instead of surfacing a
+            // raw database error; it is the same "already open" shape the normal path above
+            // returns when it finds one up front.
+            var winner = await _unitOfWork.Repository<CashRegister>().Query()
+                .Include(r => r.CashTransactions)
+                .Where(r => r.BranchId == branchId && r.Status != CashRegisterStatus.Closed)
+                .OrderByDescending(r => r.OpenedAt)
+                .FirstAsync();
+            return new OpenRegisterResultDto { Opened = true, Register = MapToDto(winner) };
+        }
+
         await _hubNotification.BroadcastCashRegisterUpdateAsync(branchId, register.Id);
 
         if (mismatch)

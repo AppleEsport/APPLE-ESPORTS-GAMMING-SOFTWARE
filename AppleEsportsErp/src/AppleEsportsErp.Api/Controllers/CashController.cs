@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using AppleEsportsErp.Api.Extensions;
 using AppleEsportsErp.Api.Filters;
+using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Cash;
 using AppleEsportsErp.Application.DTOs.Common;
 using AppleEsportsErp.Application.Exceptions;
@@ -28,7 +29,14 @@ public class CashController : ControllerBase
     [HttpGet("active")]
     public async Task<IActionResult> GetActiveRegister()
     {
-        await this.EnsureNoActiveOperatorForCashActionAsync();
+        // Super Admin reads the branch's real register directly - never via a shift of their
+        // own, so looking can never create one. See ICashRegisterService.GetBranchActiveRegisterAsync.
+        if (User.IsInRole(Roles.SuperAdmin))
+        {
+            var branchView = await _cashRegisterService.GetBranchActiveRegisterAsync(GetBranchId());
+            return Ok(ApiResponse<CashRegisterDto>.Ok(branchView));
+        }
+
         var result = await _cashRegisterService.GetActiveRegisterAsync(GetBranchId(), (await this.GetShiftIdAsync()));
         return Ok(ApiResponse<CashRegisterDto>.Ok(result));
     }
@@ -51,7 +59,7 @@ public class CashController : ControllerBase
     [HttpPost("open")]
     public async Task<IActionResult> OpenRegister([FromBody] OpenRegisterDto dto)
     {
-        await this.EnsureNoActiveOperatorForCashActionAsync();
+        await this.EnsureNotSuperAdminForCashAsync();
         var result = await _cashRegisterService.OpenRegisterAsync(GetBranchId(), (await this.GetOperatorIdAsync()), (await this.GetShiftIdAsync()), dto);
         return Ok(ApiResponse<OpenRegisterResultDto>.Ok(result));
     }
@@ -59,7 +67,7 @@ public class CashController : ControllerBase
     [HttpPost("transaction")]
     public async Task<IActionResult> AddTransaction([FromBody] AddCashTransactionDto dto)
     {
-        await this.EnsureNoActiveOperatorForCashActionAsync();
+        await this.EnsureNotSuperAdminForCashAsync();
         var result = await _cashRegisterService.AddTransactionAsync(GetBranchId(), (await this.GetOperatorIdAsync()), (await this.GetShiftIdAsync()), dto);
         return Ok(ApiResponse<CashRegisterDto>.Ok(result));
     }
