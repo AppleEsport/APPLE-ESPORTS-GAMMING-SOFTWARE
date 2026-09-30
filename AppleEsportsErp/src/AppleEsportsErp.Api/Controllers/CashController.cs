@@ -28,6 +28,7 @@ public class CashController : ControllerBase
     [HttpGet("active")]
     public async Task<IActionResult> GetActiveRegister()
     {
+        await this.EnsureNoActiveOperatorForCashActionAsync();
         var result = await _cashRegisterService.GetActiveRegisterAsync(GetBranchId(), (await this.GetShiftIdAsync()));
         return Ok(ApiResponse<CashRegisterDto>.Ok(result));
     }
@@ -50,6 +51,7 @@ public class CashController : ControllerBase
     [HttpPost("open")]
     public async Task<IActionResult> OpenRegister([FromBody] OpenRegisterDto dto)
     {
+        await this.EnsureNoActiveOperatorForCashActionAsync();
         var result = await _cashRegisterService.OpenRegisterAsync(GetBranchId(), (await this.GetOperatorIdAsync()), (await this.GetShiftIdAsync()), dto);
         return Ok(ApiResponse<OpenRegisterResultDto>.Ok(result));
     }
@@ -57,6 +59,7 @@ public class CashController : ControllerBase
     [HttpPost("transaction")]
     public async Task<IActionResult> AddTransaction([FromBody] AddCashTransactionDto dto)
     {
+        await this.EnsureNoActiveOperatorForCashActionAsync();
         var result = await _cashRegisterService.AddTransactionAsync(GetBranchId(), (await this.GetOperatorIdAsync()), (await this.GetShiftIdAsync()), dto);
         return Ok(ApiResponse<CashRegisterDto>.Ok(result));
     }
