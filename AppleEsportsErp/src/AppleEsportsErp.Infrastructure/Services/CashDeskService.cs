@@ -305,6 +305,80 @@ public class CashDeskService : ICashDeskService
         await _hubNotification.BroadcastCashRegisterUpdateAsync(branchId, register.Id);
     }
 
+    public async Task ReopenLastDayCloseAsync(Guid branchId, Guid adminUserId, string adminName)
+    {
+        var register = await _unitOfWork.Repository<CashRegister>().Query()
+            .Where(r => r.BranchId == branchId)
+            .OrderByDescending(r => r.OpenedAt)
+            .FirstOrDefaultAsync()
+            ?? throw new NotFoundException("No cash register found for this branch.");
+
+        if (register.Status != CashRegisterStatus.Closed)
+            throw new AppException("The drawer is already open - there is nothing to undo.");
+
+        // CoverAmount is only ever set on a register closed via "last shift of the day" - see
+        // CloseRegisterAsync. A register closed as a normal handover has nothing to undo here;
+        // the next shift already opened over it the ordinary way.
+        if (register.CoverAmount is null)
+            throw new AppException("The last close wasn't a day close, so there's nothing to undo.");
+
+        register.Status = CashRegisterStatus.Open;
+        register.ClosedAt = null;
+        register.CoverAmount = null;
+        register.NextDayOpeningBalance = null;
+        register.NextDayFloatReason = null;
+        _unitOfWork.Repository<CashRegister>().Update(register);
+
+        var shift = await _unitOfWork.Repository<Shift>().Query()
+            .FirstOrDefaultAsync(s => s.Id == register.ShiftId);
+        if (shift != null && shift.ClosedTradingDay)
+        {
+            shift.ClosedTradingDay = false;
+            shift.Status = ShiftStatus.Active;
+            shift.LogoutTime = null;
+            _unitOfWork.Repository<Shift>().Update(shift);
+        }
+
+        await _auditService.LogAsync(new AuditEntry
+        {
+            UserId = adminUserId,
+            UserRole = "Admin",
+            UserName = adminName,
+            Action = "cash_register_day_close_undone",
+            BranchId = branchId,
+            TargetType = "cash_register",
+            TargetId = register.Id,
+            Details = null
+        });
+
+        await _unitOfWork.CommitTransactionAsync();
+        await _hubNotification.BroadcastCashRegisterUpdateAsync(branchId, register.Id);
+
+        try
+        {
+            var branch = await _unitOfWork.Repository<Branch>().Query().FirstOrDefaultAsync(b => b.Id == branchId);
+            var body = AdminEmailTemplate.Compose(
+                heading: "A day close was undone",
+                accent: AdminEmailTemplate.Amber,
+                summary: $"{adminName} undid the \"last shift of the day\" close at {branch?.Name ?? "a branch"}. " +
+                          "The drawer is open again and trading continues as normal.",
+                rows: new List<(string, string)>
+                {
+                    ("Branch", branch?.Name ?? "Unknown branch"),
+                    ("Undone by", adminName),
+                    ("Undone at", IndiaTime.Now.ToString("dd MMM yyyy, h:mm tt")),
+                },
+                headline: "Day reopened",
+                footnote: "The operator can carry on trading on the same drawer as before.");
+
+            await _notifier.NotifyAsync($"Day close undone at {branch?.Name ?? "a branch"}", body);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Could not send the day-reopen email: {ex.Message}");
+        }
+    }
+
     private static DenominationCountDto MapToDto(DenominationCount d)
     {
         return new DenominationCountDto
