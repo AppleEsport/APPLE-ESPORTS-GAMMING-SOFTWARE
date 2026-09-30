@@ -79,38 +79,31 @@ public static class ControllerExtensions
     }
 
     /// <summary>
-    /// Refuses a SuperAdmin/Admin cash-register action outright while a real operator's shift
-    /// is Active at this branch - the drawer belongs to whoever is physically standing at it.
-    /// Confirmed live at Citylight: a Super Admin's remote cash-register action didn't fail
-    /// loudly, it silently created a second, disconnected register under a "system_admin"
-    /// identity while the real operator's own shift kept running - nobody was warned, and the
-    /// operator's own screen never changed. This stops the action before it starts instead of
-    /// leaving it to land somewhere confusing.
+    /// Refuses a Super Admin cash-register action outright, any hour, operator on shift or not -
+    /// Super Admin is not physically at the branch and cannot count a real drawer, so any
+    /// register they touch is either meaningless or a duplicate of the real one. Confirmed live
+    /// at Citylight: a Super Admin's remote action didn't fail loudly, it silently created a
+    /// second, disconnected register under a "system_admin" identity - once with an operator's
+    /// shift still running, once after close with nobody on shift at all. A narrower version of
+    /// this that only blocked the first case left the second wide open; this replaces it.
+    ///
+    /// Deliberately Super Admin only, not Admin (Roles.Admin) - Quick Admin Switch is a real
+    /// operator physically at the counter with elevated permissions for that session, not a
+    /// remote action, and blocking them would break their own register mid-shift.
     ///
     /// Only guards cash-register endpoints - GetShiftIdAsync itself stays untouched, since
     /// Billing/Wallet/Sessions/FoodOrders remote actions from Head Office are a separate,
     /// already-relied-on capability this was never meant to restrict.
     /// </summary>
-    public static async Task EnsureNoActiveOperatorForCashActionAsync(this ControllerBase controller)
+    public static Task EnsureNotSuperAdminForCashAsync(this ControllerBase controller)
     {
-        var user = controller.User;
-        if (!user.IsInRole(Roles.SuperAdmin) && !user.IsInRole(Roles.Admin)) return;
-
-        var branchIdStr = controller.HttpContext.Items["BranchId"]?.ToString();
-        if (string.IsNullOrEmpty(branchIdStr)) return;
-
-        var branchId = Guid.Parse(branchIdStr);
-        var db = controller.HttpContext.RequestServices.GetRequiredService<AppDbContext>();
-        var sysOpId = await controller.GetOperatorIdAsync();
-
-        var realOperatorActive = await db.Shifts.AnyAsync(s =>
-            s.BranchId == branchId && s.OperatorId != sysOpId && s.Status == ShiftStatus.Active);
-
-        if (realOperatorActive)
+        if (controller.User.IsInRole(Roles.SuperAdmin))
             throw new AppException(
-                "An operator is currently on shift at this branch. Cash register actions have to be done by them at the counter, not remotely, while their shift is active.",
-                System.Net.HttpStatusCode.Conflict,
-                "OPERATOR_ACTIVE_BLOCKS_REMOTE_CASH");
+                "Super Admin cannot open, count, close, or add to a cash register. These have to be done by an operator physically at the branch.",
+                System.Net.HttpStatusCode.Forbidden,
+                "SUPER_ADMIN_CASH_READ_ONLY");
+
+        return Task.CompletedTask;
     }
 
     public static async Task<Guid> GetShiftIdAsync(this ControllerBase controller)
@@ -174,6 +167,12 @@ public static class ControllerExtensions
 
         if (activeShift == null)
         {
+            // Shift only - never a CashRegister. A system-admin shift exists purely so
+            // Billing/Wallet/Sessions/FoodOrders remote actions have something to attribute
+            // themselves to; it has no drawer of its own and must never appear to have one.
+            // This used to also open a CashRegister here, which is exactly how a Super Admin
+            // viewing or acting on an unrelated endpoint could end up creating a phantom
+            // register with no one ever asking it to.
             activeShift = new Shift
             {
                 Id = Guid.NewGuid(),
@@ -184,21 +183,6 @@ public static class ControllerExtensions
                 Status = ShiftStatus.Active
             };
             db.Shifts.Add(activeShift);
-
-            var register = new CashRegister
-            {
-                Id = Guid.NewGuid(),
-                BranchId = branchId,
-                OperatorId = sysOpId,
-                ShiftId = activeShift.Id,
-                OpeningBalance = 0,
-                ExpectedDrawerCash = 0,
-                TotalCashSales = 0,
-                TotalSplitCash = 0,
-                Status = CashRegisterStatus.Open,
-                OpenedAt = DateTimeOffset.UtcNow
-            };
-            db.CashRegisters.Add(register);
             await db.SaveChangesAsync();
         }
 

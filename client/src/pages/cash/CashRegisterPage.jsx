@@ -463,8 +463,60 @@ export default function CashRegisterPage() {
       <>
         <div className="flex flex-col items-center justify-center min-h-[40vh] text-center">
           <AlertTriangle className="w-12 h-12 text-neon-orange mb-4" />
-          <h2 className="text-xl font-heading font-bold text-text mb-2">No Active Shift</h2>
-          <p className="text-text-2">There is no active cash register open for this shift.</p>
+          <h2 className="text-xl font-heading font-bold text-text mb-2">
+            {isSuperAdmin ? 'No Register Open' : 'No Active Shift'}
+          </h2>
+          <p className="text-text-2">
+            {isSuperAdmin
+              ? 'No cash register is currently open at this branch.'
+              : 'There is no active cash register open for this shift.'}
+          </p>
+        </div>
+        {historySection}
+      </>
+    );
+  }
+
+  // Super Admin: read-only, always — never the Lock/Count/Close flow below. Super Admin is
+  // not physically at the branch and cannot count a real drawer (see EnsureNotSuperAdminForCashAsync
+  // on the server, which refuses every mutation regardless of what this screen would try to do).
+  if (isSuperAdmin) {
+    return (
+      <>
+        <div className="h-full flex flex-col max-w-4xl mx-auto">
+          <div className="mb-6">
+            <PageHeader
+              title="Cash Register"
+              subtitle="Read-only — Super Admin cannot open, count, or close a register"
+              icon="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+              badge="VIEW ONLY"
+            />
+          </div>
+
+          <div className="border border-border bg-bg-2 rounded-xl p-6">
+            <div className="flex items-center justify-between mb-5">
+              <span className="text-text-3 text-xs font-bold uppercase tracking-wider">Status</span>
+              <span className="text-[11px] px-2 py-1 rounded border uppercase tracking-wider font-bold text-neon-blue bg-neon-blue/10 border-neon-blue/20">
+                {register.status}
+              </span>
+            </div>
+            <div className="space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-text-3 text-xs font-bold uppercase tracking-wider">Opening Balance</span>
+                <span className="text-text font-mono font-bold">₹{register.openingBalance}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-text-3 text-xs font-bold uppercase tracking-wider">Expected Drawer</span>
+                <span className="text-text font-mono font-bold">₹{register.expectedDrawerCash}</span>
+              </div>
+              {register.physicalCashCounted != null && (
+                <div className="flex justify-between items-center border-t border-border pt-3">
+                  <span className="text-text-3 text-xs font-bold uppercase tracking-wider">Physically Counted</span>
+                  <span className="text-text font-mono font-bold">₹{register.physicalCashCounted}</span>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
         {historySection}
       </>

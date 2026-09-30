@@ -196,13 +196,23 @@ export default function CashDeskPage() {
     );
   }
 
-  // 1. If no register is open, force the operator to open it - the Ledger still shows
-  // underneath, since it is a look back at cash movements regardless of whether a drawer
-  // happens to be open right now.
+  // 1. If no register is open: an operator is asked to open it. Super Admin is never shown
+  // that form at all - they cannot physically count a drawer, and the server refuses the
+  // request anyway (see EnsureNotSuperAdminForCashAsync) - just a plain read-only notice.
+  // The Ledger still shows underneath either way, since it is a look back at cash movements
+  // regardless of whether a drawer happens to be open right now.
   if (!register) {
     return (
       <div className="flex flex-col h-full gap-6">
-        <OpenRegisterModal onRegisterOpened={fetchActiveRegister} />
+        {isSuperAdmin ? (
+          <div className="flex flex-col items-center justify-center py-16 text-center border border-border bg-bg-2 rounded-xl">
+            <Calculator className="w-10 h-10 text-text-3 mb-3" />
+            <h2 className="text-text font-bold mb-1">No Register Open</h2>
+            <p className="text-text-2 text-sm">No cash register is currently open at this branch.</p>
+          </div>
+        ) : (
+          <OpenRegisterModal onRegisterOpened={fetchActiveRegister} />
+        )}
         {ledgerSection}
       </div>
     );
@@ -226,12 +236,14 @@ export default function CashDeskPage() {
           badge="LIVE"
         />
 
-        <button
-          onClick={() => setIsAddTxModalOpen(true)}
-          className="btn-primary flex items-center gap-2 shadow-lg shadow-accent/20"
-        >
-          <Plus className="w-5 h-5" /> Add Entry
-        </button>
+        {!isSuperAdmin && (
+          <button
+            onClick={() => setIsAddTxModalOpen(true)}
+            className="btn-primary flex items-center gap-2 shadow-lg shadow-accent/20"
+          >
+            <Plus className="w-5 h-5" /> Add Entry
+          </button>
+        )}
       </div>
 
       {!connected && (

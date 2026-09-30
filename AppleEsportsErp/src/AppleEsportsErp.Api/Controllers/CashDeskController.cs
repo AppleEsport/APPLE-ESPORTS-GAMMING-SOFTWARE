@@ -29,7 +29,7 @@ public class CashDeskController : ControllerBase
     [Idempotent]
     public async Task<IActionResult> StartVerification()
     {
-        await this.EnsureNoActiveOperatorForCashActionAsync();
+        await this.EnsureNotSuperAdminForCashAsync();
         await _cashDeskService.StartVerificationAsync(GetBranchId(), (await this.GetOperatorIdAsync()), (await this.GetShiftIdAsync()));
         return Ok(new { success = true, message = "Verification started, register locked." });
     }
@@ -38,7 +38,7 @@ public class CashDeskController : ControllerBase
     [Idempotent]
     public async Task<IActionResult> SubmitDenominations([FromBody] SubmitDenominationDto dto)
     {
-        await this.EnsureNoActiveOperatorForCashActionAsync();
+        await this.EnsureNotSuperAdminForCashAsync();
         var result = await _cashDeskService.SubmitDenominationsAsync(GetBranchId(), (await this.GetOperatorIdAsync()), (await this.GetShiftIdAsync()), dto);
         return Ok(ApiResponse<DenominationCountDto>.Ok(result));
     }
@@ -47,7 +47,7 @@ public class CashDeskController : ControllerBase
     [Idempotent]
     public async Task<IActionResult> CloseRegister(Guid registerId)
     {
-        await this.EnsureNoActiveOperatorForCashActionAsync();
+        await this.EnsureNotSuperAdminForCashAsync();
         await _cashDeskService.CloseRegisterAsync(GetBranchId(), (await this.GetOperatorIdAsync()), (await this.GetShiftIdAsync()), registerId);
         return Ok(new { success = true, message = "Register closed successfully" });
     }
@@ -56,7 +56,7 @@ public class CashDeskController : ControllerBase
     [Idempotent]
     public async Task<IActionResult> CancelVerification(Guid registerId)
     {
-        await this.EnsureNoActiveOperatorForCashActionAsync();
+        await this.EnsureNotSuperAdminForCashAsync();
         await _cashDeskService.CancelVerificationAsync(GetBranchId(), (await this.GetOperatorIdAsync()), (await this.GetShiftIdAsync()), registerId);
         return Ok(new { success = true, message = "Verification cancelled, register unlocked" });
     }

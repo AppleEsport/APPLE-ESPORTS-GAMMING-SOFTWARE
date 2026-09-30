@@ -7,6 +7,14 @@ public interface ICashRegisterService
     Task<CashRegisterDto> GetActiveRegisterAsync(Guid branchId, Guid shiftId);
 
     /// <summary>
+    /// The branch's current register, for Super Admin's read-only view - by branch alone, never
+    /// by resolving or creating a shift for them first. Super Admin has no shift of their own
+    /// to scope by, and the whole point of this method existing is that looking should never be
+    /// able to create anything, not even indirectly.
+    /// </summary>
+    Task<CashRegisterDto> GetBranchActiveRegisterAsync(Guid branchId);
+
+    /// <summary>
     /// Which of the two opening questions to ask, and a reference figure for the second one.
     ///
     /// A branch has one drawer and it runs through the trading day. Only the very first register

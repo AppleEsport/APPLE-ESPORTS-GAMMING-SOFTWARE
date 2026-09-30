@@ -28,6 +28,20 @@ public class CashRegisterConfiguration : IEntityTypeConfiguration<CashRegister>
         builder.HasIndex(e => e.ShiftId).HasDatabaseName("idx_cash_register_shift");
         builder.HasIndex(e => e.BranchId).HasDatabaseName("idx_cash_register_branch");
 
+        // One drawer, one branch, at most one non-closed register for it - enforced by the
+        // database, not just app-level logic, because a double-click on Open Register or Start
+        // Verification is a race an "is one already open?" check alone cannot close: two
+        // requests can both read "none open yet" before either has written its own row.
+        // Confirmed live at Citylight (30 Sep 2026): two registers opened the same minute for
+        // the same operator, one holding the real day's sales, one an empty duplicate - which
+        // one every other screen picked from then on was pure luck. OpenRegisterAsync catches
+        // the resulting unique-violation and returns the row that actually won, instead of the
+        // caller ever seeing a raw database error.
+        builder.HasIndex(e => e.BranchId)
+            .IsUnique()
+            .HasFilter("\"Status\" <> 'closed'")
+            .HasDatabaseName("ux_cash_register_one_open_per_branch");
+
         builder.HasOne(e => e.Shift).WithMany(s => s.CashRegisters)
             .HasForeignKey(e => e.ShiftId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(e => e.Branch).WithMany()
