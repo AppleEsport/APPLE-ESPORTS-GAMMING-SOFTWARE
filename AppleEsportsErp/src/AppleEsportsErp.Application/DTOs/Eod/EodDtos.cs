@@ -77,6 +77,10 @@ public class CashSummaryDto
     /// nothing on screen explaining the gap.
     /// </summary>
     public decimal DifferencesFoundEarlier { get; set; }
+
+    /// <summary>Cash set aside for the owner when the last shift of the day closed - see
+    /// CashRegister.CoverAmount. Null until that happens.</summary>
+    public decimal? CoverAmount { get; set; }
 }
 
 public class PaymentMethodSummaryDto

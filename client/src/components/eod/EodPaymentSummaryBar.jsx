@@ -122,45 +122,17 @@ export default function EodPaymentSummaryBar({ report, targetDate, height, onHei
 
       <div className="flex-1 overflow-y-auto px-4 py-2">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Cash Lifecycle Summary */}
+          {/* Left column - the drawer. Exactly Opening Balance, Expected Drawer, Physically
+              Counted, Cover Amount, plus the Difference pill (derived, not one of the owner's
+              four, but kept - it's how a shortfall is actually seen). */}
           <div className="space-y-1.5 text-xs">
             <div className="flex justify-between items-center">
-              <span className="text-text-2">Opening Balance Total</span>
+              <span className="text-text-2">Opening Balance</span>
               <span className="font-mono text-text">₹{report.cash.totalOpeningBalance}</span>
             </div>
-            <div className="flex justify-between items-center">
-              <span className="text-text-2">Cash Sales + Member Amount Top-Ups</span>
-              <span className="font-mono text-neon-green">+ ₹{report.cash.totalCashSales}</span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-text-2">Cash In</span>
-              <span className="font-mono text-neon-green">+ ₹{report.cash.totalCashInwards}</span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-text-2">Petty Expenses</span>
-              <span className="font-mono text-neon-red">- ₹{report.cash.totalPettyExpenses}</span>
-            </div>
-
-            {/* Only when there was one. A handover that balanced has nothing to say here, and a
-                row reading "- ₹0" invites the reader to look for a problem that is not there.
-
-                It is shown BEFORE the expected total because that is where it belongs in the
-                arithmetic: opening plus takings, less what was spent and less what went astray
-                earlier, is what the drawer should hold now. Leaving it out is what made the
-                column fail to add up. */}
-            {Number(report.cash.differencesFoundEarlier ?? 0) !== 0 && (
-              <div className="flex justify-between items-center">
-                <span className="text-text-2">
-                  {Number(report.cash.differencesFoundEarlier) < 0 ? 'Missing at an earlier handover' : 'Extra at an earlier handover'}
-                </span>
-                <span className={`font-mono ${Number(report.cash.differencesFoundEarlier) < 0 ? 'text-neon-red' : 'text-neon-orange'}`}>
-                  {Number(report.cash.differencesFoundEarlier) < 0 ? '- ' : '+ '}₹{Math.abs(Number(report.cash.differencesFoundEarlier)).toFixed(2)}
-                </span>
-              </div>
-            )}
 
             <div className="flex justify-between items-center border-t border-border pt-1.5">
-              <span className="font-bold text-text">Expected Drawer Total</span>
+              <span className="font-bold text-text">Expected Drawer</span>
               <span className="font-mono font-bold text-accent">₹{report.cash.expectedCashInDrawer}</span>
             </div>
 
@@ -172,6 +144,16 @@ export default function EodPaymentSummaryBar({ report, targetDate, height, onHei
                 <span className="text-text-3 text-[11px] italic">not counted yet</span>
               ) : (
                 <span className="font-mono font-bold text-text">₹{report.cash.actualPhysicalCashCounted}</span>
+              )}
+            </div>
+
+            {/* Only set once the last shift of the day closes - see CashRegister.CoverAmount. */}
+            <div className="flex justify-between items-center">
+              <span className="text-text-2">Cover Amount</span>
+              {report.cash.coverAmount === null || report.cash.coverAmount === undefined ? (
+                <span className="text-text-3 text-[11px] italic">not set yet</span>
+              ) : (
+                <span className="font-mono text-text">₹{report.cash.coverAmount}</span>
               )}
             </div>
 
@@ -189,19 +171,30 @@ export default function EodPaymentSummaryBar({ report, targetDate, height, onHei
             </div>
           </div>
 
-          {/* Overall Collection & Business */}
+          {/* Right column - the day's money. Exactly Cash + Member, Online, Credit, Petty
+              Expense, Cash Add, ending in Overall End Total - whose formula is unchanged
+              (cash net of petty expense and owner withdrawals, plus online; member deductions
+              still excluded, see grandTotal above). */}
           <div className="space-y-1.5 text-xs">
             <div className="flex justify-between items-center">
-              <span className="text-text-2">Cash</span>
-              <span className="font-mono text-text">₹{(n(pm.totalCash) + n(pm.totalWalletTopUpsCash) + n(report.cash.totalCashInwards)).toFixed(2)}</span>
+              <span className="text-text-2">Cash + Member</span>
+              <span className="font-mono text-neon-green">+ ₹{report.cash.totalCashSales}</span>
             </div>
             <div className="flex justify-between items-center">
               <span className="text-text-2">Online</span>
               <span className="font-mono text-text">₹{onlineTotal.toFixed(2)}</span>
             </div>
             <div className="flex justify-between items-center">
-              <span className="text-text-2">Credits Pending</span>
+              <span className="text-text-2">Credit</span>
               <span className="font-mono text-neon-red">-₹{creditsPending.toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-text-2">Petty Expense</span>
+              <span className="font-mono text-neon-red">- ₹{report.cash.totalPettyExpenses}</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-text-2">Cash Add</span>
+              <span className="font-mono text-neon-green">+ ₹{report.cash.totalCashInwards}</span>
             </div>
             <div className="flex justify-between items-center bg-neon-blue/10 px-3 py-1.5 rounded-lg border border-neon-blue/30 mt-1">
               <span className="font-bold text-neon-blue uppercase tracking-widest text-[10px]">Overall End Total</span>
