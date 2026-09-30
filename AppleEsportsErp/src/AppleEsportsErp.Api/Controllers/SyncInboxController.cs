@@ -392,6 +392,7 @@ public class SyncInboxController : ControllerBase
         "payment.changed" => 2,   // depends on bill.changed (tier 1)
 
         "cash_transaction.changed" => 3,
+        "denomination_count.changed" => 3,   // depends on cash_register.changed (tier 2)
         "bill.paid" => 3,
         "payment.recorded" => 3,
         "wallet.topped_up" => 3,
@@ -493,6 +494,12 @@ public class SyncInboxController : ControllerBase
 
             case "cash_transaction.changed":
                 await UpsertRowAsync<CashTransaction>(held, root);
+                break;
+
+            // The note/coin breakdown behind a register's counted total - see
+            // SyncCapture.Watched for why Head Office's history never showed it before this.
+            case "denomination_count.changed":
+                await UpsertRowAsync<DenominationCount>(held, root);
                 break;
 
             case "customer_credit.changed":

@@ -61,11 +61,13 @@ public static class SyncCapture
         [typeof(CashTransaction)] = "cash_transaction",
         [typeof(CustomerCredit)] = "customer_credit",
 
-        // The note-by-note breakdown behind a register's own counted total (CashRegister
-        // itself carries only PhysicalCashCounted, one number). Never in this list, so it was
-        // saved correctly at every branch and never once reached Head Office - confirmed live:
-        // the branch's own count was right there, Head Office's copy of the same register
-        // showed nothing at all, on every single register that had ever been counted.
+        // The note/coin breakdown behind a register's counted total. Missing from this list
+        // entirely until now - the count itself (register.PhysicalCashCounted, via CashRegister
+        // above) always arrived, but the breakdown that explains it never did. A branch's own
+        // Cash Register History showed it fine; Head Office's remote view of the same register
+        // always read "No denomination count recorded" for every count ever taken, anywhere,
+        // because this table was simply never queued for sync - not a save failure, a missing
+        // line in this dictionary.
         [typeof(DenominationCount)] = "denomination_count",
 
         // The cash/online/wallet breakdown behind every completed bill. Watched here for the
