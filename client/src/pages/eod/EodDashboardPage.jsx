@@ -362,50 +362,55 @@ export default function EodDashboardPage() {
       ]);
       y += 10;
 
+      // Same left/right split, same labels and order as the on-screen panel
+      // (EodPaymentSummaryBar.jsx) and the EOD email, so all three agree. Member Amount
+      // Deductions/Top-Ups are deliberately not on the screen but kept here - the printed
+      // report is the copy that gets kept and argued over later.
       y = addTable(doc, y, {
         title, subtitle,
-        heading: 'Cash Lifecycle Summary',
+        heading: 'The Drawer',
         head: ['Metric', 'Amount'],
-        // Same rows as the screen, and for the same reasons. A printed report is the copy that
-        // gets kept and argued over later, so an uncounted drawer must not print as Rs 0 and a
-        // handover shortfall must not vanish from the column it explains.
         body: [
-          ['Opening Balance Total', `Rs ${report.cash.totalOpeningBalance}`],
-          ['Cash Sales + Member Amount Top-Ups', `Rs ${report.cash.totalCashSales}`],
-          ['Petty Expenses', `-Rs ${report.cash.totalPettyExpenses}`],
-          ...(Number(report.cash.differencesFoundEarlier ?? 0) !== 0
-            ? [[
-                Number(report.cash.differencesFoundEarlier) < 0
-                  ? 'Missing at an earlier handover'
-                  : 'Extra at an earlier handover',
-                `Rs ${Math.abs(Number(report.cash.differencesFoundEarlier)).toFixed(2)}`,
-              ]]
-            : []),
-          ['Expected Drawer Total', `Rs ${report.cash.expectedCashInDrawer}`],
+          ['Opening Balance', `Rs ${report.cash.totalOpeningBalance}`],
+          ['Expected Drawer', `Rs ${report.cash.expectedCashInDrawer}`],
           ['Physically Counted', report.cash.actualPhysicalCashCounted == null
             ? 'Not counted yet'
             : `Rs ${report.cash.actualPhysicalCashCounted}`],
-          ['Total Difference', report.cash.totalDiscrepancy == null
-            ? 'Unknown until the drawer is counted'
-            : `Rs ${report.cash.totalDiscrepancy}`],
+          ['Cover Amount', report.cash.coverAmount == null
+            ? 'Not set yet'
+            : `Rs ${report.cash.coverAmount}`],
+          [report.cash.actualPhysicalCashCounted == null ? 'Difference' : 'Total Difference',
+            report.cash.totalDiscrepancy == null
+              ? 'Unknown until the drawer is counted'
+              : `Rs ${report.cash.totalDiscrepancy}`],
         ],
       });
 
       const creditsPending = (report.creditLogs?.filter(c => c.status?.toLowerCase() === 'pending')
         .reduce((acc, c) => acc + c.creditAmount, 0) || 0).toFixed(2);
-      const overallEndTotal = (report.paymentMethods.totalCash + report.paymentMethods.totalOnline + report.paymentMethods.totalWalletDeductions + report.paymentMethods.totalWalletTopUps).toFixed(2);
+
+      // Exactly the screen's grandTotal: cash (net of petty expense and owner withdrawals) plus
+      // online. Member deductions excluded - they are a balance already counted as income when
+      // it was topped up, not money arriving today. This used to be computed separately here
+      // and disagreed with the screen; now it is not recomputed, just reproduced the same way.
+      const cashNet = report.paymentMethods.totalCash + report.paymentMethods.totalWalletTopUpsCash
+        + report.cash.totalCashInwards - report.cash.totalPettyExpenses - report.cash.totalOwnerWithdrawals;
+      const onlineTotal = report.paymentMethods.totalOnline + report.paymentMethods.totalWalletTopUpsOnline;
+      const overallEndTotal = (cashNet + onlineTotal).toFixed(2);
 
       y = addTable(doc, y, {
         title, subtitle,
-        heading: 'Overall Collection & Operations',
+        heading: "The Day's Money",
         head: ['Metric', 'Value'],
         body: [
-          ['Cash', `Rs ${report.paymentMethods.totalCash}`],
-          ['Online', `Rs ${report.paymentMethods.totalOnline}`],
+          ['Cash + Member', `Rs ${report.cash.totalCashSales}`],
+          ['Online', `Rs ${onlineTotal.toFixed(2)}`],
+          ['Credit', `-Rs ${creditsPending}`],
+          ['Petty Expense', `-Rs ${report.cash.totalPettyExpenses}`],
+          ['Cash Add', `Rs ${report.cash.totalCashInwards}`],
+          ['Overall End Total', `Rs ${overallEndTotal}`],
           ['Member Amount Deductions (Gaming/Food)', `Rs ${report.paymentMethods.totalWalletDeductions}`],
           ['Member Amount Top-Ups (Cash Collected)', `Rs ${report.paymentMethods.totalWalletTopUps}`],
-          ['Credits Pending', `-Rs ${creditsPending}`],
-          ['Overall End Total', `Rs ${overallEndTotal}`],
           ['Total Sessions', String(report.operations.totalSessions)],
           ['Total Food Orders', String(report.operations.totalFoodOrders)],
         ],

@@ -256,6 +256,7 @@ public class EodService : IEodService
         report.Cash.TotalDiscrepancy = lastRegister?.PhysicalCashCounted is null
             ? null
             : lastRegister.PhysicalCashCounted - lastRegister.ExpectedDrawerCash;
+        report.Cash.CoverAmount = lastRegister?.CoverAmount;
 
         // Money that went missing, or turned up spare, on a drawer already closed today - a
         // handover counted short. Reported separately from the figure above because it belongs to
