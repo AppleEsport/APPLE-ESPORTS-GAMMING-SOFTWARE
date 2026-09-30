@@ -78,6 +78,41 @@ public static class ControllerExtensions
         return new Guid(md5.ComputeHash(seed));
     }
 
+    /// <summary>
+    /// Refuses a SuperAdmin/Admin cash-register action outright while a real operator's shift
+    /// is Active at this branch - the drawer belongs to whoever is physically standing at it.
+    /// Confirmed live at Citylight: a Super Admin's remote cash-register action didn't fail
+    /// loudly, it silently created a second, disconnected register under a "system_admin"
+    /// identity while the real operator's own shift kept running - nobody was warned, and the
+    /// operator's own screen never changed. This stops the action before it starts instead of
+    /// leaving it to land somewhere confusing.
+    ///
+    /// Only guards cash-register endpoints - GetShiftIdAsync itself stays untouched, since
+    /// Billing/Wallet/Sessions/FoodOrders remote actions from Head Office are a separate,
+    /// already-relied-on capability this was never meant to restrict.
+    /// </summary>
+    public static async Task EnsureNoActiveOperatorForCashActionAsync(this ControllerBase controller)
+    {
+        var user = controller.User;
+        if (!user.IsInRole(Roles.SuperAdmin) && !user.IsInRole(Roles.Admin)) return;
+
+        var branchIdStr = controller.HttpContext.Items["BranchId"]?.ToString();
+        if (string.IsNullOrEmpty(branchIdStr)) return;
+
+        var branchId = Guid.Parse(branchIdStr);
+        var db = controller.HttpContext.RequestServices.GetRequiredService<AppDbContext>();
+        var sysOpId = await controller.GetOperatorIdAsync();
+
+        var realOperatorActive = await db.Shifts.AnyAsync(s =>
+            s.BranchId == branchId && s.OperatorId != sysOpId && s.Status == ShiftStatus.Active);
+
+        if (realOperatorActive)
+            throw new AppException(
+                "An operator is currently on shift at this branch. Cash register actions have to be done by them at the counter, not remotely, while their shift is active.",
+                System.Net.HttpStatusCode.Conflict,
+                "OPERATOR_ACTIVE_BLOCKS_REMOTE_CASH");
+    }
+
     public static async Task<Guid> GetShiftIdAsync(this ControllerBase controller)
     {
         var user = controller.User;
