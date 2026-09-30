@@ -429,7 +429,7 @@ public class SessionService : ISessionService
         }
     }
 
-    public async Task<SessionDto> StopSessionAsync(Guid branchId, Guid operatorId, Guid sessionId, bool deferPayment = false)
+    public async Task<SessionDto> StopSessionAsync(Guid branchId, Guid operatorId, Guid sessionId, bool deferPayment = false, DateTimeOffset? asOfOverride = null)
     {
         RefuseIfHeadOffice("stopped");
 
@@ -452,7 +452,9 @@ public class SessionService : ISessionService
             if (session.State != SessionState.Active && session.State != SessionState.Interrupted)
                 throw new AppException("Session is already ended.", System.Net.HttpStatusCode.BadRequest, "SESSION_ALREADY_ENDED");
 
-            var now = DateTimeOffset.UtcNow;
+            // See the interface doc on asOfOverride - only the stale-session watchdog ever
+            // passes one.
+            var now = asOfOverride ?? DateTimeOffset.UtcNow;
 
             // Fold any time spent on hold into the paused total before billing, so the
             // wait for an operator's decision is never charged to the customer.

@@ -24,6 +24,13 @@ public class Member
     /// </summary>
     public DateTimeOffset? PasswordChangedAt { get; set; }
 
+    /// <summary>Whether an incoming password (with this changed-at) should replace this
+    /// member's current one - only when it's actually newer, so a late or redelivered sync
+    /// can never undo a password that has already changed again since. Missing timestamps on
+    /// either side fall back to accepting the incoming value, same as before this existed.</summary>
+    public bool IsPasswordNewer(DateTimeOffset? incomingChangedAt) =>
+        incomingChangedAt is not { } incoming || PasswordChangedAt is not { } local || incoming > local;
+
     // Password Reset fields
     public string? ResetToken { get; set; }
     public DateTimeOffset? ResetTokenExpiry { get; set; }
