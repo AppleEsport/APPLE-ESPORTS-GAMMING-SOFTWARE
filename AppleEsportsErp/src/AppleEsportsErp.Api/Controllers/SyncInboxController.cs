@@ -906,15 +906,12 @@ public class SyncInboxController : ControllerBase
         // Same gap as UpsertMemberAsync's own note, just for an edit instead of a fresh
         // registration - an operator resetting a member's password at the counter (the normal,
         // in-person way "forgot password" gets handled) never told Head Office at all before
-        // this. Guarded by PasswordChangedAt the same way the downward push now is: only move
-        // forward in time, so a late-arriving or redelivered event can never undo a password
-        // that has already changed again since.
+        // this. Guarded by Member.IsPasswordNewer the same way the downward push now is: only
+        // move forward in time, so a late-arriving or redelivered event can never undo a
+        // password that has already changed again since.
         var incomingPasswordHash = ReadString(root, "passwordHash");
         var incomingPasswordChangedAt = ReadDate(root, "passwordChangedAt");
-        if (!string.IsNullOrWhiteSpace(incomingPasswordHash)
-            && (incomingPasswordChangedAt is not { } incomingChangedAt
-                || member.PasswordChangedAt is not { } localChangedAt
-                || incomingChangedAt > localChangedAt))
+        if (!string.IsNullOrWhiteSpace(incomingPasswordHash) && member.IsPasswordNewer(incomingPasswordChangedAt))
         {
             member.PasswordHash = incomingPasswordHash;
             member.PasswordChangedAt = incomingPasswordChangedAt;

@@ -749,11 +749,11 @@ public class BranchHeartbeatService : BackgroundService
         // a member that truly never will.
         if (member is null) return (false, BranchCommands.MemberNotYetSyncedMessage);
 
-        // Same "whichever is actually newer wins" guard the ordinary heartbeat push uses - this
-        // command can be delivered late (the branch was offline, or it simply took a few
-        // heartbeats to land), and applying it blindly could overwrite a password the member set
-        // even more recently through some other path with this older one.
-        if (passwordChangedAt is null || member.PasswordChangedAt is not { } localChangedAt || passwordChangedAt > localChangedAt)
+        // Same "whichever is actually newer wins" guard (Member.IsPasswordNewer) the ordinary
+        // heartbeat push uses - this command can be delivered late (the branch was offline, or
+        // it simply took a few heartbeats to land), and applying it blindly could overwrite a
+        // password the member set even more recently through some other path with this older one.
+        if (member.IsPasswordNewer(passwordChangedAt))
         {
             member.PasswordHash = passwordHash;
             member.PasswordChangedAt = passwordChangedAt;
@@ -2298,16 +2298,13 @@ public class BranchHeartbeatService : BackgroundService
         // never send one, but this stays the same "only ever move forward" rule Head Office's
         // own RunSetMemberPasswordAsync already applies for the exact same reason.
         //
-        // Also only ever moves forward in TIME now, same as BalanceAsOf just above: Head
-        // Office's own copy of a password can itself be the stale one (an operator resetting it
-        // at the counter never used to reach Head Office at all - see MemberService.
-        // UpdateMemberAsync's own note), and without this a branch that had just been given the
-        // real, current password could have it silently overwritten by Head Office's older one
-        // on the very next heartbeat.
-        if (!string.IsNullOrWhiteSpace(item.PasswordHash)
-            && (item.PasswordChangedAt is not { } incomingChangedAt
-                || member.PasswordChangedAt is not { } localChangedAt
-                || incomingChangedAt > localChangedAt))
+        // Also only ever moves forward in TIME now (Member.IsPasswordNewer), same as BalanceAsOf
+        // just above: Head Office's own copy of a password can itself be the stale one (an
+        // operator resetting it at the counter never used to reach Head Office at all - see
+        // MemberService.UpdateMemberAsync's own note), and without this a branch that had just
+        // been given the real, current password could have it silently overwritten by Head
+        // Office's older one on the very next heartbeat.
+        if (!string.IsNullOrWhiteSpace(item.PasswordHash) && member.IsPasswordNewer(item.PasswordChangedAt))
         {
             member.PasswordHash = item.PasswordHash;
             member.PasswordChangedAt = item.PasswordChangedAt;
