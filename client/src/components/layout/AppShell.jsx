@@ -5,13 +5,12 @@
 // ═══════════════════════════════════════════════════════════
 
 import { useState, useEffect, useCallback } from 'react';
-import { Outlet } from 'react-router-dom';
+import { Outlet, useNavigate } from 'react-router-dom';
 import Topbar from './Topbar';
 import Sidebar from './Sidebar';
 import BranchRequired from './BranchRequired';
 import { useAuth } from '../../contexts/AuthContext';
 import ShiftStartModal from '../shift/ShiftStartModal';
-import ShiftEndModal from '../shift/ShiftEndModal';
 import ShiftGapModal from '../shift/ShiftGapModal';
 import ShiftTakeoverModal from '../shift/ShiftTakeoverModal';
 import GlobalFoodOrderListener from './GlobalFoodOrderListener';
@@ -32,6 +31,7 @@ export default function AppShell() {
     return Number.isFinite(saved) ? saved : DEFAULT_SIDEBAR_WIDTH;
   });
   const { user, isOperator, logout, fetchCurrentUser } = useAuth();
+  const navigate = useNavigate();
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(sidebarCollapsed));
@@ -64,9 +64,6 @@ export default function AppShell() {
   // ── Shift Start Modal: show for operators on first login ──
   const [showShiftStart, setShowShiftStart] = useState(false);
   const [shiftStartDone, setShiftStartDone] = useState(false);
-
-  // ── Shift End Modal: shown when operator requests logout ──
-  const [showShiftEnd, setShowShiftEnd] = useState(false);
 
   // Read from sessionStorage rather than held in state, so refreshing the page cannot lose
   // the question - a refresh would otherwise be the easiest way to avoid answering it.
@@ -108,33 +105,19 @@ export default function AppShell() {
     setShiftStartDone(true);
   }, [user]);
 
-  // Called from Topbar when operator clicks Logout
+  // Called from Topbar when operator clicks Logout. Ending a shift and closing the register
+  // are the same action from the operator's side, so "Logout" sends them straight to the real
+  // close flow (Cash Register's Lock → Count → Close) instead of a separate modal that used to
+  // collect its own cash count and throw it away — see CashRegisterPage.handleCloseShift,
+  // which is the thing that actually logs the operator out once the drawer is closed.
   const handleRequestLogout = useCallback(() => {
     if (isOperator) {
-      // Show shift end modal for operators
-      setShowShiftEnd(true);
+      navigate('/app/cash-register');
     } else {
       // Super admin: logout directly
       logout();
     }
-  }, [isOperator, logout]);
-
-  const handleShiftEndComplete = useCallback(async (result = {}) => {
-    setShowShiftEnd(false);
-    // Clear the shift start session flag so next login shows it again
-    if (user) {
-      const sessionKey = `shift_start_done_${user.id || user.username}`;
-      sessionStorage.removeItem(sessionKey);
-    }
-    // Carries the operator's "last shift of the day" answer through to the server, which
-    // closes the trading day, emails its totals, and stops tonight's silence being read
-    // as a power cut.
-    await logout({ closesTradingDay: result?.closesTradingDay === true });
-  }, [logout, user]);
-
-  const handleShiftEndCancel = useCallback(() => {
-    setShowShiftEnd(false);
-  }, []);
+  }, [isOperator, logout, navigate]);
 
   // The handover is done and the server has issued this operator a shift at last. The user in
   // the browser was stored without one, so it is refetched rather than patched — the shift id is
@@ -214,14 +197,6 @@ export default function AppShell() {
       {/* ── Shift Start Modal (blocks operator until complete) ── */}
       {isOperator && !pendingGap?.shiftId && !pendingTakeover && showShiftStart && (
         <ShiftStartModal onComplete={handleShiftStartComplete} />
-      )}
-
-      {/* ── Shift End Modal (shown on logout request) ── */}
-      {showShiftEnd && (
-        <ShiftEndModal
-          onComplete={handleShiftEndComplete}
-          onCancel={handleShiftEndCancel}
-        />
       )}
 
       {/* Global Background Listeners — off until this operator actually has a shift. */}

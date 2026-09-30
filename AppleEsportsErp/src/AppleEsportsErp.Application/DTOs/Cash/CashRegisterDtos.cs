@@ -16,12 +16,33 @@ public class CashRegisterDto
     public decimal? PhysicalCashCounted { get; set; }
     public decimal? CashDifference { get; set; }
     public string? MismatchReason { get; set; }
+    public decimal? CoverAmount { get; set; }
+    public decimal? NextDayOpeningBalance { get; set; }
+    public string? NextDayFloatReason { get; set; }
+
+    /// <summary>The branch's fixed float, to pre-fill the next-day-float box with when closing
+    /// the last shift of the day.</summary>
+    public decimal DefaultOpeningFloat { get; set; }
     public CashRegisterStatus Status { get; set; }
     public DateTimeOffset OpenedAt { get; set; }
     public DateTimeOffset? VerifiedAt { get; set; }
     public DateTimeOffset? ClosedAt { get; set; }
-    
+
     public List<CashTransactionDto> Transactions { get; set; } = new();
+}
+
+/// <summary>What the last shift of the day sends when closing the register. Cover Amount and
+/// Next-Day Opening Balance are only meaningful, and only required, when ClosesTradingDay is
+/// true - a normal handover to the next shift needs neither.</summary>
+public class CloseCashRegisterDto
+{
+    public bool ClosesTradingDay { get; set; }
+    public decimal? CoverAmount { get; set; }
+    public decimal? NextDayOpeningBalance { get; set; }
+
+    /// <summary>Required only when PhysicalCashCounted doesn't split cleanly into
+    /// CoverAmount + NextDayOpeningBalance.</summary>
+    public string? Reason { get; set; }
 }
 
 public class CashTransactionDto
@@ -63,6 +84,11 @@ public class RegisterOpeningDto
 
     /// <summary>True when a drawer is already open and this operator simply carries on with it.</summary>
     public bool AlreadyOpen { get; set; }
+
+    /// <summary>The branch's fixed float, to pre-fill the first-of-day question with — set only
+    /// when <see cref="IsFirstOfDay"/> is true. Still a real count the operator can correct, not
+    /// a figure the drawer silently opens with.</summary>
+    public decimal? DefaultOpeningFloat { get; set; }
 }
 
 public class OpenRegisterDto

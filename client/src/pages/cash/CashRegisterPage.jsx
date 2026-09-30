@@ -41,6 +41,13 @@ export default function CashRegisterPage() {
   // a day's figures as though they were the whole day's.
   const [closesTradingDay, setClosesTradingDay] = useState(false);
 
+  // Only asked when closesTradingDay is ticked — a normal handover to the next shift needs
+  // neither. Next-day float defaults to the branch's fixed setting; cover amount (what the
+  // owner takes out) has no sensible default and starts empty.
+  const [coverAmount, setCoverAmount] = useState('');
+  const [nextDayFloat, setNextDayFloat] = useState('');
+  const [nextDayFloatReason, setNextDayFloatReason] = useState('');
+
   // Stock is shown, not asserted. A tick box saying "I have checked the stock" with nothing to
   // check it against is decoration: it teaches staff to tick without looking, and then the one
   // night something really is missing, that gets ticked too.
@@ -250,10 +257,20 @@ export default function CashRegisterPage() {
     }
   };
 
+  const coverAmountNum = Number(coverAmount) || 0;
+  const nextDayFloatNum = Number(nextDayFloat) || 0;
+  const dayCloseRemainder = (register?.physicalCashCounted ?? 0) - coverAmountNum - nextDayFloatNum;
+  const dayCloseNeedsReason = closesTradingDay && coverAmount !== '' && nextDayFloat !== '' && dayCloseRemainder !== 0;
+
   const handleCloseShift = async () => {
     setIsClosing(true);
     try {
-      await api.post(`/cash-desk/close/${register.id}`, {}, {
+      await api.post(`/cash-desk/close/${register.id}`, closesTradingDay ? {
+        closesTradingDay: true,
+        coverAmount: coverAmountNum,
+        nextDayOpeningBalance: nextDayFloatNum,
+        reason: dayCloseRemainder !== 0 ? nextDayFloatReason.trim() : undefined,
+      } : {}, {
         headers: { 'X-Idempotency-Key': generateIdempotencyKey() }
       });
 
@@ -697,7 +714,13 @@ export default function CashRegisterPage() {
                 <input
                   type="checkbox"
                   checked={closesTradingDay}
-                  onChange={(e) => setClosesTradingDay(e.target.checked)}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setClosesTradingDay(checked);
+                    if (checked && nextDayFloat === '') {
+                      setNextDayFloat(String(register.defaultOpeningFloat ?? 1000));
+                    }
+                  }}
                   className="mt-0.5 w-4 h-4 accent-neon-red cursor-pointer flex-shrink-0"
                 />
                 <span>
@@ -709,12 +732,72 @@ export default function CashRegisterPage() {
                   </span>
                 </span>
               </label>
+
+              {closesTradingDay && (
+                <div className="bg-bg-3 border border-border rounded-xl p-4 space-y-3">
+                  <div>
+                    <label className="text-xs uppercase tracking-wider font-bold text-text-2 block mb-1.5">
+                      Cover Amount (for the owner)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={coverAmount}
+                      onChange={(e) => setCoverAmount(e.target.value)}
+                      placeholder="0.00"
+                      className="w-full bg-bg-2 border border-border text-text font-mono rounded-lg py-2 px-3 focus:border-accent focus:ring-1 focus:ring-accent outline-none"
+                    />
+                    <p className="text-[10px] text-text-3 mt-1">What you're keeping aside for the owner to withdraw.</p>
+                  </div>
+                  <div>
+                    <label className="text-xs uppercase tracking-wider font-bold text-text-2 block mb-1.5">
+                      Next-Day Opening Float
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={nextDayFloat}
+                      onChange={(e) => setNextDayFloat(e.target.value)}
+                      placeholder="0.00"
+                      className="w-full bg-bg-2 border border-border text-text font-mono rounded-lg py-2 px-3 focus:border-accent focus:ring-1 focus:ring-accent outline-none"
+                    />
+                    <p className="text-[10px] text-text-3 mt-1">What's left in the drawer for tomorrow's first shift.</p>
+                  </div>
+                  {coverAmount !== '' && nextDayFloat !== '' && (
+                    <div className={`text-xs font-mono font-bold ${dayCloseRemainder === 0 ? 'text-neon-green' : 'text-neon-orange'}`}>
+                      {dayCloseRemainder === 0
+                        ? 'Cover amount + next-day float matches what was counted.'
+                        : `₹${Math.abs(dayCloseRemainder).toFixed(2)} ${dayCloseRemainder > 0 ? 'left over' : 'short'} against the counted cash.`}
+                    </div>
+                  )}
+                  {dayCloseNeedsReason && (
+                    <div>
+                      <label className="text-xs uppercase tracking-wider font-bold text-neon-orange block mb-1.5">
+                        Why doesn't it add up?
+                      </label>
+                      <textarea
+                        value={nextDayFloatReason}
+                        onChange={(e) => setNextDayFloatReason(e.target.value)}
+                        rows={2}
+                        className="w-full bg-bg-2 border border-neon-orange/40 text-text text-sm rounded-lg p-2.5 focus:border-neon-orange outline-none resize-none"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
           <button
             onClick={handleCloseShift}
-            disabled={isClosing || (!isSuperAdmin && !stockChecked)}
+            disabled={
+              isClosing ||
+              (!isSuperAdmin && !stockChecked) ||
+              (closesTradingDay && (coverAmount === '' || nextDayFloat === '')) ||
+              (dayCloseNeedsReason && !nextDayFloatReason.trim())
+            }
             className="w-full max-w-md py-4 rounded-xl font-bold uppercase tracking-widest text-sm transition-all bg-accent hover:bg-accent-hover text-white shadow-lg shadow-accent/20 flex justify-center items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {isClosing ? (

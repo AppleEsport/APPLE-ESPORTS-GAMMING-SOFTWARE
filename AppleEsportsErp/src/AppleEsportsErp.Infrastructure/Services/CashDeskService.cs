@@ -164,7 +164,7 @@ public class CashDeskService : ICashDeskService
         }
     }
 
-    public async Task CloseRegisterAsync(Guid branchId, Guid operatorId, Guid shiftId, Guid cashRegisterId)
+    public async Task CloseRegisterAsync(Guid branchId, Guid operatorId, Guid shiftId, Guid cashRegisterId, CloseCashRegisterDto dto)
     {
         var register = await _unitOfWork.Repository<CashRegister>().Query()
             .FirstOrDefaultAsync(r => r.Id == cashRegisterId && r.BranchId == branchId)
@@ -172,6 +172,25 @@ public class CashDeskService : ICashDeskService
 
         if (register.Status != CashRegisterStatus.Verified)
             throw new AppException("Cash register must be verified before it can be closed.");
+
+        // Only the register that closes the trading day carries a cover amount and a next-day
+        // float - every earlier shift in the day just hands the drawer to whoever is next, with
+        // nothing to record beyond the count already taken in SubmitDenominationsAsync.
+        if (dto.ClosesTradingDay)
+        {
+            if (dto.CoverAmount is null || dto.NextDayOpeningBalance is null)
+                throw new AppException("Cover amount and next-day float are both required to close the day.");
+
+            var remainder = (register.PhysicalCashCounted ?? 0) - dto.CoverAmount.Value - dto.NextDayOpeningBalance.Value;
+            if (remainder != 0 && string.IsNullOrWhiteSpace(dto.Reason))
+                throw new AppException(
+                    $"The counted cash doesn't split evenly into the cover amount and next-day float " +
+                    $"(₹{remainder:0.00} {(remainder > 0 ? "left over" : "short")}). Please explain why.");
+
+            register.CoverAmount = dto.CoverAmount;
+            register.NextDayOpeningBalance = dto.NextDayOpeningBalance;
+            register.NextDayFloatReason = remainder != 0 ? dto.Reason : null;
+        }
 
         register.Status = CashRegisterStatus.Closed;
         register.ClosedAt = DateTimeOffset.UtcNow;
@@ -186,7 +205,9 @@ public class CashDeskService : ICashDeskService
             BranchId = branchId,
             TargetType = "cash_register",
             TargetId = register.Id,
-            Details = null
+            Details = dto.ClosesTradingDay
+                ? new { ClosesTradingDay = true, register.CoverAmount, register.NextDayOpeningBalance, register.NextDayFloatReason }
+                : null
         });
 
         await _unitOfWork.CommitTransactionAsync();

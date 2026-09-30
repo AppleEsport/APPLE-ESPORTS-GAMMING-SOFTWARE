@@ -45,10 +45,10 @@ public class CashDeskController : ControllerBase
 
     [HttpPost("close/{registerId:guid}")]
     [Idempotent]
-    public async Task<IActionResult> CloseRegister(Guid registerId)
+    public async Task<IActionResult> CloseRegister(Guid registerId, [FromBody] CloseCashRegisterDto? dto)
     {
         await this.EnsureNotSuperAdminForCashAsync();
-        await _cashDeskService.CloseRegisterAsync(GetBranchId(), (await this.GetOperatorIdAsync()), (await this.GetShiftIdAsync()), registerId);
+        await _cashDeskService.CloseRegisterAsync(GetBranchId(), (await this.GetOperatorIdAsync()), (await this.GetShiftIdAsync()), registerId, dto ?? new CloseCashRegisterDto());
         return Ok(new { success = true, message = "Register closed successfully" });
     }
 
