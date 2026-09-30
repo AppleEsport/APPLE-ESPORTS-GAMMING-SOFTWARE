@@ -702,9 +702,11 @@ export default function CashRegisterPage() {
             </div>
           </div>
           {/* Stock, then the day. Both asked here rather than on a later screen, because this
-              is the last moment the operator is still standing at the counter. */}
-          {!isTrueSuperAdmin && (
-            <div className="w-full max-w-md mb-6 space-y-3 text-left">
+              is the last moment the operator is still standing at the counter. Not gated on
+              isTrueSuperAdmin - by the time render reaches this point, the true-Super-Admin
+              case has already returned its own read-only view above, so it can only ever be
+              false here. */}
+          <div className="w-full max-w-md mb-6 space-y-3 text-left">
               <div className="bg-bg-3 border border-border rounded-xl p-4">
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-text text-sm font-bold">Check the stock</span>
@@ -851,13 +853,12 @@ export default function CashRegisterPage() {
                 </div>
               )}
             </div>
-          )}
 
           <button
             onClick={handleCloseShift}
             disabled={
               isClosing ||
-              (!isTrueSuperAdmin && !stockChecked) ||
+              !stockChecked ||
               (closesTradingDay && (coverAmount === '' || nextDayFloat === '')) ||
               (dayCloseNeedsReason && !nextDayFloatReason.trim())
             }
@@ -870,7 +871,7 @@ export default function CashRegisterPage() {
             )}
           </button>
 
-          {!isTrueSuperAdmin && !stockChecked && (
+          {!stockChecked && (
             <p className="text-text-3 text-[11px] mt-3">Confirm the stock counts before you can finish.</p>
           )}
         </div>

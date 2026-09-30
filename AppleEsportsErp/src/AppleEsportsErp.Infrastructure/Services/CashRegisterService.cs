@@ -90,21 +90,18 @@ public class CashRegisterService : ICashRegisterService
             .OrderByDescending(r => r.OpenedAt)
             .FirstOrDefaultAsync();
 
-        if (lastRegister is null)
-            return new RegisterOpeningDto { IsFirstOfDay = true, DefaultOpeningFloat = await GetDefaultOpeningFloatAsync(branchId) };
-
-        if (lastRegister.Status == CashRegisterStatus.Open)
+        if (lastRegister?.Status == CashRegisterStatus.Open)
             return new RegisterOpeningDto
             {
                 AlreadyOpen = true,
                 InheritedBalance = lastRegister.ExpectedDrawerCash,
             };
 
-        var isFirstOfDay = await WasLastShiftCloseAsync(lastRegister);
+        var isFirstOfDay = lastRegister is null || await WasLastShiftCloseAsync(lastRegister);
         return new RegisterOpeningDto
         {
             IsFirstOfDay = isFirstOfDay,
-            InheritedBalance = lastRegister.PhysicalCashCounted ?? lastRegister.ExpectedDrawerCash,
+            InheritedBalance = lastRegister?.PhysicalCashCounted ?? lastRegister?.ExpectedDrawerCash ?? 0,
             DefaultOpeningFloat = isFirstOfDay ? await GetDefaultOpeningFloatAsync(branchId) : null,
         };
     }
