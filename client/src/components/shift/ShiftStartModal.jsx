@@ -54,6 +54,9 @@ export default function ShiftStartModal({ onComplete }) {
         const { data } = await api.get('/cash/opening');
         const result = data.data;
         setOpening(result);
+        if (result?.isFirstOfDay && result?.defaultOpeningFloat != null) {
+          setOpeningBalance(String(result.defaultOpeningFloat));
+        }
         if (result?.alreadyOpen) {
           // A drawer is already open for today — a refresh mid-shift, or a re-login. Nothing to
           // decide, so this step is done.
@@ -361,7 +364,7 @@ export default function ShiftStartModal({ onComplete }) {
                     </div>
                     <p className="text-[11px] text-text-3 italic">
                       {isFirstOfDay
-                        ? 'This is the float the day starts on. Every shift after yours inherits the drawer rather than being asked again — there is one drawer and it runs through the trading day.'
+                        ? "This branch's fixed float is pre-filled below. Every shift after yours inherits the drawer rather than being asked again — there is one drawer and it runs through the trading day. Change the number only if what you're actually putting in differs."
                         : "Count what's physically in the drawer. If it doesn't match what the last shift left, you'll be asked why."}
                     </p>
                   </div>

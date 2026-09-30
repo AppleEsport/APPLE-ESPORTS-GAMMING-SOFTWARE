@@ -61,12 +61,15 @@ public class CashRegisterService : ICashRegisterService
     {
         var register = await _unitOfWork.Repository<CashRegister>().Query()
             .Include(r => r.CashTransactions)
+            .Include(r => r.Branch)
             .Where(r => r.BranchId == branchId && r.Status != CashRegisterStatus.Closed)
             .OrderByDescending(r => r.OpenedAt)
             .FirstOrDefaultAsync()
             ?? throw new NotFoundException("No cash register has been opened for today yet.");
 
-        return MapToDto(register);
+        var dto = MapToDto(register);
+        dto.DefaultOpeningFloat = register.Branch.DefaultOpeningFloat;
+        return dto;
     }
 
     /// <summary>
@@ -88,7 +91,7 @@ public class CashRegisterService : ICashRegisterService
             .FirstOrDefaultAsync();
 
         if (lastRegister is null)
-            return new RegisterOpeningDto { IsFirstOfDay = true };
+            return new RegisterOpeningDto { IsFirstOfDay = true, DefaultOpeningFloat = await GetDefaultOpeningFloatAsync(branchId) };
 
         if (lastRegister.Status == CashRegisterStatus.Open)
             return new RegisterOpeningDto
@@ -97,12 +100,20 @@ public class CashRegisterService : ICashRegisterService
                 InheritedBalance = lastRegister.ExpectedDrawerCash,
             };
 
+        var isFirstOfDay = await WasLastShiftCloseAsync(lastRegister);
         return new RegisterOpeningDto
         {
-            IsFirstOfDay = await WasLastShiftCloseAsync(lastRegister),
+            IsFirstOfDay = isFirstOfDay,
             InheritedBalance = lastRegister.PhysicalCashCounted ?? lastRegister.ExpectedDrawerCash,
+            DefaultOpeningFloat = isFirstOfDay ? await GetDefaultOpeningFloatAsync(branchId) : null,
         };
     }
+
+    private async Task<decimal> GetDefaultOpeningFloatAsync(Guid branchId) =>
+        await _unitOfWork.Repository<Branch>().Query()
+            .Where(b => b.Id == branchId)
+            .Select(b => b.DefaultOpeningFloat)
+            .FirstOrDefaultAsync();
 
     /// <summary>
     /// Whether the shift this register belonged to was closed on a "last shift of the day" tick
@@ -464,6 +475,9 @@ public class CashRegisterService : ICashRegisterService
             PhysicalCashCounted = r.PhysicalCashCounted,
             CashDifference = r.CashDifference,
             MismatchReason = r.MismatchReason,
+            CoverAmount = r.CoverAmount,
+            NextDayOpeningBalance = r.NextDayOpeningBalance,
+            NextDayFloatReason = r.NextDayFloatReason,
             Status = r.Status,
             OpenedAt = r.OpenedAt,
             VerifiedAt = r.VerifiedAt,

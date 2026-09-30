@@ -41,6 +41,27 @@ public class CashRegister
     /// happened.
     /// </summary>
     public Guid? CountedByOperatorId { get; set; }
+
+    /// <summary>
+    /// Only ever set on the register that closed on a "last shift of the day" tick. What the
+    /// owner withdrew from the counted drawer before it was handed back to the till - one figure,
+    /// not tracked separately from an "owner withdrawal" elsewhere, per the owner's own account
+    /// of what this money is.
+    /// </summary>
+    public decimal? CoverAmount { get; set; }
+
+    /// <summary>
+    /// Only ever set alongside <see cref="CoverAmount"/>. What was left in the drawer for
+    /// tomorrow's first shift to open with - normally the branch's DefaultOpeningFloat, but
+    /// recorded here as whatever was actually left, since that is the figure tomorrow's count
+    /// gets checked against, not the branch's setting at the time.
+    /// </summary>
+    public decimal? NextDayOpeningBalance { get; set; }
+
+    /// <summary>Why PhysicalCashCounted didn't split cleanly into CoverAmount + NextDayOpeningBalance,
+    /// when it didn't. Null when it added up exactly.</summary>
+    public string? NextDayFloatReason { get; set; }
+
     public CashRegisterStatus Status { get; set; } = CashRegisterStatus.Open;
     public DateTimeOffset OpenedAt { get; set; }
     public DateTimeOffset? VerifiedAt { get; set; }
