@@ -10,6 +10,7 @@ public class CreateBranchDto
     public string OpeningTime { get; set; } = "10:00";
     public string ClosingTime { get; set; } = "02:00";
     public string? ConfiguredReservationDurations { get; set; }
+    public decimal? DefaultOpeningFloat { get; set; }
 
     /// <summary>Null (the default) means this branch's food/snacks stay fully independent.
     /// See FoodGroup.</summary>
@@ -23,6 +24,7 @@ public class UpdateBranchDto
     public string OpeningTime { get; set; } = null!;
     public string ClosingTime { get; set; } = null!;
     public string? ConfiguredReservationDurations { get; set; }
+    public decimal? DefaultOpeningFloat { get; set; }
     public Guid? FoodGroupId { get; set; }
 }
 
@@ -36,6 +38,7 @@ public class BranchDto
     public string Status { get; set; } = null!;
     public DateTimeOffset CreatedAt { get; set; }
     public string? ConfiguredReservationDurations { get; set; }
+    public decimal DefaultOpeningFloat { get; set; }
     public Guid? FoodGroupId { get; set; }
     public string? FoodGroupName { get; set; }
 }
