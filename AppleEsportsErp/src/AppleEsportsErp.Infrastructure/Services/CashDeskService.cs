@@ -30,19 +30,19 @@ public class CashDeskService : ICashDeskService
 
     public async Task StartVerificationAsync(Guid branchId, Guid operatorId, Guid shiftId)
     {
-        // THIS shift's own register, by ShiftId - not "any Open register for the branch". That
-        // used to be enough on its own (a branch has one physical cash box), but it silently
-        // breaks the moment more than one Open register exists at once - a double-click on this
-        // very button, firing the request twice, is enough to cause exactly that: the first
-        // click finds and locks the real register, and because the query never named which
-        // register it wanted, the second click - now with only one Open register left, if a
-        // stray duplicate exists - can lock a completely different one instead. Confirmed live:
-        // two "Start Verification" calls two seconds apart locked two different registers, one
-        // of them empty, and every later attempt to fix it kept finding and cancelling that
-        // same empty one - the real register, holding the shift's actual sales, was never
-        // touched again. Pinning to ShiftId means there is only ever one possible answer.
+        // THIS branch's one Open register - by BranchId alone, no longer by ShiftId. ShiftId
+        // scoping was the fix for a double-click race that could lock the wrong one of two
+        // Open registers - now structurally impossible, since the unique index on
+        // cash_register guarantees at most one non-closed row per branch (see
+        // CashRegisterService.GetActiveRegisterAsync's own note for the full reasoning).
+        //
+        // ShiftId scoping had become actively harmful, the same way it had on the read side: a
+        // register opened under one shift, still sitting Open, no longer matched once that
+        // operator's shift id changed underneath it (a re-login after a shift properly closed
+        // but its register didn't) - "Start Verification" on a drawer that was genuinely,
+        // visibly open would answer 404, "No open cash register found to verify."
         var register = await _unitOfWork.Repository<CashRegister>().Query()
-            .FirstOrDefaultAsync(r => r.BranchId == branchId && r.ShiftId == shiftId && r.Status == CashRegisterStatus.Open)
+            .FirstOrDefaultAsync(r => r.BranchId == branchId && r.Status == CashRegisterStatus.Open)
             ?? throw new NotFoundException("No open cash register found to verify.");
 
         register.Status = CashRegisterStatus.Verifying;
@@ -66,15 +66,19 @@ public class CashDeskService : ICashDeskService
 
     public async Task<DenominationCountDto> SubmitDenominationsAsync(Guid branchId, Guid operatorId, Guid shiftId, SubmitDenominationDto dto)
     {
-        // Same reasoning as StartVerificationAsync above: THIS shift's own register, by ShiftId,
-        // not "any Verifying register for the branch" - the count being submitted must land on
-        // the same register this shift actually locked, never on an unrelated one that happens
-        // to also be Verifying.
+        // Same reasoning as StartVerificationAsync above: THIS branch's one Verifying register,
+        // by BranchId alone - no longer by ShiftId, now that at most one non-closed register can
+        // exist per branch at all. This is very likely the real cause of counts going missing
+        // from Cash Register History: if the operator's shift id changed between Start
+        // Verification and submitting the count (a re-login in between is enough), this used to
+        // throw "No verifying cash register found" on a register that was genuinely, visibly
+        // locked and waiting - pushing the operator toward some other close path (a takeover
+        // handover, say) that records only a lump total and never a denomination breakdown at all.
         await _unitOfWork.BeginTransactionAsync();
         try
         {
             var register = await _unitOfWork.Repository<CashRegister>().Query()
-                .FirstOrDefaultAsync(r => r.BranchId == branchId && r.ShiftId == shiftId && r.Status == CashRegisterStatus.Verifying)
+                .FirstOrDefaultAsync(r => r.BranchId == branchId && r.Status == CashRegisterStatus.Verifying)
                 ?? throw new NotFoundException("No verifying cash register found. Must start verification first.");
 
             decimal countedTotal = 

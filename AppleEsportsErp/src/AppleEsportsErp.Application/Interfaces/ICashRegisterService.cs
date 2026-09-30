@@ -4,15 +4,11 @@ namespace AppleEsportsErp.Application.Interfaces;
 
 public interface ICashRegisterService
 {
-    Task<CashRegisterDto> GetActiveRegisterAsync(Guid branchId, Guid shiftId);
-
     /// <summary>
-    /// The branch's current register, for Super Admin's read-only view - by branch alone, never
-    /// by resolving or creating a shift for them first. Super Admin has no shift of their own
-    /// to scope by, and the whole point of this method existing is that looking should never be
-    /// able to create anything, not even indirectly.
+    /// The branch's one open register - see CashRegisterService's own note on why this is
+    /// branch-scoped, not shift-scoped, and why looking it up can never create one.
     /// </summary>
-    Task<CashRegisterDto> GetBranchActiveRegisterAsync(Guid branchId);
+    Task<CashRegisterDto> GetActiveRegisterAsync(Guid branchId);
 
     /// <summary>
     /// Which of the two opening questions to ask, and a reference figure for the second one.
@@ -31,5 +27,5 @@ public interface ICashRegisterService
     /// was expected.
     /// </summary>
     Task<OpenRegisterResultDto> OpenRegisterAsync(Guid branchId, Guid operatorId, Guid shiftId, OpenRegisterDto dto);
-    Task<CashRegisterDto> AddTransactionAsync(Guid branchId, Guid operatorId, Guid shiftId, AddCashTransactionDto dto);
+    Task<CashRegisterDto> AddTransactionAsync(Guid branchId, Guid operatorId, AddCashTransactionDto dto);
 }

@@ -29,15 +29,16 @@ public class CashController : ControllerBase
     [HttpGet("active")]
     public async Task<IActionResult> GetActiveRegister()
     {
-        // Super Admin reads the branch's real register directly - never via a shift of their
-        // own, so looking can never create one. See ICashRegisterService.GetBranchActiveRegisterAsync.
-        if (User.IsInRole(Roles.SuperAdmin))
-        {
-            var branchView = await _cashRegisterService.GetBranchActiveRegisterAsync(GetBranchId());
-            return Ok(ApiResponse<CashRegisterDto>.Ok(branchView));
-        }
+        // An operator's own session still has to be live - GetShiftIdAsync throws SHIFT_CLOSED
+        // if it isn't, which is what actually tells a stale/logged-out browser tab to sign in
+        // again (see that method's own comment). Its return value goes unused here on purpose:
+        // the register itself is looked up by branch alone, never by this shift id - see
+        // ICashRegisterService.GetActiveRegisterAsync for why that's no longer optional.
+        // Super Admin has no shift of their own, so this step is skipped for them entirely.
+        if (!User.IsInRole(Roles.SuperAdmin))
+            await this.GetShiftIdAsync();
 
-        var result = await _cashRegisterService.GetActiveRegisterAsync(GetBranchId(), (await this.GetShiftIdAsync()));
+        var result = await _cashRegisterService.GetActiveRegisterAsync(GetBranchId());
         return Ok(ApiResponse<CashRegisterDto>.Ok(result));
     }
 
@@ -68,7 +69,7 @@ public class CashController : ControllerBase
     public async Task<IActionResult> AddTransaction([FromBody] AddCashTransactionDto dto)
     {
         await this.EnsureNotSuperAdminForCashAsync();
-        var result = await _cashRegisterService.AddTransactionAsync(GetBranchId(), (await this.GetOperatorIdAsync()), (await this.GetShiftIdAsync()), dto);
+        var result = await _cashRegisterService.AddTransactionAsync(GetBranchId(), (await this.GetOperatorIdAsync()), dto);
         return Ok(ApiResponse<CashRegisterDto>.Ok(result));
     }
 }

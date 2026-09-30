@@ -37,53 +37,34 @@ public class CashRegisterService : ICashRegisterService
     }
 
     /// <summary>
-    /// THIS shift's drawer - the one this operator's own login actually opened or resumed, by
-    /// its real identity (ShiftId), never "whichever register merely looks newest."
+    /// The branch's one open drawer - by BranchId alone, deliberately never by ShiftId any
+    /// more. There is one physical cash box, and the unique index on cash_register now
+    /// guarantees the database itself never holds more than one non-closed register for a
+    /// branch at a time - so "the branch's register" and "this shift's register" are the same
+    /// row by construction, and scoping by shift can only ever narrow that to the wrong answer.
     ///
-    /// Used to be scoped by status only ("any non-Closed register for the branch, newest
-    /// first") on the reasoning that there is one physical cash box, so any open register must
-    /// be the right one. That reasoning breaks the moment more than one non-Closed register
-    /// exists for the branch at once - which a stray double-click (Start Verification fired
-    /// twice, or Open Register fired twice) is enough to cause - because "newest" then silently
-    /// starts pointing at whichever accidental extra register was created last, not at the real
-    /// one this shift has actually been trading against. Confirmed live: a shift's real
-    /// register, holding genuine sales, got locked into Verifying by a double-click; every
-    /// screen that asked "what's the current register?" kept answering with a second, empty
-    /// register created moments later instead - Expected Drawer Total read ₹0, cash payments
-    /// were refused, and nothing about the real register's own numbers had actually changed.
+    /// It did narrow to the wrong answer, live: an operator's shift properly closes but their
+    /// register doesn't (ShiftEndModal's known gap - End Shift ends the shift row, not the
+    /// drawer), they log back in and get a brand new Shift id, and the still-genuinely-open
+    /// register - still sitting there, still real - no longer matches it. Every screen asking
+    /// "what's my register?" answered 404, "No Active Shift", even though the drawer was open
+    /// the whole time. Branch-scoping finds it regardless of which shift boundary it was opened
+    /// across - exactly the same reasoning GetOpeningAsync already uses: "the drawer belongs to
+    /// the branch and the trading day, not to whoever is standing at it."
     ///
-    /// ShiftId is safe to pin to rather than a regression: the same operator logging back in
-    /// mid-shift resumes their existing Shift row rather than getting a new one (see
-    /// AuthService.LoginOperatorAsync), so this still "carries on with the same drawer" across
-    /// a re-login exactly as before - it just can no longer be fooled by an accidental extra
-    /// register that was never actually this shift's own.
+    /// This used to be two near-identical methods - one shift-scoped for operators, one
+    /// branch-scoped for Super Admin - because shift-scoping was still believed necessary for
+    /// operators. It never needed to be two: once duplicates are impossible, they always return
+    /// the same row.
     /// </summary>
-    public async Task<CashRegisterDto> GetActiveRegisterAsync(Guid branchId, Guid shiftId)
-    {
-        var register = await _unitOfWork.Repository<CashRegister>().Query()
-            .Include(r => r.CashTransactions)
-            .Where(r => r.BranchId == branchId && r.ShiftId == shiftId && r.Status != CashRegisterStatus.Closed)
-            .OrderByDescending(r => r.OpenedAt)
-            .FirstOrDefaultAsync()
-            ?? throw new NotFoundException("No cash register has been opened for today yet.");
-
-        return MapToDto(register);
-    }
-
-    /// <summary>
-    /// Super Admin's read-only view of whatever register is actually open at this branch right
-    /// now - the real one an operator is trading against, not a system-admin placeholder that
-    /// was never meant to exist. Safe to query branch-wide with no shift at all: the unique
-    /// index on cash_register guarantees at most one non-closed register per branch.
-    /// </summary>
-    public async Task<CashRegisterDto> GetBranchActiveRegisterAsync(Guid branchId)
+    public async Task<CashRegisterDto> GetActiveRegisterAsync(Guid branchId)
     {
         var register = await _unitOfWork.Repository<CashRegister>().Query()
             .Include(r => r.CashTransactions)
             .Where(r => r.BranchId == branchId && r.Status != CashRegisterStatus.Closed)
             .OrderByDescending(r => r.OpenedAt)
             .FirstOrDefaultAsync()
-            ?? throw new NotFoundException("No cash register is open at this branch right now.");
+            ?? throw new NotFoundException("No cash register has been opened for today yet.");
 
         return MapToDto(register);
     }
@@ -312,7 +293,7 @@ public class CashRegisterService : ICashRegisterService
         }
     }
 
-    public async Task<CashRegisterDto> AddTransactionAsync(Guid branchId, Guid operatorId, Guid shiftId, AddCashTransactionDto dto)
+    public async Task<CashRegisterDto> AddTransactionAsync(Guid branchId, Guid operatorId, AddCashTransactionDto dto)
     {
         await _unitOfWork.BeginTransactionAsync();
         try
