@@ -416,7 +416,11 @@ export default function CashRegisterPage() {
                       <tr>
                         <td colSpan={8} className="py-2 px-3 bg-bg-3/30">
                           {denominations.length === 0 ? (
-                            <span className="text-text-3 italic">No denomination count recorded.</span>
+                            <span className="text-text-3 italic">
+                              {r.closedAt
+                                ? `Counted ₹${r.physicalCashCounted.toFixed(2)} — breakdown not recorded.`
+                                : 'No denomination count recorded.'}
+                            </span>
                           ) : (
                             <div className="flex flex-wrap gap-x-5 gap-y-1">
                               {denominations.map(([label, count]) => (
