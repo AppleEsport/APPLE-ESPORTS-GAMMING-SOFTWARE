@@ -69,13 +69,13 @@ export default function EodPaymentSummaryBar({ report, targetDate, height, onHei
   // this fixes.
   const cashTotal = n(pm.totalCash) + n(pm.totalWalletTopUpsCash) + n(report.cash.totalCashInwards) - n(report.cash.totalPettyExpenses) - n(report.cash.totalOwnerWithdrawals);
   const onlineTotal = n(pm.totalOnline) + n(pm.totalWalletTopUpsOnline);
-  const walletDeductionsTotal = n(pm.totalWalletDeductions);
 
   // The Total Amount at the bottom is exactly the sum of the two rows above it that are
   // themselves totals - cash (already net of petty expenses and owner withdrawals) plus
-  // online. Wallet Deductions is shown for visibility but deliberately left out of this sum:
-  // it is a member spending a balance that was already counted as income when they topped up,
-  // and adding it again is the original bug this screen used to have.
+  // online. Wallet Deductions (shown in the printed EOD report, not here on screen per the
+  // owner's instruction) is deliberately left out of this sum either way: it is a member
+  // spending a balance that was already counted as income when they topped up, and adding it
+  // again is the original bug this screen used to have.
   const grandTotal = cashTotal + onlineTotal;
   const creditsPending = report.creditLogs?.filter(c => c.status?.toLowerCase() === 'pending').reduce((acc, c) => acc + n(c.creditAmount), 0) || 0;
 
@@ -198,10 +198,6 @@ export default function EodPaymentSummaryBar({ report, targetDate, height, onHei
             <div className="flex justify-between items-center">
               <span className="text-text-2">Online</span>
               <span className="font-mono text-text">₹{onlineTotal.toFixed(2)}</span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-text-2">Member Amount Deductions (Gaming/Food)</span>
-              <span className="font-mono text-neon-purple">₹{walletDeductionsTotal.toFixed(2)}</span>
             </div>
             <div className="flex justify-between items-center">
               <span className="text-text-2">Credits Pending</span>
