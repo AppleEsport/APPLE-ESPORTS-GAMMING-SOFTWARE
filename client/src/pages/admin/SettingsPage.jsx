@@ -144,6 +144,7 @@ export default function SettingsPage() {
       openingTime: formData.get('openingTime'),
       closingTime: formData.get('closingTime'),
       configuredReservationDurations: formData.get('configuredReservationDurations'),
+      defaultOpeningFloat: formData.get('defaultOpeningFloat') || null,
       foodGroupId: foodGroupId || null
     };
 
@@ -735,6 +736,20 @@ export default function SettingsPage() {
               placeholder="e.g. 30, 60, 120, 180"
             />
             <span className="text-[10px] text-text-3 mt-1 block">Enter minutes separated by commas.</span>
+          </div>
+
+          <div className="form-group">
+            <label>Default Opening Float (₹)</label>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              name="defaultOpeningFloat"
+              defaultValue={branchDrawer.data?.defaultOpeningFloat ?? 1000}
+              className="form-control"
+              placeholder="1000"
+            />
+            <span className="text-[10px] text-text-3 mt-1 block">Fixed cash the first shift of the day opens the drawer with.</span>
           </div>
 
           <div className="form-group">

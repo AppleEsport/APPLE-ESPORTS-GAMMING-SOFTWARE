@@ -16,6 +16,11 @@ public class Branch
     
     public string? ConfiguredReservationDurations { get; set; }
 
+    /// <summary>The fixed float every shift opens the cash drawer with, unless the previous
+    /// shift's close set a different amount for the next one. Same ₹1,000 for every branch by
+    /// default; Admin/Super Admin can change it per branch in Settings.</summary>
+    public decimal DefaultOpeningFloat { get; set; } = 1000m;
+
     /// <summary>Null (the default) means this branch's food/snacks are fully independent.
     /// Set to share a menu and stock count with every other branch pointing at the same
     /// FoodGroup — see FoodGroup.cs.</summary>

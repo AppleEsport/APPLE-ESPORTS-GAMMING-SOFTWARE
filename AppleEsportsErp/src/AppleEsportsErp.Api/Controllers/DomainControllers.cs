@@ -803,6 +803,7 @@ public class BranchesController : ControllerBase
             Status = b.Status.ToString(),
             CreatedAt = b.CreatedAt,
             ConfiguredReservationDurations = b.ConfiguredReservationDurations,
+            DefaultOpeningFloat = b.DefaultOpeningFloat,
             FoodGroupId = b.FoodGroupId,
             FoodGroupName = b.FoodGroup?.Name
         });
@@ -824,6 +825,7 @@ public class BranchesController : ControllerBase
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
             ConfiguredReservationDurations = dto.ConfiguredReservationDurations,
+            DefaultOpeningFloat = dto.DefaultOpeningFloat ?? 1000m,
             FoodGroupId = dto.FoodGroupId
         };
 
@@ -844,6 +846,7 @@ public class BranchesController : ControllerBase
         branch.OpeningTime = TimeOnly.Parse(dto.OpeningTime);
         branch.ClosingTime = TimeOnly.Parse(dto.ClosingTime);
         branch.ConfiguredReservationDurations = dto.ConfiguredReservationDurations;
+        branch.DefaultOpeningFloat = dto.DefaultOpeningFloat ?? branch.DefaultOpeningFloat;
         branch.FoodGroupId = dto.FoodGroupId;
         branch.UpdatedAt = DateTimeOffset.UtcNow;
 
