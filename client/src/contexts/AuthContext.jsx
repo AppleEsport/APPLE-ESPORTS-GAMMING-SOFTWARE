@@ -249,6 +249,13 @@ export function AuthProvider({ children }) {
   const activeUser = adminSwitchUser || user;
   const userRole = activeUser?.role || activeUser?.Role;
   const isSuperAdmin = userRole === ROLES.SUPER_ADMIN || (typeof userRole === 'string' && userRole.toLowerCase().includes('admin'));
+
+  // Strictly Super Admin, never an operator's own Quick Admin Switch - see EnsureNotSuperAdminForCashAsync
+  // on the server, which only ever blocks Roles.SuperAdmin. `isSuperAdmin` above is deliberately
+  // loose ("elevated, not an operator") for most of the app, but cash screens gating on it by
+  // mistake would lock an operator who quick-switched to Admin out of their own drawer - the
+  // exact workflow that switch exists to keep working.
+  const isTrueSuperAdmin = userRole === ROLES.SUPER_ADMIN;
   const isOperator = userRole === ROLES.OPERATOR || (typeof userRole === 'string' && userRole.toLowerCase().includes('operator'));
   const isAuthenticated = !!activeUser;
 
@@ -313,6 +320,7 @@ export function AuthProvider({ children }) {
     error,
     isAuthenticated,
     isSuperAdmin,
+    isTrueSuperAdmin,
     isOperator,
     loginAdmin,
     loginOperator,

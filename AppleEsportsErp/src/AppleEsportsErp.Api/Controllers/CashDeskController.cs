@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using AppleEsportsErp.Api.Extensions;
 using AppleEsportsErp.Api.Filters;
+using AppleEsportsErp.Application.Constants;
 using AppleEsportsErp.Application.DTOs.Cash;
 using AppleEsportsErp.Application.DTOs.Common;
 using AppleEsportsErp.Application.Exceptions;
@@ -59,6 +60,20 @@ public class CashDeskController : ControllerBase
         await this.EnsureNotSuperAdminForCashAsync();
         await _cashDeskService.CancelVerificationAsync(GetBranchId(), (await this.GetOperatorIdAsync()), (await this.GetShiftIdAsync()), registerId);
         return Ok(new { success = true, message = "Verification cancelled, register unlocked" });
+    }
+
+    /// <summary>
+    /// The one deliberate exception to Super Admin's read-only cash rule - undoing an accidental
+    /// "last shift of the day" tick is an administrative correction, not an operator cash action.
+    /// </summary>
+    [HttpPost("reopen-day")]
+    [Authorize(Roles = $"{Roles.Admin},{Roles.SuperAdmin}")]
+    [Idempotent]
+    public async Task<IActionResult> ReopenDay()
+    {
+        var name = User.FindFirstValue(ClaimTypes.Name) ?? User.FindFirstValue(ClaimTypes.Email) ?? "Admin";
+        await _cashDeskService.ReopenLastDayCloseAsync(GetBranchId(), Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!), name);
+        return Ok(new { success = true, message = "Day close undone. The drawer is open again." });
     }
 }
 

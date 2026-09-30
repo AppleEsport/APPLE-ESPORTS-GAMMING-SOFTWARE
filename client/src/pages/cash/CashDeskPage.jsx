@@ -23,7 +23,7 @@ const readStoredDate = (key) => {
 };
 
 export default function CashDeskPage() {
-  const { isSuperAdmin, user } = useAuth();
+  const { isSuperAdmin, isTrueSuperAdmin, user } = useAuth();
   const { activeBranch } = useBranch();
   const { subscribe, connected, SIGNALR_HUBS } = useSocket();
 
@@ -196,15 +196,16 @@ export default function CashDeskPage() {
     );
   }
 
-  // 1. If no register is open: an operator is asked to open it. Super Admin is never shown
-  // that form at all - they cannot physically count a drawer, and the server refuses the
-  // request anyway (see EnsureNotSuperAdminForCashAsync) - just a plain read-only notice.
-  // The Ledger still shows underneath either way, since it is a look back at cash movements
-  // regardless of whether a drawer happens to be open right now.
+  // 1. If no register is open: an operator is asked to open it. Only a true Super Admin is
+  // never shown that form - they cannot physically count a drawer, and the server refuses the
+  // request anyway (see EnsureNotSuperAdminForCashAsync) - just a plain read-only notice. An
+  // Admin-mode operator (Quick Admin Switch) is physically at the counter and opens it like
+  // anyone else. The Ledger still shows underneath either way, since it is a look back at cash
+  // movements regardless of whether a drawer happens to be open right now.
   if (!register) {
     return (
       <div className="flex flex-col h-full gap-6">
-        {isSuperAdmin ? (
+        {isTrueSuperAdmin ? (
           <div className="flex flex-col items-center justify-center py-16 text-center border border-border bg-bg-2 rounded-xl">
             <Calculator className="w-10 h-10 text-text-3 mb-3" />
             <h2 className="text-text font-bold mb-1">No Register Open</h2>
@@ -236,7 +237,7 @@ export default function CashDeskPage() {
           badge="LIVE"
         />
 
-        {!isSuperAdmin && (
+        {!isTrueSuperAdmin && (
           <button
             onClick={() => setIsAddTxModalOpen(true)}
             className="btn-primary flex items-center gap-2 shadow-lg shadow-accent/20"

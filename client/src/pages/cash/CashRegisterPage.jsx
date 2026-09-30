@@ -24,7 +24,7 @@ const readStoredDate = (key) => {
 
 export default function CashRegisterPage() {
   const navigate = useNavigate();
-  const { isSuperAdmin, user, logout } = useAuth();
+  const { isSuperAdmin, isTrueSuperAdmin, user, logout } = useAuth();
   const { activeBranch, switchBranch } = useBranch();
 
   const [register, setRegister] = useState(null);
@@ -57,6 +57,12 @@ export default function CashRegisterPage() {
   const [stockBusy, setStockBusy] = useState(false);
   const [stockError, setStockError] = useState('');
   const [isCancelling, setIsCancelling] = useState(false);
+
+  // Whether the branch's last close was a genuine day close (so "No Register Open" can say so
+  // plainly) and, for Admin/Super Admin, a way to undo it if it was a mistake.
+  const [dayClosed, setDayClosed] = useState(false);
+  const [isReopening, setIsReopening] = useState(false);
+  const [reopenError, setReopenError] = useState(null);
 
   const targetBranchId = isSuperAdmin ? activeBranch?.id : user?.branchId;
 
@@ -188,6 +194,42 @@ export default function CashRegisterPage() {
     fetchActiveRegister();
   }, [fetchActiveRegister]);
 
+  // Only asked for Admin/Super Admin, and only once there's confirmed to be nothing open - this
+  // is what tells "the day was properly closed" apart from "nobody has opened the drawer yet",
+  // and is also how the Undo button below knows there's a day close to undo.
+  useEffect(() => {
+    if (isLoading || register || !isSuperAdmin || !targetBranchId) {
+      setDayClosed(false);
+      return;
+    }
+    let alive = true;
+    (async () => {
+      try {
+        const { data } = await api.get('/cash/opening', { params: { branchId: targetBranchId } });
+        if (alive) setDayClosed(data?.data?.isFirstOfDay === true);
+      } catch {
+        if (alive) setDayClosed(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [isLoading, register, isSuperAdmin, targetBranchId]);
+
+  const handleReopenDay = async () => {
+    setIsReopening(true);
+    setReopenError(null);
+    try {
+      await api.post('/cash-desk/reopen-day', {}, {
+        headers: { 'X-Idempotency-Key': generateIdempotencyKey() }
+      });
+      setDayClosed(false);
+      await fetchActiveRegister();
+    } catch (err) {
+      setReopenError(err.response?.data?.error || err.response?.data?.message || 'Failed to undo the day close.');
+    } finally {
+      setIsReopening(false);
+    }
+  };
+
   // Defense-in-depth for the live ForceLogout push (see SocketContext.jsx): a missed socket
   // event - a reconnect gap, the tab was backgrounded when it fired - must not leave this
   // screen showing a register as open indefinitely after a Super Admin has force-closed the
@@ -219,7 +261,7 @@ export default function CashRegisterPage() {
 
   // Loaded once the cash is counted, which is when this screen reaches the stock step.
   useEffect(() => {
-    if (register?.status !== 'Verified' || isSuperAdmin || inventory !== null) return;
+    if (register?.status !== 'Verified' || isTrueSuperAdmin || inventory !== null) return;
     let alive = true;
     (async () => {
       try {
@@ -235,7 +277,7 @@ export default function CashRegisterPage() {
       }
     })();
     return () => { alive = false; };
-  }, [register?.status, isSuperAdmin, inventory]);
+  }, [register?.status, isTrueSuperAdmin, inventory]);
 
   // Only items whose count the operator actually changed get written back.
   const confirmStock = async () => {
@@ -274,9 +316,10 @@ export default function CashRegisterPage() {
         headers: { 'X-Idempotency-Key': generateIdempotencyKey() }
       });
 
-      if (isSuperAdmin) {
-        // Super Admin/Admin have no personal shift to end — just return to the
-        // All Branches view instead of logging out.
+      if (isTrueSuperAdmin) {
+        // Only a true Super Admin has no personal shift to end — an Admin-mode operator
+        // (Quick Admin Switch) is the same physical person who was trading, and still needs
+        // to be logged out below like any other shift ending.
         switchBranch(null);
         navigate('/app/dashboard');
       } else {
@@ -485,13 +528,31 @@ export default function CashRegisterPage() {
         <div className="flex flex-col items-center justify-center min-h-[40vh] text-center">
           <AlertTriangle className="w-12 h-12 text-neon-orange mb-4" />
           <h2 className="text-xl font-heading font-bold text-text mb-2">
-            {isSuperAdmin ? 'No Register Open' : 'No Active Shift'}
+            {isSuperAdmin ? (dayClosed ? 'Day Closed' : 'No Register Open') : 'No Active Shift'}
           </h2>
           <p className="text-text-2">
             {isSuperAdmin
-              ? 'No cash register is currently open at this branch.'
+              ? (dayClosed
+                ? 'The last shift closed the day. Next shift opens tomorrow.'
+                : 'No cash register is currently open at this branch.')
               : 'There is no active cash register open for this shift.'}
           </p>
+          {isSuperAdmin && dayClosed && (
+            <div className="mt-5">
+              {reopenError && <p className="text-neon-red text-xs mb-2">{reopenError}</p>}
+              <button
+                onClick={handleReopenDay}
+                disabled={isReopening}
+                className="btn-secondary py-2 px-4 text-xs font-bold uppercase tracking-wider disabled:opacity-50"
+              >
+                {isReopening ? 'Undoing...' : 'Undo — this was a mistake'}
+              </button>
+              <p className="text-text-3 text-[11px] mt-2 max-w-sm">
+                Only use this if "last shift of the day" was ticked by accident. The drawer
+                reopens exactly as it was left.
+              </p>
+            </div>
+          )}
         </div>
         {historySection}
       </>
@@ -501,7 +562,9 @@ export default function CashRegisterPage() {
   // Super Admin: read-only, always — never the Lock/Count/Close flow below. Super Admin is
   // not physically at the branch and cannot count a real drawer (see EnsureNotSuperAdminForCashAsync
   // on the server, which refuses every mutation regardless of what this screen would try to do).
-  if (isSuperAdmin) {
+  // Deliberately isTrueSuperAdmin, not the loose isSuperAdmin - an operator who quick-switched to
+  // Admin is still physically at the counter and must keep the real Lock/Count/Close flow below.
+  if (isTrueSuperAdmin) {
     return (
       <>
         <div className="h-full flex flex-col max-w-4xl mx-auto">
@@ -640,7 +703,7 @@ export default function CashRegisterPage() {
           </div>
           {/* Stock, then the day. Both asked here rather than on a later screen, because this
               is the last moment the operator is still standing at the counter. */}
-          {!isSuperAdmin && (
+          {!isTrueSuperAdmin && (
             <div className="w-full max-w-md mb-6 space-y-3 text-left">
               <div className="bg-bg-3 border border-border rounded-xl p-4">
                 <div className="flex items-center justify-between mb-1">
@@ -794,7 +857,7 @@ export default function CashRegisterPage() {
             onClick={handleCloseShift}
             disabled={
               isClosing ||
-              (!isSuperAdmin && !stockChecked) ||
+              (!isTrueSuperAdmin && !stockChecked) ||
               (closesTradingDay && (coverAmount === '' || nextDayFloat === '')) ||
               (dayCloseNeedsReason && !nextDayFloatReason.trim())
             }
@@ -807,7 +870,7 @@ export default function CashRegisterPage() {
             )}
           </button>
 
-          {!isSuperAdmin && !stockChecked && (
+          {!isTrueSuperAdmin && !stockChecked && (
             <p className="text-text-3 text-[11px] mt-3">Confirm the stock counts before you can finish.</p>
           )}
         </div>
