@@ -681,6 +681,18 @@ public class SyncInboxController : ControllerBase
                 : reg.MismatchReason;
         }
 
+        // Saved separately, before the upsert below, rather than left for the caller's one
+        // SaveChangesAsync at the end. EF Core does not save in the order this method calls
+        // things in - it groups by operation type, and an Added row's INSERT can run before a
+        // Modified row's UPDATE in the same batch. Left as one save, the incoming register's
+        // INSERT could still be attempted while the stale row's close had not actually reached
+        // the database yet, hitting the exact constraint this method exists to avoid - which is
+        // exactly what happened the first time this shipped (confirmed live: three retry
+        // sweeps after deploying this method, still failing on the identical row, identical
+        // error). Closing the stale row for real first removes any ordering to get wrong.
+        if (stale.Count > 0)
+            await _db.SaveChangesAsync();
+
         await UpsertRowAsync<CashRegister>(held, root);
     }
 
