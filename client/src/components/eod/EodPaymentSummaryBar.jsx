@@ -188,6 +188,14 @@ export default function EodPaymentSummaryBar({ report, targetDate, height, onHei
               <span className="text-text-2">Credit</span>
               <span className="font-mono text-neon-red">-₹{creditsPending.toFixed(2)}</span>
             </div>
+            {/* An old debt collected today - shown for visibility only, not added below: it
+                already arrived as cash or online above (whichever way it was paid), the same
+                rupee counted once there. Showing it again here as a second addition would be
+                exactly the double-count this screen used to make with wallet spending. */}
+            <div className="flex justify-between items-center">
+              <span className="text-text-2">Credit Cleared</span>
+              <span className="font-mono text-neon-green">₹{Number(report.reconciliation?.creditClearedToday ?? 0).toFixed(2)}</span>
+            </div>
             <div className="flex justify-between items-center">
               <span className="text-text-2">Petty Expense</span>
               <span className="font-mono text-neon-red">- ₹{report.cash.totalPettyExpenses}</span>
