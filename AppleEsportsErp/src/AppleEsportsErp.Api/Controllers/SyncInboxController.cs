@@ -489,7 +489,7 @@ public class SyncInboxController : ControllerBase
                 break;
 
             case "cash_register.changed":
-                await UpsertRowAsync<CashRegister>(held, root);
+                await UpsertCashRegisterAsync(held, root);
                 break;
 
             case "cash_transaction.changed":
@@ -646,6 +646,42 @@ public class SyncInboxController : ControllerBase
                 relayEventId = held.Id,
             }, Guid.Empty, CancellationToken.None);
         }
+    }
+
+    /// <summary>
+    /// Same as <see cref="UpsertRowAsync{TEntity}"/>, with one extra step first: the branch is
+    /// always the source of truth for its own drawer, so if Head Office is still holding a
+    /// DIFFERENT non-closed register for this branch, that copy is stale by definition - the
+    /// branch has moved on - and is closed here rather than left to collide with the incoming
+    /// row.
+    ///
+    /// Before this, that collision (the "one open register per branch" rule, built precisely to
+    /// stop a branch's own duplicate-register bug) refused the incoming row outright and retried
+    /// the identical failure forever, with nothing able to break it. Confirmed live at
+    /// Adajan-240Hz, 1 Oct 2026: one stale mirror register blocked roughly 19 hours of that
+    /// branch's updates - every shift change, every cash movement - discovered only because the
+    /// owner happened to notice the dashboard had stopped moving. Head Office never has a reason
+    /// to insist its own copy is right once the branch says otherwise; it only ever has a reason
+    /// to catch up.
+    /// </summary>
+    private async Task UpsertCashRegisterAsync(SyncInboxEntry held, JsonElement root)
+    {
+        var stale = await _db.Set<CashRegister>()
+            .Where(r => r.BranchId == held.BranchId
+                && r.Id != held.AggregateId
+                && r.Status != CashRegisterStatus.Closed)
+            .ToListAsync();
+
+        foreach (var reg in stale)
+        {
+            reg.Status = CashRegisterStatus.Closed;
+            reg.ClosedAt = DateTimeOffset.UtcNow;
+            reg.MismatchReason = string.IsNullOrWhiteSpace(reg.MismatchReason)
+                ? "Auto-closed: the branch reported a different register as its current one during sync, so this mirror copy was stale."
+                : reg.MismatchReason;
+        }
+
+        await UpsertRowAsync<CashRegister>(held, root);
     }
 
     private async Task UpsertRowAsync<TEntity>(
