@@ -666,32 +666,22 @@ public class SyncInboxController : ControllerBase
     /// </summary>
     private async Task UpsertCashRegisterAsync(SyncInboxEntry held, JsonElement root)
     {
-        var stale = await _db.Set<CashRegister>()
+        // ExecuteUpdateAsync, not the change tracker - it runs immediately against the database,
+        // so there is no ordering question with the upsert below. The change-tracker version of
+        // this (stage the close, then SaveChangesAsync before the upsert) still failed live: EF
+        // does not save in the order code calls things in, so the incoming register's INSERT
+        // could run before the stale row's UPDATE in the same batch, hitting the exact
+        // constraint this method exists to avoid. Executed directly, the stale row is actually
+        // closed in the database before the next line even starts.
+        await _db.Set<CashRegister>()
             .Where(r => r.BranchId == held.BranchId
                 && r.Id != held.AggregateId
                 && r.Status != CashRegisterStatus.Closed)
-            .ToListAsync();
-
-        foreach (var reg in stale)
-        {
-            reg.Status = CashRegisterStatus.Closed;
-            reg.ClosedAt = DateTimeOffset.UtcNow;
-            reg.MismatchReason = string.IsNullOrWhiteSpace(reg.MismatchReason)
-                ? "Auto-closed: the branch reported a different register as its current one during sync, so this mirror copy was stale."
-                : reg.MismatchReason;
-        }
-
-        // Saved separately, before the upsert below, rather than left for the caller's one
-        // SaveChangesAsync at the end. EF Core does not save in the order this method calls
-        // things in - it groups by operation type, and an Added row's INSERT can run before a
-        // Modified row's UPDATE in the same batch. Left as one save, the incoming register's
-        // INSERT could still be attempted while the stale row's close had not actually reached
-        // the database yet, hitting the exact constraint this method exists to avoid - which is
-        // exactly what happened the first time this shipped (confirmed live: three retry
-        // sweeps after deploying this method, still failing on the identical row, identical
-        // error). Closing the stale row for real first removes any ordering to get wrong.
-        if (stale.Count > 0)
-            await _db.SaveChangesAsync();
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.Status, CashRegisterStatus.Closed)
+                .SetProperty(r => r.ClosedAt, DateTimeOffset.UtcNow)
+                .SetProperty(r => r.MismatchReason, r => r.MismatchReason ??
+                    "Auto-closed: the branch reported a different register as its current one during sync, so this mirror copy was stale."));
 
         await UpsertRowAsync<CashRegister>(held, root);
     }
