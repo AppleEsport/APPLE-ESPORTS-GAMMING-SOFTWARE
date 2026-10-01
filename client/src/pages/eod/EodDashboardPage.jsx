@@ -358,7 +358,7 @@ export default function EodDashboardPage() {
         { label: 'Total Net Revenue', value: `Rs ${report.revenue.netRevenue}` },
         { label: 'Gaming Revenue', value: `Rs ${report.revenue.totalGamingRevenue}` },
         { label: 'Food Revenue', value: `Rs ${report.revenue.totalFoodRevenue}` },
-        { label: 'Discounts Applied', value: `Rs ${report.revenue.totalDiscounts}` },
+        { label: 'Credit Cleared', value: `Rs ${report.reconciliation.creditClearedToday}` },
       ]);
       y += 10;
 
@@ -406,6 +406,7 @@ export default function EodDashboardPage() {
           ['Cash + Member', `Rs ${report.cash.totalCashSales}`],
           ['Online', `Rs ${onlineTotal.toFixed(2)}`],
           ['Credit', `-Rs ${creditsPending}`],
+          ['Credit Cleared', `Rs ${report.reconciliation.creditClearedToday}`],
           ['Petty Expense', `-Rs ${report.cash.totalPettyExpenses}`],
           ['Cash Add', `Rs ${report.cash.totalCashInwards}`],
           ['Overall End Total', `Rs ${overallEndTotal}`],
@@ -851,8 +852,8 @@ export default function EodDashboardPage() {
                   <div className="text-2xl font-mono font-bold text-text">₹{report.revenue.totalFoodRevenue}</div>
                 </div>
                 <div className="bg-bg-2 p-5 rounded-xl border border-border shadow-lg">
-                  <div className="text-text-3 text-xs uppercase font-bold tracking-widest mb-1">Discounts Applied</div>
-                  <div className="text-2xl font-mono font-bold text-text">₹{report.revenue.totalDiscounts}</div>
+                  <div className="text-text-3 text-xs uppercase font-bold tracking-widest mb-1">Credit Cleared</div>
+                  <div className="text-2xl font-mono font-bold text-text">₹{report.reconciliation.creditClearedToday}</div>
                 </div>
               </div>
 
@@ -1097,10 +1098,24 @@ export default function EodDashboardPage() {
                             // The synthetic "a credit was cleared" row EodController adds for
                             // this date range - same green the CREDIT branch above uses for
                             // "Cleared", so a settled credit reads the same way wherever it
-                            // shows up.
-                            <span className="text-neon-green text-[9px] bg-neon-green/10 px-1.5 py-0.5 rounded border border-neon-green/20 uppercase tracking-wider font-bold">
-                              {bill.paymentType}
-                            </span>
+                            // shows up. How it was actually paid (cash/online/split) comes from
+                            // the Payment row ClearCreditAsync already writes - CustomerCredit
+                            // itself never recorded this, so without it every settled credit
+                            // looked identical regardless of how the money actually came in.
+                            <div className="flex flex-col items-center gap-1">
+                              <span className="text-neon-green text-[9px] bg-neon-green/10 px-1.5 py-0.5 rounded border border-neon-green/20 uppercase tracking-wider font-bold">
+                                {bill.paymentType}
+                              </span>
+                              <span className="text-text-3 text-[9px]">
+                                {bill.clearedCashAmount > 0 && bill.clearedOnlineAmount > 0
+                                  ? `Split: Cash ₹${bill.clearedCashAmount.toFixed(2)} + Online ₹${bill.clearedOnlineAmount.toFixed(2)}`
+                                  : bill.clearedOnlineAmount > 0
+                                  ? `Online ₹${bill.clearedOnlineAmount.toFixed(2)}`
+                                  : bill.clearedCashAmount > 0
+                                  ? `Cash ₹${bill.clearedCashAmount.toFixed(2)}`
+                                  : (bill.clearedPaymentType || 'Method not recorded')}
+                              </span>
+                            </div>
                           ) : (
                             <span className="inline-flex items-center gap-1.5">
                               <span className="text-text-3 uppercase">{bill.paymentType}</span>

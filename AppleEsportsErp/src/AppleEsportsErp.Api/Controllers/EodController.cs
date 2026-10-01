@@ -150,27 +150,49 @@ public class EodController : ControllerBase
                      && ((c.CreatedAt >= startUtc && c.CreatedAt <= endUtc) || (c.ClearedAt >= startUtc && c.ClearedAt <= endUtc)))
             .ToListAsync();
 
+        // How a settled credit was actually paid - cash, online, or split. CustomerCredit itself
+        // never recorded this; ClearCreditAsync already writes it onto a Payment row for the
+        // same bill, so it is read back from there rather than added as a new column. A credit
+        // bill can hold two Payment rows (the partial amount taken up front, then the clearing
+        // one) - the clearing payment is always the later of the two, since clearing can only
+        // happen after the bill already exists.
+        var creditBillIds = credits.Select(c => c.BillId).ToList();
+        var clearingPayments = await _unitOfWork.Repository<AppleEsportsErp.Domain.Entities.Payment>()
+            .Query()
+            .Where(p => creditBillIds.Contains(p.BillId))
+            .ToListAsync();
+
         var clearedPastCredits = credits
             .Where(c => c.Status != null && c.Status.ToLower() == "cleared" && c.ClearedAt >= startUtc && c.ClearedAt <= endUtc)
-            .Select(c => new {
-                BillId = $"SETTLED-{(c.Bill != null ? c.Bill.BillNumber : "CREDIT")}",
-                Date = c.ClearedAt,
-                Operator = c.ClearedByOperator != null ? c.ClearedByOperator.FullName : "Unknown",
-                Customer = string.IsNullOrEmpty(c.CustomerName) ? "Walk-in" : c.CustomerName,
-                GamingRevenue = 0m,
-                FoodRevenue = 0m,
-                Discount = 0m,
-                TotalRevenue = c.CreditAmount,
-                PaymentType = "CREDIT SETTLED",
-                AmountPaidInitially = c.AmountPaidInitially,
-                CreditAmount = c.CreditAmount,
-                CreditStatus = "cleared",
-                SessionNotes = "Credit clearance payment for past session",
-                SessionStartTime = c.Bill != null ? c.Bill.CreatedAt : c.CreatedAt,
-                SessionEndTime = (DateTimeOffset?)null,
-                SessionDurationMinutes = 0d,
-                PcId = (Guid?)null,
-                PcName = c.PcNumber ?? "N/A"
+            .Select(c => {
+                var clearingPayment = clearingPayments
+                    .Where(p => p.BillId == c.BillId)
+                    .OrderByDescending(p => p.CreatedAt)
+                    .FirstOrDefault();
+
+                return new {
+                    BillId = $"SETTLED-{(c.Bill != null ? c.Bill.BillNumber : "CREDIT")}",
+                    Date = c.ClearedAt,
+                    Operator = c.ClearedByOperator != null ? c.ClearedByOperator.FullName : "Unknown",
+                    Customer = string.IsNullOrEmpty(c.CustomerName) ? "Walk-in" : c.CustomerName,
+                    GamingRevenue = 0m,
+                    FoodRevenue = 0m,
+                    Discount = 0m,
+                    TotalRevenue = c.CreditAmount,
+                    PaymentType = "CREDIT SETTLED",
+                    AmountPaidInitially = c.AmountPaidInitially,
+                    CreditAmount = c.CreditAmount,
+                    CreditStatus = "cleared",
+                    ClearedPaymentType = clearingPayment?.PaymentType.ToString(),
+                    ClearedCashAmount = clearingPayment?.CashAmount ?? 0m,
+                    ClearedOnlineAmount = clearingPayment?.OnlineAmount ?? 0m,
+                    SessionNotes = "Credit clearance payment for past session",
+                    SessionStartTime = c.Bill != null ? c.Bill.CreatedAt : c.CreatedAt,
+                    SessionEndTime = (DateTimeOffset?)null,
+                    SessionDurationMinutes = 0d,
+                    PcId = (Guid?)null,
+                    PcName = c.PcNumber ?? "N/A"
+                };
             })
             .Cast<object>()
             .ToList();
