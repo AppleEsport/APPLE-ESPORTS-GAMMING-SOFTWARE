@@ -28,6 +28,13 @@ public class ReportsService : IReportsService
             .Include(r => r.Operator)
             .Include(r => r.DenominationCounts)
             .Where(r => r.BranchId == branchId && r.OpenedAt >= startUtc && r.OpenedAt <= endUtc)
+            // Not a real shift to reconcile - the branch's own sync self-heal auto-closed this
+            // one the moment it saw the operator's real register arrive under a different id
+            // (see SyncInboxController.UpsertCashRegisterAsync). It never held a real drawer;
+            // showing it here reads as an operator who opened and closed a register seconds
+            // apart for no reason, when nothing like that ever happened.
+            .Where(r => r.MismatchReason == null || !r.MismatchReason.StartsWith(
+                "Auto-closed: the branch reported a different register as its current one during sync"))
             .OrderByDescending(r => r.OpenedAt)
             .ToListAsync();
 
