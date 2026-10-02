@@ -686,6 +686,25 @@ public class BranchHeartbeatController : ControllerBase
                 continue;
             }
 
+            // CurrentSessionId is a real foreign key into sessions, and a PC's own heartbeat
+            // routinely names a session before that session's own sync entry has made it to
+            // Head Office - the two travel completely different paths (this is a live beat
+            // every few seconds, the session arrives through the branch's own, separately
+            // queued and sometimes backlogged, sync outbox). Writing it anyway threw
+            // "23503: ... FK_pcs_sessions_CurrentSessionId" and - because this loop processes
+            // every PC on the branch in one request - took the rest of that beat's PCs down
+            // with it. Confirmed live: hundreds of these a minute on a branch with any sync
+            // backlog, and it meant that branch's heartbeats effectively never finished, which
+            // in turn meant anything riding on a completed heartbeat (remote commands included)
+            // never reached it either. Head Office simply leaves its own CurrentSessionId
+            // pointer unset until the session itself arrives through the normal path - the
+            // branch's own copy is already authoritative on this, same as every other field a
+            // branch reports ahead of its own sync queue.
+            var reportedSessionId = reported.CurrentSessionId.HasValue
+                && await _db.Sessions.AnyAsync(s => s.Id == reported.CurrentSessionId.Value)
+                ? reported.CurrentSessionId
+                : null;
+
             if (!Enum.TryParse<PcState>(reported.State.Replace("_", ""), ignoreCase: true, out var state))
             {
                 _logger.LogWarning(
@@ -712,7 +731,7 @@ public class BranchHeartbeatController : ControllerBase
             // the kind of change Head Office needs to actually see, or its screen would show a
             // customer's remaining time as whatever the original plan said, forever.
             if (pc.State == state
-                && pc.CurrentSessionId == reported.CurrentSessionId
+                && pc.CurrentSessionId == reportedSessionId
                 && pc.CurrentSessionStartTime == reported.SessionStartTime
                 && pc.CurrentSessionEndTime == reported.SessionEndTime
                 && pc.CurrentSessionPackagePrice == reported.SessionPackagePrice
@@ -724,7 +743,7 @@ public class BranchHeartbeatController : ControllerBase
                 "PC {PcNumber} ({PcId}) on branch {BranchId} moving {OldState}/{OldSession}/poweredOff={OldPoweredOff} -> " +
                 "{NewState}/{NewSession}/poweredOff={NewPoweredOff} from heartbeat.",
                 pc.PcNumber, pc.Id, dto.BranchId, pc.State, pc.CurrentSessionId, pc.PoweredOff,
-                state, reported.CurrentSessionId, reported.PoweredOff);
+                state, reportedSessionId, reported.PoweredOff);
 
             // Written on the Audit Trail specifically for PoweredOff, not for every routine
             // Idle/Active/Reserved churn a busy shop produces dozens of times an hour - this is
@@ -745,7 +764,7 @@ public class BranchHeartbeatController : ControllerBase
             bool poweredOffChanged = pc.PoweredOff != reported.PoweredOff;
 
             pc.State = state;
-            pc.CurrentSessionId = reported.CurrentSessionId;
+            pc.CurrentSessionId = reportedSessionId;
             pc.CurrentSessionStartTime = reported.SessionStartTime;
             pc.CurrentSessionEndTime = reported.SessionEndTime;
             pc.CurrentSessionPackagePrice = reported.SessionPackagePrice;
