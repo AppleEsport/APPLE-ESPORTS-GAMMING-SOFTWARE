@@ -12,6 +12,7 @@ using AppleEsportsErp.Domain.Entities;
 using AppleEsportsErp.Api.Hubs;
 using Microsoft.AspNetCore.SignalR;
 using AppleEsportsErp.Api.Controllers; // To access BillingController.PendingApprovals
+using AppleEsportsErp.Api.Extensions;
 
 namespace AppleEsportsErp.Api.Controllers;
 
@@ -518,37 +519,17 @@ public class PublicController : ControllerBase
             }));
         }
 
+        // Same system-admin operator/shift ControllerExtensions already resolves correctly
+        // for a Member-role request - deterministic id (so it lands on the exact same row
+        // Head Office independently creates, instead of two different ids sharing only a
+        // username and colliding on sync forever) and no CashRegister auto-opened (a phantom
+        // register with ₹0 and no one ever asking for it). Both branches below need it -
+        // resolved once here, after the early-return above, not twice.
+        var sysOpId = await this.GetOperatorIdAsync();
+        var activeShiftId = await this.GetShiftIdAsync();
+
         if (pendingReservation != null)
         {
-            // Retrieve or create System Operator and Shift
-            var sysUsername2 = $"system_admin_{branchId:N}";
-            var sysOp2 = await _db.Operators.FirstOrDefaultAsync(o => o.BranchId == branchId && o.Username == sysUsername2);
-            if (sysOp2 == null)
-            {
-                sysOp2 = new Operator
-                {
-                    Id = Guid.NewGuid(),
-                    BranchId = branchId,
-                    FullName = "System Administrator",
-                    Username = sysUsername2,
-                    Email = $"{sysUsername2}@appleesports.local",
-                    PasswordHash = "LOCKED",
-                    Status = OperatorStatus.Active,
-                    CreatedAt = now,
-                    UpdatedAt = now
-                };
-                _db.Operators.Add(sysOp2);
-                await _db.SaveChangesAsync();
-            }
-            var sysShift2 = await _db.Shifts.FirstOrDefaultAsync(s => s.BranchId == branchId && s.Status == ShiftStatus.Active && s.OperatorId == sysOp2.Id);
-            if (sysShift2 == null)
-            {
-                sysShift2 = new Shift { Id = Guid.NewGuid(), BranchId = branchId, OperatorId = sysOp2.Id, LoginTime = now, CreatedAt = now, Status = ShiftStatus.Active };
-                _db.Shifts.Add(sysShift2);
-                _db.CashRegisters.Add(new CashRegister { Id = Guid.NewGuid(), BranchId = branchId, OperatorId = sysOp2.Id, ShiftId = sysShift2.Id, OpeningBalance = 0, ExpectedDrawerCash = 0, TotalCashSales = 0, TotalSplitCash = 0, Status = CashRegisterStatus.Open, OpenedAt = now });
-                await _db.SaveChangesAsync();
-            }
-
             // Build session from reservation
             var durationMin = pendingReservation.DurationMin ?? 60;
             var ratePerHour = pc.PricingProfile?.BaseHourlyRate ?? 0m;
@@ -557,7 +538,7 @@ public class PublicController : ControllerBase
             var session = new Session
             {
                 Id = Guid.NewGuid(), PcId = pc.Id, BranchId = branchId,
-                OperatorId = sysOp2.Id, ShiftId = sysShift2.Id,
+                OperatorId = sysOpId, ShiftId = activeShiftId,
                 CustomerName = pendingReservation.CustomerName, MemberId = memberId,
                 StartTime = now, EndTime = pendingReservation.DurationMin.HasValue ? now.AddMinutes(durationMin) : (DateTimeOffset?)null,
                 PlannedDurationMin = pendingReservation.DurationMin,
@@ -574,7 +555,7 @@ public class PublicController : ControllerBase
                 Id = Guid.NewGuid(),
                 BillNumber = $"BILL-{now:yyyyMMdd}-{Guid.NewGuid().ToString()[..4].ToUpper()}",
                 SessionId = session.Id, PcId = pc.Id, BranchId = branchId,
-                OperatorId = sysOp2.Id, ShiftId = sysShift2.Id,
+                OperatorId = sysOpId, ShiftId = activeShiftId,
                 CustomerName = pendingReservation.CustomerName, MemberId = memberId,
                 GamingAmount = expectedAmount, FoodAmount = 0, Subtotal = expectedAmount, TotalAmount = totalDue,
                 Status = BillStatus.Pending, CreatedAt = now, UpdatedAt = now,
@@ -601,59 +582,7 @@ public class PublicController : ControllerBase
         }
         // ── END AUTO-START FROM RESERVATION ──
 
-        // Retrieve or create System Operator and Shift for this branch
-        var sysUsername = $"system_admin_{branchId:N}";
-        var sysOp = await _db.Operators.FirstOrDefaultAsync(o => o.BranchId == branchId && o.Username == sysUsername);
-        if (sysOp == null)
-        {
-            sysOp = new Operator
-            {
-                Id = Guid.NewGuid(),
-                BranchId = branchId,
-                FullName = "System Administrator",
-                Username = sysUsername,
-                Email = $"{sysUsername}@appleesports.local",
-                PasswordHash = "LOCKED",
-                Status = OperatorStatus.Active,
-                CreatedAt = DateTimeOffset.UtcNow,
-                UpdatedAt = DateTimeOffset.UtcNow
-            };
-            _db.Operators.Add(sysOp);
-            await _db.SaveChangesAsync();
-        }
-
-        var activeShift = await _db.Shifts.FirstOrDefaultAsync(s => s.BranchId == branchId && s.Status == ShiftStatus.Active && s.OperatorId == sysOp.Id);
-        if (activeShift == null)
-        {
-            activeShift = new Shift
-            {
-                Id = Guid.NewGuid(),
-                BranchId = branchId,
-                OperatorId = sysOp.Id,
-                LoginTime = DateTimeOffset.UtcNow,
-                CreatedAt = DateTimeOffset.UtcNow,
-                Status = ShiftStatus.Active
-            };
-            _db.Shifts.Add(activeShift);
-
-            var register = new CashRegister
-            {
-                Id = Guid.NewGuid(),
-                BranchId = branchId,
-                OperatorId = sysOp.Id,
-                ShiftId = activeShift.Id,
-                OpeningBalance = 0,
-                ExpectedDrawerCash = 0,
-                TotalCashSales = 0,
-                TotalSplitCash = 0,
-                Status = CashRegisterStatus.Open,
-                OpenedAt = DateTimeOffset.UtcNow
-            };
-            _db.CashRegisters.Add(register);
-            await _db.SaveChangesAsync();
-        }
-
-        var result = await sessionService.StartSessionAsync(branchId, sysOp.Id, activeShift.Id, dto);
+        var result = await sessionService.StartSessionAsync(branchId, sysOpId, activeShiftId, dto);
         return Ok(ApiResponse<SessionDto>.Ok(result));
     }
 
