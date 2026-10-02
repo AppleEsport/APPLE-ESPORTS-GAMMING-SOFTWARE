@@ -453,7 +453,7 @@ public class SyncInboxController : ControllerBase
             // two fields to every OTHER branch already, in the config reply every heartbeat
             // can receive.
             case "operator.changed":
-                await UpsertRowAsync<Operator>(held, root);
+                await UpsertOperatorAsync(held, root);
                 break;
 
             case "session.started":
@@ -684,6 +684,36 @@ public class SyncInboxController : ControllerBase
                     "Auto-closed: the branch reported a different register as its current one during sync, so this mirror copy was stale."));
 
         await UpsertRowAsync<CashRegister>(held, root);
+    }
+
+    private async Task UpsertOperatorAsync(SyncInboxEntry held, JsonElement root)
+    {
+        var username = ReadString(root, "Username");
+
+        if (username is not null)
+        {
+            // Same shape of bug as UpsertCashRegisterAsync, different cause: a branch's
+            // locally-seeded operator (almost always "System Administrator") can end up with a
+            // new local Id after that branch's own database is reset or reinstalled, while the
+            // username stays the same deterministic string. Head Office still has the old Id's
+            // row under that exact username, so the new Id's insert below would collide on
+            // IX_operators_Username forever - and because every shift/bill/credit/session this
+            // operator touches afterwards carries the NEW Id as its OperatorId, every one of
+            // those would also never resolve. One stuck operator row, not a dozen unrelated
+            // sync bugs - confirmed live against the actual backlog, where the stale username
+            // was the common ancestor of thousands of otherwise-unexplained failures. The old
+            // row is renamed, not deleted - it is still the correct OperatorId on record for
+            // whatever history already synced under it.
+            await _db.Set<Operator>()
+                .Where(o => o.BranchId == held.BranchId
+                    && o.Id != held.AggregateId
+                    && o.Username == username)
+                .ExecuteUpdateAsync(s => s.SetProperty(
+                    o => o.Username,
+                    o => o.Username + "_stale_" + o.Id));
+        }
+
+        await UpsertRowAsync<Operator>(held, root);
     }
 
     private async Task UpsertRowAsync<TEntity>(
