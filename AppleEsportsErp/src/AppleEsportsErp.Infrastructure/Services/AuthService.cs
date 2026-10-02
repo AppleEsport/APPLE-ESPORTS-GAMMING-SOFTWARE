@@ -472,6 +472,11 @@ public class AuthService : IAuthService
         op.IsOnline = true;
         op.UpdatedAt = DateTimeOffset.UtcNow;
 
+        // Whether the drawer is actually open right now - see LoginResponseDto.HasOpenRegister
+        // for why this can no longer just be inferred from ResumedShift.
+        var hasOpenRegister = await _db.CashRegisters
+            .AnyAsync(r => r.BranchId == dto.BranchId && r.Status == CashRegisterStatus.Open);
+
         await _db.SaveChangesAsync();
 
         // 7. Generate tokens with branch + permissions embedded — Q1 Decision
@@ -561,6 +566,7 @@ public class AuthService : IAuthService
             // incident, while a genuine outage or an overnight shutdown always is.
             NeedsGapExplanation = resumedShift && gapSinceLastSeen >= TimeSpan.FromMinutes(10),
             PendingTakeover = pendingTakeover,
+            HasOpenRegister = hasOpenRegister,
         };
     }
 

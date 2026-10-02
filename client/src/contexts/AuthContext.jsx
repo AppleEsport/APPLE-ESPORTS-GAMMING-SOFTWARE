@@ -100,6 +100,7 @@ export function AuthProvider({ children }) {
       const response = await api.post('/auth/operator/login', { branchId, username, password });
       const {
         user: userData, resumedShift, unattendedMinutes, needsGapExplanation, pendingTakeover,
+        hasOpenRegister,
       } = response.data.data;
 
       // Somebody else's shift was left open here. The server has deliberately not issued a shift
@@ -124,14 +125,23 @@ export function AuthProvider({ children }) {
         sessionStorage.removeItem('pendingShiftGap');
       }
 
-      // A resumed shift never actually closed - the drawer is still open and inventory was
-      // already checked when the shift genuinely started. Mark the shift-start checklist done
-      // right away so it doesn't reappear. Without this, an app restart mid-shift (a crash, a
-      // power cut, or now an auto-update) wipes the sessionStorage flag the checklist normally
-      // relies on, and the operator who logs back in gets asked to "open" a drawer they never
-      // closed. A genuinely new shift (resumedShift false) still gets the checklist as normal.
+      // A resumed shift usually never actually closed mid-session - the drawer is still open
+      // and inventory was already checked when the shift genuinely started, so the shift-start
+      // checklist (the opening-balance popup) is marked done right away and doesn't reappear.
+      // Without this, an app restart mid-shift (a crash, a power cut, or an auto-update) wipes
+      // the sessionStorage flag the checklist normally relies on, and the operator who logs
+      // back in gets asked to "open" a drawer they never closed.
+      //
+      // That assumption breaks when the SHIFT record is what failed to close while the
+      // register itself went through a completely normal handover close the night before -
+      // confirmed live: an operator's register showed properly closed, counted and verified,
+      // while their shift stayed Active, and the next operator logging in the next day was
+      // never shown the opening-balance popup at all, because resumedShift alone said "skip
+      // it" regardless of whether there was anything open to skip past. hasOpenRegister is the
+      // actual fact that popup's presence should depend on - a genuinely resumed, still-open
+      // shift always has one; only a shift stuck by this specific bug does not.
       const shiftStartKey = `shift_start_done_${userData?.id || userData?.username}`;
-      if (resumedShift) {
+      if (resumedShift && hasOpenRegister) {
         sessionStorage.setItem(shiftStartKey, 'true');
       } else {
         sessionStorage.removeItem(shiftStartKey);
