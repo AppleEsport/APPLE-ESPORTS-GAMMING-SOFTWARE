@@ -704,13 +704,19 @@ public class SyncInboxController : ControllerBase
             // was the common ancestor of thousands of otherwise-unexplained failures. The old
             // row is renamed, not deleted - it is still the correct OperatorId on record for
             // whatever history already synced under it.
+            // Username is varchar(50); the seeded "system_admin_<branch guid>" name alone can
+            // already run to 49 characters, so appending anything to it overflows the column
+            // (hit live: "22001: value too long for type character varying(50)" on the first
+            // deploy of this fix). A short, fixed-length replacement - "stale_" plus the old
+            // row's own Id (42 characters, always) - fits with room to spare and is still
+            // unique per row.
             await _db.Set<Operator>()
                 .Where(o => o.BranchId == held.BranchId
                     && o.Id != held.AggregateId
                     && o.Username == username)
                 .ExecuteUpdateAsync(s => s.SetProperty(
                     o => o.Username,
-                    o => o.Username + "_stale_" + o.Id));
+                    o => "stale_" + o.Id));
         }
 
         await UpsertRowAsync<Operator>(held, root);
