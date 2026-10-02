@@ -53,6 +53,19 @@ public class LoginResponseDto
     /// no shift was opened, and none will be until the drawer has been counted.
     /// </summary>
     public PendingTakeoverDto? PendingTakeover { get; set; }
+
+    /// <summary>
+    /// Whether the branch's drawer is actually open right now. Only meaningful alongside
+    /// ResumedShift - a resumed shift means the SHIFT record never closed, which used to be
+    /// assumed to mean the drawer never closed either, so the opening-balance checklist was
+    /// skipped outright. That assumption breaks exactly when CloseRegisterAsync did its real
+    /// job (a normal handover close, counted and verified) but the separate shift-close step
+    /// that used to follow it never ran - confirmed live, an operator's own register showed
+    /// properly closed from the night before while their shift stayed Active, and they were
+    /// never offered the opening-balance popup the next day because the frontend trusted
+    /// ResumedShift alone to mean "nothing to do here."
+    /// </summary>
+    public bool HasOpenRegister { get; set; }
 }
 
 /// <summary>User profile — returned on login and GET /me</summary>
