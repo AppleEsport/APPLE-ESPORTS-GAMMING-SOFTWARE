@@ -15,17 +15,20 @@ public class CashDeskService : ICashDeskService
     private readonly IAuditService _auditService;
     private readonly IHubNotificationService _hubNotification;
     private readonly IAdminNotifier _notifier;
+    private readonly IAuthService _authService;
 
     public CashDeskService(
         IUnitOfWork unitOfWork,
         IAuditService auditService,
         IHubNotificationService hubNotification,
-        IAdminNotifier notifier)
+        IAdminNotifier notifier,
+        IAuthService authService)
     {
         _unitOfWork = unitOfWork;
         _auditService = auditService;
         _hubNotification = hubNotification;
         _notifier = notifier;
+        _authService = authService;
     }
 
     public async Task StartVerificationAsync(Guid branchId, Guid operatorId, Guid shiftId)
@@ -195,6 +198,29 @@ public class CashDeskService : ICashDeskService
         register.Status = CashRegisterStatus.Closed;
         register.ClosedAt = DateTimeOffset.UtcNow;
         _unitOfWork.Repository<CashRegister>().Update(register);
+
+        // Ending a shift and closing its register are the same real event - the operator who
+        // just finished counting out is done, whether they're handing over to someone else or
+        // closing the shop for the night. This used to depend on a SEPARATE, later request
+        // (the client's own logout call) to mark the shift itself as over, and that second
+        // request had no guarantee of ever arriving: if the PC lost power, lost wifi, or was
+        // simply switched off the moment this screen said "closed", the register stayed
+        // correctly closed forever while the shift underneath it stayed Active forever too -
+        // confirmed live, twice, the same night (Adajan-240Hz and Citylight-144Hz, 1-2 Oct
+        // 2026) - which is also why both operators kept being asked to explain an ever-growing
+        // "shift gap" every time they logged back in: the system was telling the truth, their
+        // shift genuinely never closed. Closing it here, in the same request that closes the
+        // register, means there is no gap between the two for anything to interrupt.
+        //
+        // Calls AuthService's own LogoutAsync rather than repeating its shift/operator-closing
+        // steps - the same method the client's own logout request calls a moment later, which
+        // is why that later call is safe to still fire: it is wrapped in .catch(() => {}) client
+        // side and was already built to tolerate running against a session that is no longer
+        // there. Reusing it also means a "last shift of the day" close now reliably triggers the
+        // end-of-day summary email even if that later client request never arrives - previously
+        // the email depended on the exact same fragile second request this whole fix exists to
+        // stop relying on.
+        await _authService.LogoutAsync(operatorId, Roles.Operator, shiftId, dto.ClosesTradingDay);
 
         await _auditService.LogAsync(new AuditEntry
         {
