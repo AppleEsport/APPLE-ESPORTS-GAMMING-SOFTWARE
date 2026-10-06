@@ -91,7 +91,17 @@ export default function EodDashboardPage() {
     let cashAmount = 0, onlineAmount = 0, newPaymentType;
     if (correctMethod === 'cash') { cashAmount = total; newPaymentType = 'Cash'; }
     else if (correctMethod === 'online') { onlineAmount = total; newPaymentType = 'Online'; }
-    else { cashAmount = Number(correctCash) || 0; onlineAmount = Number(correctOnline) || 0; newPaymentType = 'Split'; }
+    else {
+      cashAmount = Number(correctCash) || 0;
+      onlineAmount = Number(correctOnline) || 0;
+      // The Split tab is for typing a custom cash/online breakdown, not a promise that the
+      // result is actually split - confirmed live: a bill corrected here with Cash 0 /
+      // Online 180 still read "SPLIT" everywhere, because this used to trust which tab was
+      // open rather than what was actually typed into it. Same rule PaymentEngineModal
+      // already uses for a fresh payment - whichever side got the whole total is what this
+      // bill actually was.
+      newPaymentType = cashAmount === total ? 'Cash' : onlineAmount === total ? 'Online' : 'Split';
+    }
 
     if (Math.round((cashAmount + onlineAmount) * 100) !== Math.round(total * 100)) {
       setCorrectError(`Cash + Online must add up to ₹${total.toFixed(2)}.`);
