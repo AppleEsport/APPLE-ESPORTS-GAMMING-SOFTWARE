@@ -355,10 +355,9 @@ export default function EodDashboardPage() {
       });
     } else {
       y = addStatGrid(doc, y, [
-        { label: 'Total Net Revenue', value: `Rs ${(Number(report.revenue.netRevenue) + Number(report.paymentMethods.totalWalletTopUps)).toFixed(2)}` },
+        { label: 'Total Net Revenue', value: `Rs ${report.revenue.netRevenue}` },
         { label: 'Gaming Revenue', value: `Rs ${report.revenue.totalGamingRevenue}` },
         { label: 'Food Revenue', value: `Rs ${report.revenue.totalFoodRevenue}` },
-        { label: 'Membership Amount', value: `Rs ${report.paymentMethods.totalWalletTopUps}` },
         { label: 'Credit Cleared', value: `Rs ${report.reconciliation.creditClearedToday}` },
       ]);
       y += 10;
@@ -839,17 +838,10 @@ export default function EodDashboardPage() {
           {!isRange && report && (
             <>
               {/* Revenue & Operations Summary Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div className="bg-bg-2 p-5 rounded-xl border border-border shadow-lg">
                   <div className="text-text-3 text-xs uppercase font-bold tracking-widest mb-1">Total Net Revenue</div>
-                  {/* Includes today's membership top-ups on the owner's own instruction - not
-                      "earned" revenue in the strict sense (the member hasn't spent it yet), but
-                      real money collected today, which is what this figure is meant to answer
-                      here. Gaming/Food Revenue below stay exactly as earned, so nothing else
-                      reads this split differently than before. */}
-                  <div className="text-3xl font-mono font-bold text-accent">
-                    ₹{(Number(report.revenue.netRevenue) + Number(report.paymentMethods.totalWalletTopUps)).toFixed(2)}
-                  </div>
+                  <div className="text-3xl font-mono font-bold text-accent">₹{report.revenue.netRevenue}</div>
                 </div>
                 <div className="bg-bg-2 p-5 rounded-xl border border-border shadow-lg">
                   <div className="text-text-3 text-xs uppercase font-bold tracking-widest mb-1">Gaming Revenue</div>
@@ -858,10 +850,6 @@ export default function EodDashboardPage() {
                 <div className="bg-bg-2 p-5 rounded-xl border border-border shadow-lg">
                   <div className="text-text-3 text-xs uppercase font-bold tracking-widest mb-1">Food Revenue</div>
                   <div className="text-2xl font-mono font-bold text-text">₹{report.revenue.totalFoodRevenue}</div>
-                </div>
-                <div className="bg-bg-2 p-5 rounded-xl border border-border shadow-lg">
-                  <div className="text-text-3 text-xs uppercase font-bold tracking-widest mb-1">Membership Amount</div>
-                  <div className="text-2xl font-mono font-bold text-text">₹{report.paymentMethods.totalWalletTopUps}</div>
                 </div>
                 <div className="bg-bg-2 p-5 rounded-xl border border-border shadow-lg">
                   <div className="text-text-3 text-xs uppercase font-bold tracking-widest mb-1">Credit Cleared</div>
