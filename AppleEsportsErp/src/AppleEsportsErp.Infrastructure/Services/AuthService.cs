@@ -615,6 +615,7 @@ public class AuthService : IAuthService
                     Success = false,
                     TargetType = "member",
                     TargetId = member.Id,
+                    BranchId = member.HomeBranchId,
                     Details = new { reason = "5 failed password attempts", lockedUntil = member.LockedUntil },
                 });
             }
@@ -629,6 +630,9 @@ public class AuthService : IAuthService
                 UserName = member.FullName,
                 Action = AuditActions.FailedLogin,
                 Success = false,
+                TargetType = "member",
+                TargetId = member.Id,
+                BranchId = member.HomeBranchId,
                 Details = new { reason = "Invalid password", deviceInfo = dto.DeviceInfo },
             });
             throw new AuthenticationException("Invalid credentials", "INVALID_CREDENTIALS");
