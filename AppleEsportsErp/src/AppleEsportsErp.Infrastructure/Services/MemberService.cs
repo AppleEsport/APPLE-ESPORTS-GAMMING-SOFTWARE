@@ -628,20 +628,46 @@ public class MemberService : IMemberService
                         Success = false,
                         TargetType = "member",
                         TargetId = candidate.Id,
+                        BranchId = candidate.HomeBranchId,
                         Details = new { reason = "5 failed password attempts", lockedUntil = candidate.LockedUntil },
                     });
                 }
+
+                // One row per candidate this identifier could have meant, each tagged with that
+                // candidate's own branch - without this, every member login failure was written
+                // with no branch at all (see the AccountLocked entry above, which already did
+                // this correctly) and SyncCapture silently drops anything it cannot file against
+                // a branch. Confirmed live: in the entire audit history, operator login failures
+                // showed up by the hundreds and member ones showed up exactly once - not because
+                // members rarely get their password wrong, but because this row never left
+                // whichever branch wrote it.
+                await _auditService.LogAsync(new AuditEntry
+                {
+                    UserRole = "Member",
+                    UserName = candidate.FullName,
+                    Action = AuditActions.FailedLogin,
+                    Success = false,
+                    TargetType = "member",
+                    TargetId = candidate.Id,
+                    BranchId = candidate.HomeBranchId,
+                    Details = new { reason = "Invalid password", identifier },
+                });
             }
             await _unitOfWork.SaveChangesAsync();
 
-            await _auditService.LogAsync(new AuditEntry
+            // No candidate at all - the identifier itself does not match anything. Nothing to
+            // tag with a branch, since no member account was even found to be ambiguous about.
+            if (candidates.Count == 0)
             {
-                UserRole = "Member",
-                UserName = identifier,
-                Action = AuditActions.FailedLogin,
-                Success = false,
-                Details = new { reason = "Invalid username or password" },
-            });
+                await _auditService.LogAsync(new AuditEntry
+                {
+                    UserRole = "Member",
+                    UserName = identifier,
+                    Action = AuditActions.FailedLogin,
+                    Success = false,
+                    Details = new { reason = "Invalid username or password" },
+                });
+            }
 
             throw new AuthenticationException("Invalid username or password.", "INVALID_CREDENTIALS");
         }
